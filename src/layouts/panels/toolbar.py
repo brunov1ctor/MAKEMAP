@@ -3,9 +3,26 @@
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QToolButton, QSizePolicy,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QRectF
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
 
 from src.styles.tokens import Colors, Typography
+
+
+def _paint_glass(widget, event, radius=10):
+    p = QPainter(widget)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    w, h = widget.width(), widget.height()
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0, 0, w, h), radius, radius)
+    p.fillPath(path, QColor(11, 25, 41, 200))
+    grad = QLinearGradient(0, 0, 0, h * 0.25)
+    grad.setColorAt(0.0, QColor(255, 255, 255, 10))
+    grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+    p.fillPath(path, QBrush(grad))
+    p.setPen(QPen(QColor(255, 255, 255, 30), 1))
+    p.drawPath(path)
+    p.end()
 
 
 class CanvasToolbar(QFrame):
@@ -17,12 +34,9 @@ class CanvasToolbar(QFrame):
         super().__init__(parent)
         self.setFixedHeight(42)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setStyleSheet(f"""
-            CanvasToolbar {{
-                background: {Colors.GLASS_BG_STRONG};
-                border-bottom: 1px solid {Colors.BORDER_SUBTLE};
-            }}
-        """)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAutoFillBackground(False)
+        self.setStyleSheet("background: transparent; border: none;")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 0, 10, 0)
@@ -95,6 +109,9 @@ class CanvasToolbar(QFrame):
             font-weight: {Typography.WEIGHT_BOLD}; background: transparent; border: none;
         """)
         layout.addWidget(self.zoom_label)
+
+    def paintEvent(self, event):
+        _paint_glass(self, event, radius=10)
 
     def _on_tool(self, name: str):
         for n, btn, is_tool in self._tool_buttons:

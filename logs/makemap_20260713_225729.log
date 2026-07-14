@@ -1,8 +1,0 @@
-[2026-07-13 22:57:29,803] INFO MAKEMAP: Iniciando MAKEMAP v0.1.0
-[2026-07-13 22:57:31,539] INFO MAKEMAP: Janela principal exibida
-[2026-07-13 22:57:35,036] CRITICAL MAKEMAP: Exceção não tratada
-Traceback (most recent call last):
-  File "C:\Users\bruno\OneDrive\Documentos\MAKEMAP\src\layouts\panels\explorer.py", line 361, in toggle_expand
-    if it.isExpanded():
-       ^^^^^^^^^^^^^
-AttributeError: 'bool' object has no attribute 'isExpanded'

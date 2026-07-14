@@ -11,6 +11,7 @@ from src.layouts.panels.canvas_area import CanvasArea
 from src.layouts.panels.inspector import InspectorPanel, QuestPanel, LayersPanel
 from src.layouts.panels.progression import ProgressionBar
 from src.layouts.panels.status_bar import StatusBar
+from src.layouts.panels.logs_panel import LogsPanel
 from src.canvas.overlays import HUDOverlay, Compass, ZoomControl, MiniMap
 from src.engines.integrator import EngineIntegrator
 
@@ -49,7 +50,11 @@ class MainLayout(QWidget):
         self.filters_panel = FilterPanel()
         left_lay.addWidget(self.left_panel, 1)
         left_lay.addWidget(self.filters_panel)
+        left_lay.addStretch()
         self._left_scroll.setWidget(left_container)
+        self.left_panel.collapsed_changed.connect(
+            lambda collapsed: left_lay.setStretchFactor(self.left_panel, 0 if collapsed else 1)
+        )
 
         # Inspector (direita)
         self._right_scroll = self._make_scroll()
@@ -62,14 +67,22 @@ class MainLayout(QWidget):
         self.right_panel = InspectorPanel()
         self.quest_panel = QuestPanel()
         self.layers_panel = LayersPanel()
-        right_lay.addWidget(self.right_panel)
+        right_lay.addWidget(self.right_panel, 1)
         right_lay.addWidget(self.quest_panel)
         right_lay.addWidget(self.layers_panel)
-        right_lay.addStretch()
         self._right_scroll.setWidget(right_container)
+        self.right_panel.collapsed_changed.connect(
+            lambda collapsed: right_lay.setStretchFactor(self.right_panel, 0 if collapsed else 1)
+        )
+
+        # Logs (dentro do container direito)
+        self.logs_panel = LogsPanel()
+        right_lay.addWidget(self.logs_panel)
+        right_lay.addStretch()
 
         # Progression + Status
         self.progression = ProgressionBar(self)
+        self.progression.size_changed.connect(self._reposition)
         self.status_bar = StatusBar(self)
 
         # Overlays
@@ -104,14 +117,19 @@ class MainLayout(QWidget):
         """)
         return s
 
+    def _reposition(self):
+        """Força recalcular posições quando um painel muda de tamanho."""
+        self.resizeEvent(None)
+
     def resizeEvent(self, event):
-        super().resizeEvent(event)
+        if event:
+            super().resizeEvent(event)
         w, h = self.width(), self.height()
 
         top_h = 72
         toolbar_h = 42
         status_h = 80
-        prog_h = 96
+        prog_h = self.progression.height()
 
         body_top = top_h
         body_bottom = h - status_h

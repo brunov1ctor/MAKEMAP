@@ -7,7 +7,13 @@ from pathlib import Path
 from dataclasses import dataclass
 
 MAX_RECENTS = 10
-RECENTS_FILE = Path.home() / ".makemap" / "recents.json"
+MAKEMAP_HOME = Path.home() / ".makemap"
+RECENTS_FILE = MAKEMAP_HOME / "recents.json"
+PROJECTS_DIR = MAKEMAP_HOME / "projects"
+
+# Garantir que existem
+MAKEMAP_HOME.mkdir(parents=True, exist_ok=True)
+PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass

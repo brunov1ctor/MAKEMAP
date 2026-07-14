@@ -5,28 +5,10 @@ from PySide6.QtWidgets import (
     QLineEdit, QTreeWidget, QTreeWidgetItem, QWidget, QScrollArea,
     QSizePolicy, QGridLayout,
 )
-from PySide6.QtCore import Qt, Signal, QRectF
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
+from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors, Metrics, Typography
-
-
-# ─── Glass Paint Helper ────────────────────────────────────────────────────
-
-def _paint_glass(widget, event, radius=12):
-    p = QPainter(widget)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    w, h = widget.width(), widget.height()
-    path = QPainterPath()
-    path.addRoundedRect(QRectF(0, 0, w, h), radius, radius)
-    p.fillPath(path, QColor(11, 25, 41, 200))
-    grad = QLinearGradient(0, 0, 0, h * 0.25)
-    grad.setColorAt(0.0, QColor(255, 255, 255, 10))
-    grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-    p.fillPath(path, QBrush(grad))
-    p.setPen(QPen(QColor(255, 255, 255, 30), 1))
-    p.drawPath(path)
-    p.end()
+from src.components.collapsible_panel import CollapsiblePanel
 
 
 # ─── Filter Chip ───────────────────────────────────────────────────────────
@@ -65,33 +47,18 @@ class _FilterChip(QToolButton):
         self.toggled.connect(lambda checked: self.filter_toggled.emit(self._key, checked))
 
 
-# ─── 2.1 Filter Panel (painel independente) ───────────────────────────────
+# ─── 2.1 Filter Panel ─────────────────────────────────────────────────────
 
-class FilterPanel(QFrame):
-    """2.1 Filtros Rápidos — painel independente com chips."""
+class FilterPanel(CollapsiblePanel):
+    """2.1 Filtros Rápidos — painel colapsável com chips."""
 
     filter_toggled = Signal(str, bool)
 
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAutoFillBackground(False)
-        self.setStyleSheet("background: transparent; border: none;")
+        super().__init__(title="Filtros Rápidos", icon="⚡", parent=parent, radius=10)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(6)
-
-        # Header
-        header_row = QHBoxLayout()
-        header = QLabel("⚡ Filtros Rápidos")
-        header.setStyleSheet(f"""
-            font-size: {Typography.SIZE_XXS}px; font-weight: {Typography.WEIGHT_BOLD};
-            color: {Colors.TEXT_MUTED}; background: transparent; border: none;
-        """)
-        header_row.addWidget(header)
-        header_row.addStretch()
-
+        # Toggle all button no header
         self._toggle_all = QToolButton()
         self._toggle_all.setText("Todos")
         self._toggle_all.setFixedHeight(18)
@@ -103,8 +70,9 @@ class FilterPanel(QFrame):
             }}
             QToolButton:hover {{ background: {Colors.ACCENT_DIM}; }}
         """)
-        header_row.addWidget(self._toggle_all)
-        layout.addLayout(header_row)
+        # Inserir antes da seta no header
+        header_layout = self._main_layout.itemAt(0).layout()
+        header_layout.insertWidget(header_layout.count() - 1, self._toggle_all)
 
         # Chips
         grid = QGridLayout()
@@ -125,16 +93,17 @@ class FilterPanel(QFrame):
             grid.addWidget(chip, i // 2, i % 2)
             self._chips.append(chip)
 
-        layout.addLayout(grid)
+        grid_widget = QWidget()
+        grid_widget.setStyleSheet("background: transparent; border: none;")
+        grid_widget.setLayout(grid)
+        self.content_layout.addWidget(grid_widget)
+
         self._toggle_all.clicked.connect(self._on_toggle_all)
 
     def _on_toggle_all(self):
         all_checked = all(c.isChecked() for c in self._chips)
         for chip in self._chips:
             chip.setChecked(not all_checked)
-
-    def paintEvent(self, event):
-        _paint_glass(self, event, radius=10)
 
 
 # ─── Explorer Toolbar ──────────────────────────────────────────────────────
@@ -202,50 +171,47 @@ class ExplorerToolbar(QFrame):
 
 # ─── 2. Explorer Panel ─────────────────────────────────────────────────────
 
-class ExplorerPanel(QFrame):
+class ExplorerPanel(CollapsiblePanel):
     """2. Explorer — toolbar + busca + árvore + contador."""
 
     region_selected = Signal(str)
 
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAutoFillBackground(False)
-        self.setStyleSheet("background: transparent; border: none;")
+        super().__init__(title="Explorer", icon="🌍", parent=parent, radius=12)
 
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-
-        # Toolbar vertical
-        self.toolbar = ExplorerToolbar()
-        main_layout.addWidget(self.toolbar)
-
-        # Conteúdo
-        content = QWidget()
-        content.setStyleSheet("background: transparent; border: none;")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(10, 10, 10, 8)
-        content_layout.setSpacing(8)
-
-        # Header
-        header_row = QHBoxLayout()
-        title = QLabel("🌍 Explorer")
-        title.setStyleSheet(f"""
+        # Alterar título para tamanho maior
+        self._title_label.setStyleSheet(f"""
             font-size: {Typography.SIZE_SM}px; font-weight: {Typography.WEIGHT_BOLD};
             color: {Colors.TEXT_PRIMARY}; background: transparent; border: none;
         """)
-        header_row.addWidget(title)
-        header_row.addStretch()
 
+        # Counter no header
         self.counter_label = QLabel("0 elementos")
         self.counter_label.setStyleSheet(f"""
             font-size: {Typography.SIZE_XXS}px; color: {Colors.TEXT_MUTED};
             background: rgba(10,16,30,0.5); border: 1px solid {Colors.BORDER_SUBTLE};
             border-radius: 10px; padding: 2px 8px;
         """)
-        header_row.addWidget(self.counter_label)
-        content_layout.addLayout(header_row)
+        header_layout = self._main_layout.itemAt(0).layout()
+        header_layout.insertWidget(header_layout.count() - 1, self.counter_label)
+
+        # Conteúdo principal com toolbar lateral
+        body = QWidget()
+        body.setStyleSheet("background: transparent; border: none;")
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+
+        # Toolbar vertical
+        self.toolbar = ExplorerToolbar()
+        body_layout.addWidget(self.toolbar)
+
+        # Conteúdo direito
+        content = QWidget()
+        content.setStyleSheet("background: transparent; border: none;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(10, 4, 4, 4)
+        content_layout.setSpacing(8)
 
         # Busca
         self.search = QLineEdit()
@@ -299,7 +265,8 @@ class ExplorerPanel(QFrame):
         """)
         content_layout.addWidget(add_btn)
 
-        main_layout.addWidget(content, 1)
+        body_layout.addWidget(content, 1)
+        self.content_layout.addWidget(body)
 
         # Connections
         self.toolbar.btn_expand.clicked.connect(self.tree.expandAll)
@@ -316,11 +283,7 @@ class ExplorerPanel(QFrame):
                 self.tree.takeTopLevelItem(idx)
         self._update_counter()
 
-    def paintEvent(self, event):
-        _paint_glass(self, event, radius=12)
-
     def _make_item_widget(self, item: QTreeWidgetItem, text: str, is_parent: bool = False, level: int = 0):
-        """Cria widget com indentação + triângulo (se pai) + texto + botão X."""
         w = QWidget()
         w.setStyleSheet("background: transparent; border: none;")
         row = QHBoxLayout(w)
@@ -350,7 +313,6 @@ class ExplorerPanel(QFrame):
             arrow.clicked.connect(toggle_expand)
             row.addWidget(arrow)
         else:
-            # Linha de conexão para filhos
             connector = QLabel("└")
             connector.setFixedWidth(12)
             connector.setStyleSheet(f"""

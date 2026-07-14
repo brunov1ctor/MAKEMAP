@@ -1,14 +1,14 @@
-"""4. Inspector + 4.1 Quest + 4.2 Layers — 3 painéis independentes."""
+"""4. Inspector + 4.1 Quest + 4.2 Layers — 3 painéis independentes colapsáveis."""
 
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton,
     QTabWidget, QWidget, QScrollArea, QSizePolicy, QSlider,
     QLineEdit, QComboBox, QCheckBox, QSpinBox,
 )
-from PySide6.QtCore import Qt, Signal, QRectF
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
+from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors, Metrics, Typography
+from src.components.collapsible_panel import CollapsiblePanel
 
 
 # ─── Styles ────────────────────────────────────────────────────────────────
@@ -106,42 +106,23 @@ def _check_field(checked=False):
     return w
 
 
-# ─── Glass Paint Helper ────────────────────────────────────────────────────
-
-def _paint_glass(widget, event, radius=14):
-    p = QPainter(widget)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    w, h = widget.width(), widget.height()
-    path = QPainterPath()
-    path.addRoundedRect(QRectF(0, 0, w, h), radius, radius)
-    p.fillPath(path, QColor(11, 25, 41, 200))
-    grad = QLinearGradient(0, 0, 0, h * 0.25)
-    grad.setColorAt(0.0, QColor(255, 255, 255, 10))
-    grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-    p.fillPath(path, QBrush(grad))
-    p.setPen(QPen(QColor(255, 255, 255, 30), 1))
-    p.drawPath(path)
-    p.end()
-
-
 # ─── 4. Inspector Panel ───────────────────────────────────────────────────
 
-class InspectorPanel(QFrame):
-    """4. Inspector — header + abas com formulários."""
+class InspectorPanel(CollapsiblePanel):
+    """4. Inspector — header + abas com formulários (colapsável)."""
 
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAutoFillBackground(False)
-        self.setStyleSheet("background: transparent; border: none;")
+        super().__init__(title="Inspector", icon="🔍", parent=parent, radius=14)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        # Título maior
+        self._title_label.setStyleSheet(f"""
+            font-size: {Typography.SIZE_SM}px; font-weight: {Typography.WEIGHT_BOLD};
+            color: {Colors.TEXT_PRIMARY}; background: transparent; border: none;
+        """)
 
-        # Header
+        # Header do elemento
         self.header = _ElementHeader()
-        layout.addWidget(self.header)
+        self.content_layout.addWidget(self.header)
 
         # Tabs
         self.tabs = QTabWidget()
@@ -161,10 +142,7 @@ class InspectorPanel(QFrame):
         self.tabs.addTab(_build_tab_drops(), "DROPS")
         self.tabs.addTab(_build_tab_ia(), "IA")
         self.tabs.addTab(_build_tab_outros(), "OUTROS")
-        layout.addWidget(self.tabs, 1)
-
-    def paintEvent(self, event):
-        _paint_glass(self, event)
+        self.content_layout.addWidget(self.tabs, 1)
 
     def set_element(self, **kwargs):
         self.header.set_element(**kwargs)
@@ -172,38 +150,22 @@ class InspectorPanel(QFrame):
 
 # ─── 4.1 Quest Panel ──────────────────────────────────────────────────────
 
-class QuestPanel(QFrame):
-    """4.1 Quest Relacionada — painel independente."""
+class QuestPanel(CollapsiblePanel):
+    """4.1 Quest Relacionada — painel colapsável."""
 
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(76)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAutoFillBackground(False)
-        self.setStyleSheet("background: transparent; border: none;")
+        super().__init__(title="Quest Relacionada", icon="📜", parent=parent, radius=10)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(3)
-
-        # Header
-        header_row = QHBoxLayout()
-        header = QLabel("📜 Quest Relacionada")
-        header.setStyleSheet(f"""
-            font-size: {Typography.SIZE_XXS}px; color: {Colors.TEXT_MUTED};
-            font-weight: {Typography.WEIGHT_BOLD}; background: transparent; border: none;
-        """)
-        header_row.addWidget(header)
-        header_row.addStretch()
-
+        # Status badge no header
         self.status_badge = QLabel("Ativa")
         self.status_badge.setStyleSheet(f"""
             font-size: 8px; color: {Colors.SUCCESS};
             background: rgba(102, 187, 106, 0.15);
             border-radius: 6px; padding: 2px 6px; border: none;
         """)
-        header_row.addWidget(self.status_badge)
-        layout.addLayout(header_row)
+        header_layout = self._main_layout.itemAt(0).layout()
+        header_layout.insertWidget(header_layout.count() - 1, self.status_badge)
 
         # Name
         self.quest_name = QLabel("Protegendo a Vila")
@@ -211,7 +173,7 @@ class QuestPanel(QFrame):
             font-size: {Typography.SIZE_SM}px; font-weight: {Typography.WEIGHT_BOLD};
             color: {Colors.TEXT_PRIMARY}; background: transparent; border: none;
         """)
-        layout.addWidget(self.quest_name)
+        self.content_layout.addWidget(self.quest_name)
 
         # Details
         detail_row = QHBoxLayout()
@@ -229,10 +191,7 @@ class QuestPanel(QFrame):
         detail_row.addWidget(self.quest_type)
         detail_row.addWidget(self.quest_level)
         detail_row.addStretch()
-        layout.addLayout(detail_row)
-
-    def paintEvent(self, event):
-        _paint_glass(self, event, radius=10)
+        self.content_layout.addLayout(detail_row)
 
     def set_quest(self, name="", level="", type_="", status=""):
         self.quest_name.setText(name or "—")
@@ -302,29 +261,20 @@ class _LayerItem(QFrame):
         layout.addWidget(opacity)
 
 
-class LayersPanel(QFrame):
-    """4.2 Camadas Ativas — painel independente."""
+class LayersPanel(CollapsiblePanel):
+    """4.2 Camadas Ativas — painel colapsável."""
 
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAutoFillBackground(False)
-        self.setStyleSheet("background: transparent; border: none;")
+        super().__init__(title="Camadas Ativas", icon="📐", parent=parent, radius=10)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(1)
-
-        # Header
-        header_row = QHBoxLayout()
-        header = QLabel("📐 Camadas Ativas")
-        header.setStyleSheet(f"""
+        # Título um pouco maior
+        self._title_label.setStyleSheet(f"""
             font-size: {Typography.SIZE_XS}px; font-weight: {Typography.WEIGHT_BOLD};
             color: {Colors.TEXT_PRIMARY}; background: transparent; border: none;
         """)
-        header_row.addWidget(header)
-        header_row.addStretch()
 
+        # Botão + no header
         add_btn = QToolButton()
         add_btn.setText("+")
         add_btn.setFixedSize(18, 18)
@@ -332,8 +282,8 @@ class LayersPanel(QFrame):
             QToolButton {{ border: none; font-size: 11px; color: {Colors.ACCENT}; background: transparent; border-radius: 4px; }}
             QToolButton:hover {{ background: {Colors.ACCENT_DIM}; }}
         """)
-        header_row.addWidget(add_btn)
-        layout.addLayout(header_row)
+        header_layout = self._main_layout.itemAt(0).layout()
+        header_layout.insertWidget(header_layout.count() - 1, add_btn)
 
         # Layers
         layers = [
@@ -343,10 +293,7 @@ class LayersPanel(QFrame):
             ("🏴", "Áreas PvP"),
         ]
         for icon, name in layers:
-            layout.addWidget(_LayerItem(icon, name))
-
-    def paintEvent(self, event):
-        _paint_glass(self, event, radius=10)
+            self.content_layout.addWidget(_LayerItem(icon, name))
 
 
 # ─── Element Header (internal) ─────────────────────────────────────────────
