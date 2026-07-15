@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QToolButton, QWidget, QButtonGroup, QScrollArea,
     QLineEdit, QFileDialog, QStackedWidget, QGridLayout, QTabBar,
 )
-from PySide6.QtCore import Qt, Signal, QRectF, QPoint, QMimeData, QSize
+from PySide6.QtCore import Qt, Signal, QRectF, QPoint, QMimeData, QSize, QFileSystemWatcher
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush, QDrag, QPixmap, QIcon, QImage
 
 from src.styles.tokens import Colors
@@ -861,7 +861,6 @@ class TerrainSettingsPanel(QFrame):
         self._bg_categories = ["space", "terrain", "mystics", "nature", "abstract"]
         for cat in self._bg_categories:
             self._bg_tabs.addTab(cat.capitalize())
-        self._bg_tabs.addTab("📁 Meu PC")
         self._bg_tabs.currentChanged.connect(self._on_bg_tab_changed)
         file_lay.addWidget(self._bg_tabs)
 
@@ -910,6 +909,15 @@ class TerrainSettingsPanel(QFrame):
         self._color_idx = 0
         self._bg_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "..", "..", "..", "library", "backgrounds")
+
+        # Watch background folders for changes from config panel
+        self._bg_watcher = QFileSystemWatcher(self)
+        for cat in self._bg_categories:
+            cat_path = os.path.join(self._bg_dir, cat)
+            os.makedirs(cat_path, exist_ok=True)
+            self._bg_watcher.addPath(cat_path)
+        self._bg_watcher.directoryChanged.connect(self._on_bg_dir_changed)
+        self._bg_current_category = self._bg_categories[0]
 
     def _update_inf_style(self):
         if self._inf_checked:
@@ -1105,13 +1113,18 @@ class TerrainSettingsPanel(QFrame):
             self._select_bg_color(self._custom_color_data[idx])
 
     def _on_bg_tab_changed(self, index: int):
-        """Load assets for the selected background category or open file picker."""
+        """Load assets for the selected background category."""
         if index >= len(self._bg_categories):
-            # "Meu PC" tab — open file dialog
-            self._pick_bg_from_pc()
             return
         category = self._bg_categories[index]
+        self._bg_current_category = category
         self._load_bg_assets(category)
+
+    def _on_bg_dir_changed(self, path: str):
+        """Reload grid when backgrounds folder changes (e.g. from config panel)."""
+        changed_cat = os.path.basename(path)
+        if changed_cat == self._bg_current_category and self._bg_file_widget.isVisible():
+            self._load_bg_assets(self._bg_current_category)
 
     def _load_bg_assets(self, category: str):
         """Scan library/backgrounds/<category> and populate the grid."""
@@ -1170,23 +1183,6 @@ class TerrainSettingsPanel(QFrame):
         self.background_changed.emit(bg_type, path)
         self.close_requested.emit()
 
-    def _pick_bg_from_pc(self):
-        """Open file dialog only when user explicitly chooses 'Meu PC' tab."""
-        if self._bg_active == "gif":
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Selecionar GIF Animado", "", "GIFs (*.gif)"
-            )
-        else:
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Selecionar Imagem de Fundo", "",
-                "Imagens (*.png *.jpg *.jpeg *.bmp *.webp *.gif)"
-            )
-        if path:
-            self._bg_file_label.setText(os.path.basename(path))
-            bg_type = "gif" if path.lower().endswith(".gif") else "image"
-            self.background_changed.emit(bg_type, path)
-            self.close_requested.emit()
-
     # ─── CRUD ───
 
     def _on_add_terrain(self):
@@ -1200,6 +1196,9 @@ class TerrainSettingsPanel(QFrame):
         self._add_card(terrain_id, name, color)
         self._name_input.clear()
         self.terrain_added.emit(terrain_id, name)
+        # Auto-select if no terrain is currently selected
+        if not self._selected_id:
+            self._on_card_selected(terrain_id)
 
     def _add_card(self, terrain_id: str, name: str, color: QColor):
         card = TerrainCard(terrain_id, name, color)
@@ -1225,6 +1224,10 @@ class TerrainSettingsPanel(QFrame):
             card.deleteLater()
         if self._selected_id == terrain_id:
             self._selected_id = ""
+            # Auto-select another card if available
+            if self._cards:
+                next_id = next(iter(self._cards))
+                self._on_card_selected(next_id)
         self.terrain_removed.emit(terrain_id)
 
     def _on_card_toggled(self, terrain_id: str, visible: bool):

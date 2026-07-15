@@ -65,16 +65,13 @@ class MainWindow(QMainWindow):
         # Inject asset engine into canvas immediately
         self.layout_widget.canvas.engine.set_asset_engine(self.asset_engine)
 
-        # Projects panel (overlay)
+        # Projects panel (overlay) — legacy, now managed by MainLayout fullscreen views
         self._projects_panel = ProjectsPanel(parent=self._bg)
         self._projects_panel.hide()
         self._projects_panel.closed.connect(self._hide_projects)
         self._projects_panel.project_opened.connect(self._on_panel_project_opened)
         self._projects_panel.new_requested.connect(self.new_project)
         self._projects_panel.delete_requested.connect(self._on_panel_delete)
-
-        # Conectar botão Arquivo da topbar
-        self.layout_widget.top_bar.arquivo_clicked.connect(self._toggle_projects)
 
         self._setup_shortcuts()
 
@@ -96,9 +93,6 @@ class MainWindow(QMainWindow):
         try:
             self.project = Project.create(PROJECTS_DIR, name)
             self._on_project_loaded()
-            if self._projects_panel.isVisible():
-                self._projects_panel.set_active(str(self.project.path))
-                self._projects_panel.refresh()
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Não foi possível criar o projeto:\n{e}")
 
@@ -169,6 +163,8 @@ class MainWindow(QMainWindow):
         self._hide_projects()
         self.project = proj
         self._on_project_loaded()
+        # Also close fullscreen menu if open
+        self.layout_widget._hide_menu_view()
 
     def _on_panel_delete(self, path: str):
         from pathlib import Path as P

@@ -16,6 +16,7 @@ from src.database.repositories.entities import (
     LayerRepository, CanvasItemRepository, AssetRepository,
     AssetPackRepository,
 )
+from src.database.repositories.asset_settings import AssetSettingsRepository
 
 
 class UnitOfWork:
@@ -49,6 +50,7 @@ class UnitOfWork:
         self.canvas_items = CanvasItemRepository(self.db)
         self.assets = AssetRepository(self.db)
         self.asset_packs = AssetPackRepository(self.db)
+        self.asset_settings = AssetSettingsRepository(self.db)
 
     def close(self):
         self.db.close()

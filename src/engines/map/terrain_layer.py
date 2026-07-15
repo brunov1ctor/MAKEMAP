@@ -36,7 +36,8 @@ class TerrainLayer:
     MASK_PREVIEW_COLOR = QColor(255, 255, 255, 80)
     EXPAND_CHUNK = 2048  # growth increment in pixels
 
-    def __init__(self, scene: QGraphicsScene, map_width: int = 4096, map_height: int = 4096):
+    def __init__(self, scene: QGraphicsScene, map_width: int = 4096, map_height: int = 4096,
+                 parent_item=None):
         self._scene = scene
         self._width = map_width
         self._height = map_height
@@ -62,11 +63,12 @@ class TerrainLayer:
         self._mask_only = False
         self._has_stencil = False
 
-        # Scene item
-        self._item = QGraphicsPixmapItem()
+        # Scene item (child of parent_item if provided, so it moves with it)
+        self._item = QGraphicsPixmapItem(parent_item)
         self._item.setZValue(1)
         self._item.setPos(0, 0)
-        self._scene.addItem(self._item)
+        if not parent_item:
+            self._scene.addItem(self._item)
 
         # Dirty tracking
         self._dirty_rect: QRect | None = None

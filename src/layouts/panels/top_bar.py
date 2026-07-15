@@ -74,10 +74,8 @@ class TopNavigationButton(QToolButton):
         icon_rect = QRectF(0, 6, w, 28)
         if is_active:
             p.setPen(QColor(Colors.ACCENT))
-        elif is_hover:
-            p.setPen(QColor(Colors.TEXT_PRIMARY))
         else:
-            p.setPen(QColor(Colors.TEXT_MUTED))
+            p.setPen(QColor("#ffffff"))
         p.drawText(icon_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignCenter, self._icon)
 
         # ── Label — 9pt bold, posicionado na metade inferior ──
@@ -86,11 +84,9 @@ class TopNavigationButton(QToolButton):
 
         text_rect = QRectF(2, 34, w - 4, 20)
         if is_active:
-            p.setPen(QColor(Colors.TEXT_PRIMARY))
-        elif is_hover:
-            p.setPen(QColor(Colors.TEXT_PRIMARY))
+            p.setPen(QColor("#ffffff"))
         else:
-            p.setPen(QColor(Colors.TEXT_MUTED))
+            p.setPen(QColor("#ffffff"))
         p.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self._label)
 
         # ── Linha inferior azul quando ativo ──
@@ -146,6 +142,7 @@ class TopBar(QFrame):
     search_requested = Signal(str)
     arquivo_clicked = Signal()
     logs_clicked = Signal()
+    menu_clicked = Signal(str)  # emits menu name for exclusive panel management
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -200,13 +197,14 @@ class TopBar(QFrame):
         nav_layout.setSpacing(4)
 
         self._button_group = QButtonGroup(self)
-        self._button_group.setExclusive(True)
+        self._button_group.setExclusive(False)  # we manage exclusivity manually
 
         self._nav_buttons: list[TopNavigationButton] = []
         self._arquivo_btn: TopNavigationButton | None = None
+        self._active_menu_btn: TopNavigationButton | None = None
 
         modules = [
-            ("📁", "Arquivo"),
+            ("☰", "Projetos"),
             ("🗺", "Mapa"),
             ("📜", "Quests"),
             ("🧙", "NPCs"),
@@ -221,21 +219,20 @@ class TopBar(QFrame):
 
         for i, (icon, name) in enumerate(modules):
             btn = TopNavigationButton(icon, name)
-            if name == "Arquivo":
-                btn.setCheckable(False)
-                btn.clicked.connect(self._on_arquivo)
-                self._arquivo_btn = btn
-            elif name == "Logs":
-                btn.setCheckable(False)
-                btn.clicked.connect(self._on_logs)
+            btn.setCheckable(True)
+            if name == "Logs":
+                btn.clicked.connect(lambda checked, n=name, b=btn: self._on_nav_clicked(n, b))
             else:
-                self._button_group.addButton(btn, i)
-                btn.clicked.connect(lambda checked, n=name: self._on_module(n))
+                btn.clicked.connect(lambda checked, n=name, b=btn: self._on_nav_clicked(n, b))
+            self._button_group.addButton(btn, i)
             nav_layout.addWidget(btn)
             self._nav_buttons.append(btn)
+            if name == "Projetos":
+                self._arquivo_btn = btn
 
         # Default: Mapa ativo
         self._nav_buttons[1].setChecked(True)
+        self._active_menu_btn = self._nav_buttons[1]
         layout.addWidget(nav_frame)
 
         layout.addStretch()
@@ -272,14 +269,30 @@ class TopBar(QFrame):
 
     # ── Slots ──
 
-    def _on_arquivo(self):
-        self.arquivo_clicked.emit()
+    def _on_nav_clicked(self, name: str, btn: TopNavigationButton):
+        """Handle navigation button click with exclusive checked state."""
+        # Uncheck all others
+        for b in self._nav_buttons:
+            if b is not btn:
+                b.setChecked(False)
+        btn.setChecked(True)
+        self._active_menu_btn = btn
 
-    def _on_logs(self):
-        self.logs_clicked.emit()
+        # Emit signals
+        self.menu_clicked.emit(name)
+        if name == "Projetos":
+            self.arquivo_clicked.emit()
+        elif name == "Logs":
+            self.logs_clicked.emit()
+        else:
+            self.module_changed.emit(name)
 
-    def _on_module(self, name: str):
-        self.module_changed.emit(name)
+    def set_active_menu(self, name: str):
+        """Programmatically set the active menu button."""
+        for btn in self._nav_buttons:
+            btn.setChecked(btn._label == name)
+            if btn._label == name:
+                self._active_menu_btn = btn
 
     # ── API ──
 

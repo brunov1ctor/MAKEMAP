@@ -3,9 +3,9 @@
 import warnings
 warnings.filterwarnings("ignore", message=".*Failed to disconnect.*", category=RuntimeWarning)
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QSizePolicy
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QSizePolicy, QLabel
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panels.top_bar import TopBar
@@ -68,6 +68,7 @@ class MainLayout(QWidget):
         self.terrain_panel.terrain_visibility.connect(self._on_terrain_visibility)
         self.terrain_panel.terrain_added.connect(self._on_terrain_added)
         self.terrain_panel.terrain_removed.connect(self._on_terrain_removed)
+        self.terrain_panel.terrain_selected.connect(self._on_terrain_selected)
         self.terrain_panel.background_changed.connect(self._on_background_changed)
 
         # Map boundary overlays: one per terrain card
@@ -144,6 +145,12 @@ class MainLayout(QWidget):
         self.compass.expanded_changed.connect(self._on_compass_toggle)
         # Logs
         self.top_bar.logs_clicked.connect(self._open_logs)
+        # Menu fullscreen views
+        self.top_bar.menu_clicked.connect(self._on_menu_view)
+
+        # ═══ Fullscreen menu view state ═══
+        self._active_menu: str = ""  # current fullscreen menu name, "" = canvas mode
+        self._menu_container: QWidget | None = None  # fullscreen menu widget
 
         # ═══ Engine Integrator ═══
         self.engines = EngineIntegrator(self)
@@ -243,6 +250,11 @@ class MainLayout(QWidget):
         self.minimap.raise_()
         self.compass.raise_()
 
+        # Fullscreen menu view (covers everything between topbar and statusbar)
+        if self._menu_container and self._menu_container.isVisible():
+            self._menu_container.setGeometry(0, top_h, w, body_h)
+            self._menu_container.raise_()
+
     def _on_zoom(self, percent: int):
         self.status_bar.zoom_label.setText(f"{percent}%")
         self.canvas_toolbar.zoom_label.setText(f"{percent}%")
@@ -259,7 +271,7 @@ class MainLayout(QWidget):
             self.terrain_panel.hide()
             self.brush_panel.show()
             self._connect_brush_panel()
-            self.brush_panel._on_tab_changed(self.brush_panel._tabs.currentIndex())
+            self.brush_panel._on_tab_clicked(0)
         else:
             self.brush_panel.hide()
         self._reposition()
@@ -277,7 +289,7 @@ class MainLayout(QWidget):
         for sig in (panel.size_slider.value_changed, panel.opacity_slider.value_changed,
                     panel.softness_slider.value_changed, panel.density_slider.value_changed,
                     panel.scale_slider.value_changed, panel.rotation_slider.value_changed,
-                    panel.preset_combo.currentTextChanged, panel.asset_selected,
+                    panel.asset_selected, panel.favorite_toggled,
                     panel.mode_changed, panel.tab_changed):
             try:
                 sig.disconnect()
@@ -288,8 +300,23 @@ class MainLayout(QWidget):
         panel.opacity_slider.value_changed.connect(self._on_brush_opacity_changed)
         panel.density_slider.value_changed.connect(engine.set_density)
         panel.asset_selected.connect(self._on_brush_asset_selected)
-        panel.preset_combo.currentTextChanged.connect(self._on_brush_preset_changed)
         panel.tab_changed.connect(self._on_brush_tab_changed)
+        panel.favorite_toggled.connect(self._on_brush_favorite_toggled)
+
+        # Auto-refresh brush grid when assets are added/removed via config panel
+        asset_engine = self.canvas.engine._asset_engine
+        if asset_engine and hasattr(asset_engine, 'library') and asset_engine.library:
+            library = asset_engine.library
+            try:
+                library.asset_added.disconnect(self._on_library_changed)
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                library.asset_removed.disconnect(self._on_library_changed)
+            except (RuntimeError, TypeError):
+                pass
+            library.asset_added.connect(self._on_library_changed)
+            library.asset_removed.connect(self._on_library_changed)
 
         # Terrain-specific params → BrushTool
         brush_tool = self.canvas.engine._brush_tool
@@ -307,7 +334,9 @@ class MainLayout(QWidget):
         if not library:
             return
 
-        if category:
+        if category == "__favorites__":
+            assets = library.list_favorites()
+        elif category:
             assets = library.list_by_category(category)
         else:
             assets = library.list_all()
@@ -319,18 +348,52 @@ class MainLayout(QWidget):
                 "id": asset.id,
                 "name": asset.name,
                 "pixmap": thumb,
+                "favorite": library.is_favorite(asset.id),
             })
         self.brush_panel.set_assets(items)
 
     def _on_brush_asset_selected(self, asset_id: str):
         """User clicked an asset in the brush panel grid."""
+        # Auto-create project if none active
+        self._ensure_project()
+
         engine = self.canvas.engine.brush_engine
         engine.clear_assets()
         engine.add_asset(asset_id)
         self.canvas.engine._brush_tool.set_active_asset(asset_id)
         if self.canvas.engine._asset_engine:
             pixmap = self.canvas.engine._asset_engine.get_pixmap(asset_id)
+            # Apply brightness/contrast from project settings
+            window = self.window()
+            if window and hasattr(window, 'uow') and window.uow:
+                settings = window.uow.asset_settings.get(asset_id)
+                brightness = settings.get("brightness", 0.0)
+                contrast = settings.get("contrast", 0.0)
+                if (brightness != 0.0 or contrast != 0.0) and pixmap and not pixmap.isNull():
+                    pixmap = self._apply_image_adjustments(pixmap, brightness, contrast)
             self.brush_panel.set_texture_preview(pixmap)
+
+    def _apply_image_adjustments(self, pixmap: QPixmap, brightness: float, contrast: float) -> QPixmap:
+        """Apply brightness (-100..100) and contrast (-100..100) to a pixmap."""
+        from PySide6.QtGui import QImage
+        image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        # Normalize to -1..1 range
+        b = brightness / 100.0
+        c = (contrast + 100.0) / 100.0  # 0..2 range, 1 = no change
+        c = c * c  # quadratic for more natural feel
+
+        for y in range(image.height()):
+            for x in range(image.width()):
+                color = image.pixelColor(x, y)
+                r = max(0.0, min(1.0, (color.redF() - 0.5) * c + 0.5 + b))
+                g = max(0.0, min(1.0, (color.greenF() - 0.5) * c + 0.5 + b))
+                bl = max(0.0, min(1.0, (color.blueF() - 0.5) * c + 0.5 + b))
+                color.setRedF(r)
+                color.setGreenF(g)
+                color.setBlueF(bl)
+                image.setPixelColor(x, y, color)
+
+        return QPixmap.fromImage(image)
 
     def _on_brush_size_changed(self, value):
         """Update brush engine size and refresh cursor circle."""
@@ -351,6 +414,28 @@ class MainLayout(QWidget):
     def _on_brush_tab_changed(self, category: str):
         """Filter brush assets grid by the selected tab category."""
         self._populate_brush_assets(category if category else None)
+
+    def _on_brush_favorite_toggled(self, asset_id: str):
+        """Toggle favorite on an asset and refresh the grid."""
+        asset_engine = self.canvas.engine._asset_engine
+        if not asset_engine or not hasattr(asset_engine, 'library'):
+            return
+        library = asset_engine.library
+        if library:
+            library.toggle_favorite(asset_id)
+            # Refresh current tab
+            idx = next((i for i, b in enumerate(self.brush_panel._tab_buttons) if b.isChecked()), 0)
+            cats = self.brush_panel._tab_categories
+            cat = cats[idx] if idx < len(cats) else None
+            self._populate_brush_assets(cat if cat else None)
+
+    def _on_library_changed(self, _name: str):
+        """Refresh brush panel grid when library assets change."""
+        if self.brush_panel.isVisible():
+            idx = next((i for i, b in enumerate(self.brush_panel._tab_buttons) if b.isChecked()), 0)
+            cats = self.brush_panel._tab_categories
+            cat = cats[idx] if idx < len(cats) else None
+            self._populate_brush_assets(cat if cat else None)
 
     def _on_texture_scale_changed(self, value):
         """Update texture scale on brush tool, active terrain layer, and preview."""
@@ -492,7 +577,167 @@ class MainLayout(QWidget):
     def _open_logs(self):
         open_logs_dialog(self, self.log_handler)
 
+    # ─── Fullscreen Menu Views ───
+
+    def _canvas_widgets(self) -> list[QWidget]:
+        """All widgets that belong to the canvas/map editing mode (excluding canvas itself)."""
+        return [
+            self.canvas_toolbar, self.brush_panel,
+            self.grid_panel, self.terrain_panel, self._left_scroll,
+            self._right_scroll, self.progression, self.compass, self.minimap,
+        ]
+
+    def _on_menu_view(self, menu_name: str):
+        """Toggle fullscreen menu view. Click same menu again to close."""
+        # Mapa = return to canvas mode
+        if menu_name == "Mapa":
+            self._hide_menu_view()
+            return
+        # Logs = dialog, not fullscreen
+        if menu_name == "Logs":
+            self._hide_menu_view()
+            return
+        # Toggle: click same menu again to close
+        if menu_name == self._active_menu:
+            self._hide_menu_view()
+        else:
+            self._show_menu_view(menu_name)
+            # Ensure the button stays checked (topbar already did this)
+            self.top_bar.set_active_menu(menu_name)
+
+    def _show_menu_view(self, menu_name: str):
+        """Hide all canvas widgets and show fullscreen menu panel."""
+        # Hide previous menu if any
+        if self._menu_container:
+            self._menu_container.hide()
+            self._menu_container.deleteLater()
+            self._menu_container = None
+
+        # Hide canvas mode widgets
+        for w in self._canvas_widgets():
+            w.hide()
+
+        self._active_menu = menu_name
+
+        # Create menu container (transparent so canvas/background stays visible)
+        from src.layouts.panels.projects_panel import ProjectsPanel
+        from src.layouts.panels.menu_panels import MENU_PANELS
+
+        container = QWidget(self)
+        container.setAttribute(Qt.WA_TranslucentBackground)
+        container.setStyleSheet("background: transparent;")
+
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        if menu_name == "Projetos":
+            window = self.window()
+            panel = ProjectsPanel(
+                active_path=str(window.project.path) if window and hasattr(window, 'project') and window.project else "",
+                parent=container,
+            )
+            panel.setMaximumWidth(16777215)  # remove max width constraint
+            panel.setMinimumWidth(0)
+            panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            panel.closed.connect(self._hide_menu_view)
+            panel.project_opened.connect(self._on_menu_project_opened)
+            panel.new_requested.connect(self._on_menu_new_project)
+            panel.delete_requested.connect(self._on_menu_delete_project)
+            layout.addWidget(panel)
+        elif menu_name in MENU_PANELS:
+            panel_class = MENU_PANELS[menu_name]
+            panel = panel_class(container)
+            panel.closed.connect(self._hide_menu_view)
+            layout.addWidget(panel)
+        else:
+            # Fallback placeholder
+            placeholder = QWidget(container)
+            placeholder.setAttribute(Qt.WA_TranslucentBackground)
+            placeholder.setStyleSheet("background: transparent;")
+            ph_layout = QVBoxLayout(placeholder)
+            ph_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl = QLabel(f"{menu_name}")
+            lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 18px; background: transparent;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            ph_layout.addWidget(lbl)
+            layout.addWidget(placeholder)
+
+        self._menu_container = container
+        container.show()
+        container.raise_()
+        self._reposition()
+
+    def _hide_menu_view(self):
+        """Close fullscreen menu and restore canvas mode."""
+        if self._menu_container:
+            self._menu_container.hide()
+            self._menu_container.deleteLater()
+            self._menu_container = None
+
+        self._active_menu = ""
+
+        # Mark "Mapa" as active in topbar
+        self.top_bar.set_active_menu("Mapa")
+
+        # Restore canvas mode widgets
+        for w in self._canvas_widgets():
+            if w in (self.brush_panel, self.grid_panel, self.terrain_panel):
+                continue  # these stay hidden unless explicitly opened
+            w.show()
+
+        self._reposition()
+
+    def _on_menu_project_opened(self, proj):
+        """Project opened from fullscreen menu."""
+        window = self.window()
+        if window and hasattr(window, '_on_panel_project_opened'):
+            window._on_panel_project_opened(proj)
+        self._hide_menu_view()
+
+    def _on_menu_new_project(self):
+        """New project from fullscreen menu."""
+        window = self.window()
+        if window and hasattr(window, 'new_project'):
+            window.new_project()
+        self._hide_menu_view()
+
+    def _on_menu_delete_project(self, path: str):
+        """Delete project from fullscreen menu."""
+        from pathlib import Path as P
+        import shutil
+        window = self.window()
+        target = P(path)
+
+        # If deleting the active project, clean up
+        if window and hasattr(window, 'project') and window.project and str(window.project.path) == path:
+            window.autosave.stop()
+            if window.uow:
+                window.uow.close()
+                window.uow = None
+            window.project = None
+            window.setWindowTitle(f"MAKEMAP — v0.1.0")
+            self.top_bar.set_project_name("")
+
+        # Delete from disk
+        if target.exists():
+            shutil.rmtree(target)
+
+        # Refresh the ProjectsPanel inside the menu container
+        if self._menu_container:
+            from src.layouts.panels.projects_panel import ProjectsPanel
+            panel = self._menu_container.findChild(ProjectsPanel)
+            if panel:
+                panel.set_active("")
+                panel.refresh()
+
     # ─── Terrain Panel ───
+
+    def _ensure_project(self):
+        """Auto-create and persist a project if none is active (MAKEVID pattern)."""
+        window = self.window()
+        if window and hasattr(window, 'project') and window.project is None:
+            window.new_project()
 
     def _toggle_terrain_panel(self):
         """Toggle terrain settings panel."""
@@ -514,6 +759,7 @@ class MainLayout(QWidget):
         """Toggle terrain boundaries visibility."""
         if infinite:
             self.canvas.engine.clear_map_bounds()
+            self.canvas.engine._brush_tool.set_active_boundary(None)
             # Hide all terrain boundaries
             for boundary in self._terrain_boundaries.values():
                 boundary.hide()
@@ -527,6 +773,10 @@ class MainLayout(QWidget):
                 card = self.terrain_panel._cards.get(tid)
                 if card and card.is_visible:
                     boundary.show(w, h, shape)
+            # Set active boundary to selected terrain
+            sel_id = self.terrain_panel.selected_terrain_id
+            if sel_id:
+                self.canvas.engine._brush_tool.set_active_boundary(self._terrain_boundaries.get(sel_id))
         self._reposition()
 
     def _on_terrain_dims(self, width: int, height: int):
@@ -591,8 +841,19 @@ class MainLayout(QWidget):
         self.canvas.engine.viewport.zoom_changed.emit(new_zoom)
         self.canvas.engine.viewport.view_changed.emit()
 
+    def _on_terrain_selected(self, terrain_id: str):
+        """Update brush tool active boundary to the selected terrain panel."""
+        boundary = self._terrain_boundaries.get(terrain_id)
+        if not self.terrain_panel.is_infinite:
+            self.canvas.engine._brush_tool.set_active_boundary(boundary)
+        else:
+            self.canvas.engine._brush_tool.set_active_boundary(None)
+
     def _on_terrain_added(self, terrain_id: str, name: str):
         """Create a boundary overlay for the new terrain at viewport center."""
+        # Auto-create project if none active (same pattern as MAKEVID)
+        self._ensure_project()
+
         scene = self.canvas.engine.viewport.scene()
         # Get the terrain card color
         card = self.terrain_panel._cards.get(terrain_id)
@@ -620,12 +881,21 @@ class MainLayout(QWidget):
             )
             boundary.set_position(view_center)
         self._terrain_boundaries[terrain_id] = boundary
+        # Sync active boundary to brush tool if this is the selected terrain
+        if self.terrain_panel.selected_terrain_id == terrain_id and not self.terrain_panel.is_infinite:
+            self.canvas.engine._brush_tool.set_active_boundary(boundary)
 
     def _on_terrain_removed(self, terrain_id: str):
         """Remove boundary overlay for deleted terrain."""
         boundary = self._terrain_boundaries.pop(terrain_id, None)
         if boundary:
             boundary.hide()
+        # Update brush tool boundary to newly selected terrain
+        sel_id = self.terrain_panel.selected_terrain_id
+        if sel_id and not self.terrain_panel.is_infinite:
+            self.canvas.engine._brush_tool.set_active_boundary(self._terrain_boundaries.get(sel_id))
+        else:
+            self.canvas.engine._brush_tool.set_active_boundary(None)
 
     def _on_background_changed(self, bg_type: str, value: str):
         """Apply background change to the canvas viewport."""

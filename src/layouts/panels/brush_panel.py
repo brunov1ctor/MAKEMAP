@@ -5,9 +5,9 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
     QComboBox, QSizePolicy, QScrollArea, QWidget, QToolButton,
-    QCheckBox, QLineEdit, QTabBar, QLayout,
+    QCheckBox, QLineEdit, QTabBar, QLayout, QGraphicsDropShadowEffect,
 )
-from PySide6.QtCore import Qt, Signal, QRectF, QSize, QRect, QPoint
+from PySide6.QtCore import Qt, Signal, QRectF, QSize, QRect, QPoint, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import (
     QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush,
     QPixmap, QIcon, QFont,
@@ -190,9 +190,12 @@ class BrushSlider(QFrame):
 class MaterialThumbnail(QToolButton):
     """Clickable material thumbnail for the grid."""
 
+    favorited = Signal(str)  # asset_id
+
     def __init__(self, asset_id: str = "", name: str = "", parent=None):
         super().__init__(parent)
         self.asset_id = asset_id
+        self._is_favorite = False
         self.setFixedSize(52, 58)
         self.setCheckable(True)
         self.setToolTip(name)
@@ -200,11 +203,29 @@ class MaterialThumbnail(QToolButton):
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.setIconSize(QSize(36, 36))
         self.setText(name[:7] if len(name) > 7 else name)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_right_click)
+        self._update_style()
+
+    def set_favorite(self, fav: bool):
+        self._is_favorite = fav
+        if fav:
+            glow = QGraphicsDropShadowEffect(self)
+            glow.setBlurRadius(12)
+            glow.setOffset(0, 0)
+            glow.setColor(QColor(_ACCENT))
+            self.setGraphicsEffect(glow)
+        else:
+            self.setGraphicsEffect(None)
+        self._update_style()
+
+    def _update_style(self):
+        border = _ACCENT if self._is_favorite else _BORDER
         self.setStyleSheet(f"""
             QToolButton {{
-                border: 2px solid {_BORDER}; border-radius: 4px;
+                border: 2px solid {border}; border-radius: 4px;
                 background: {_BG_SECTION}; padding: 2px;
-                font-size: 8px; color: {_TEXT_MUTED};
+                font-size: 10px; color: {_TEXT_MUTED};
             }}
             QToolButton:hover {{
                 border-color: {_TEXT_SEC};
@@ -214,6 +235,9 @@ class MaterialThumbnail(QToolButton):
                 background: {_ACCENT_DIM};
             }}
         """)
+
+    def _on_right_click(self, pos):
+        self.favorited.emit(self.asset_id)
 
     def set_pixmap(self, pixmap: QPixmap):
         scaled = pixmap.scaled(
@@ -302,6 +326,7 @@ class BrushToolPanel(QFrame):
 
     # Signals
     asset_selected = Signal(str)
+    favorite_toggled = Signal(str)  # asset_id
     mode_changed = Signal(str)  # "paint", "mask", "erase"
     tab_changed = Signal(str)   # category name
     close_requested = Signal()
@@ -342,8 +367,6 @@ class BrushToolPanel(QFrame):
         self._layout.setSpacing(2)
 
         self._build_header()
-        self._layout.addWidget(_separator())
-        self._build_toolbar()
         self._layout.addWidget(_separator())
         self._build_settings_section()
         self._layout.addWidget(_separator())
@@ -398,56 +421,7 @@ class BrushToolPanel(QFrame):
     # ─── Toolbar ─────────────────────────────────────────────────────────
 
     def _build_toolbar(self):
-        toolbar = QHBoxLayout()
-        toolbar.setContentsMargins(0, 4, 0, 4)
-        toolbar.setSpacing(6)
-
-        # Preset combo
-        self.preset_combo = QComboBox()
-        self.preset_combo.addItems(["Grass", "Snow", "Sand", "Ocean", "Rock", "Swamp", "Custom"])
-        self.preset_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.preset_combo.wheelEvent = lambda e: e.ignore()
-        self.preset_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: {_BG_SECTION}; color: {_TEXT_SEC};
-                border: 1px solid {_BORDER}; border-radius: 4px;
-                padding: 3px 8px; font-size: 10px;
-            }}
-            QComboBox::drop-down {{ border: none; width: 14px; }}
-            QComboBox QAbstractItemView {{
-                background: {_BG}; color: {_TEXT};
-                border: 1px solid {_BORDER}; selection-background-color: {_ACCENT_DIM};
-            }}
-        """)
-        toolbar.addWidget(self.preset_combo)
-
-        # Edit Brush button
-        edit_btn = QToolButton()
-        edit_btn.setText("Edit Brush")
-        edit_btn.setStyleSheet(f"""
-            QToolButton {{
-                background: {_ACCENT_DIM}; color: {_ACCENT};
-                border: 1px solid {_ACCENT}; border-radius: 4px;
-                padding: 3px 8px; font-size: 10px; font-weight: bold;
-            }}
-            QToolButton:hover {{ background: rgba(255, 216, 77, 0.25); }}
-        """)
-        toolbar.addWidget(edit_btn)
-
-        # Settings button
-        settings_btn = QToolButton()
-        settings_btn.setText("⚙")
-        settings_btn.setFixedSize(24, 24)
-        settings_btn.setStyleSheet(f"""
-            QToolButton {{
-                border: none; border-radius: 4px; font-size: 12px;
-                color: {_TEXT_SEC}; background: transparent;
-            }}
-            QToolButton:hover {{ background: #333; color: {_TEXT}; }}
-        """)
-        toolbar.addWidget(settings_btn)
-
-        self._layout.addLayout(toolbar)
+        pass
 
     # ─── Brush Settings ──────────────────────────────────────────────────
 
@@ -597,31 +571,42 @@ class BrushToolPanel(QFrame):
         section.setContentsMargins(0, 4, 0, 4)
         section.setSpacing(4)
 
-        # Tabs
-        self._tabs = QTabBar()
-        self._tabs.addTab("Terrenos")
-        self._tabs.addTab("Vegetação")
-        self._tabs.addTab("Rochas")
-        self._tabs.addTab("Montanhas")
-        self._tabs.addTab("Edifícios")
-        self._tabs.addTab("★")
-        self._tabs.setExpanding(False)
-        self._tabs.setStyleSheet(f"""
-            QTabBar::tab {{
-                background: transparent; color: {_TEXT_SEC};
-                padding: 3px 6px; font-size: 9px; border: none;
-                border-bottom: 2px solid transparent;
-            }}
-            QTabBar::tab:selected {{
-                color: {_ACCENT}; border-bottom-color: {_ACCENT};
-            }}
-            QTabBar::tab:hover {{
-                color: {_TEXT};
-            }}
-        """)
-        self._tabs.currentChanged.connect(self._on_tab_changed)
-        self._tabs.wheelEvent = lambda e: e.ignore()
-        section.addWidget(self._tabs)
+        # Tabs (Property Sheet style — multiple rows)
+        self._tab_container = QWidget()
+        self._tab_container.setStyleSheet("background: transparent;")
+        self._tab_flow = FlowLayout(self._tab_container, spacing=2)
+        self._tab_flow.setContentsMargins(0, 0, 0, 0)
+
+        self._tab_categories = ["terrain", "trees", "rocks", "mountains", "buildings", "effects", "misc"]
+        self._tab_labels = ["🌍 Terrain", "🌲 Trees", "🪨 Rocks", "⛰ Mountains", "🏠 Buildings", "✨ Effects", "📦 Misc", "★"]
+        self._tab_buttons: list[QToolButton] = []
+
+        for i, label in enumerate(self._tab_labels):
+            btn = QToolButton()
+            btn.setText(label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QToolButton {{
+                    background: transparent; color: {_TEXT_SEC};
+                    padding: 3px 6px; font-size: 9px; border: none;
+                    border-bottom: 2px solid transparent;
+                }}
+                QToolButton:checked {{
+                    color: {_ACCENT}; border-bottom-color: {_ACCENT};
+                }}
+                QToolButton:hover {{
+                    color: {_TEXT};
+                }}
+            """)
+            btn.clicked.connect(lambda checked, idx=i: self._on_tab_clicked(idx))
+            self._tab_flow.addWidget(btn)
+            self._tab_buttons.append(btn)
+
+        if self._tab_buttons:
+            self._tab_buttons[0].setChecked(True)
+
+        section.addWidget(self._tab_container)
 
         # Search
         self._search = QLineEdit()
@@ -670,7 +655,7 @@ class BrushToolPanel(QFrame):
     # ─── Public API ──────────────────────────────────────────────────────
 
     def set_assets(self, assets: list[dict]):
-        """Populate material grid. Each dict: {id, name, pixmap}."""
+        """Populate material grid. Each dict: {id, name, pixmap, favorite}."""
         for btn in self._asset_buttons:
             btn.deleteLater()
         self._asset_buttons.clear()
@@ -679,7 +664,10 @@ class BrushToolPanel(QFrame):
             btn = MaterialThumbnail(asset.get("id", ""), asset.get("name", ""))
             if "pixmap" in asset and asset["pixmap"]:
                 btn.set_pixmap(asset["pixmap"])
+            if asset.get("favorite"):
+                btn.set_favorite(True)
             btn.clicked.connect(lambda checked, a=asset: self._on_asset_clicked(a))
+            btn.favorited.connect(self.favorite_toggled.emit)
             self._grid_layout.addWidget(btn)
             self._asset_buttons.append(btn)
 
@@ -696,10 +684,14 @@ class BrushToolPanel(QFrame):
         self._material_label.setText(asset.get("name", ""))
         self.asset_selected.emit(asset.get("id", ""))
 
-    def _on_tab_changed(self, index: int):
-        """Map tab index to library category and emit signal."""
-        categories = ["terrain", "trees", "rocks", "mountains", "buildings", ""]
-        category = categories[index] if index < len(categories) else ""
+    def _on_tab_clicked(self, index: int):
+        """Handle tab button click — uncheck others and emit signal."""
+        for i, btn in enumerate(self._tab_buttons):
+            btn.setChecked(i == index)
+        if index < len(self._tab_categories):
+            category = self._tab_categories[index]
+        else:
+            category = "__favorites__"
         self.tab_changed.emit(category)
 
     def paintEvent(self, event):

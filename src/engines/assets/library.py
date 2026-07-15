@@ -6,16 +6,19 @@ Structure:
     └── library/
         ├── library.sqlite       ← metadata database
         ├── thumbnails/          ← generated thumbnails
-        ├── terrain/             ← grass, sand, water, snow, lava
-        ├── trees/               ← árvores, arbustos, vegetação
-        ├── mountains/           ← montanhas, colinas
-        ├── rocks/               ← pedras, rochas
-        ├── buildings/           ← casas, torres, castelos, ruínas
-        ├── effects/             ← nuvens, neblina, partículas
-        └── misc/                ← outros
+        ├── backgrounds/         ← fundos do canvas
+        ├── sounds/              ← sistema de áudio 4 camadas
+        └── assets/              ← assets do mapa
+            ├── terrain/         ← grass, sand, water, snow, lava
+            ├── trees/           ← árvores, arbustos, vegetação
+            ├── mountains/       ← montanhas, colinas
+            ├── rocks/           ← pedras, rochas
+            ├── buildings/       ← casas, torres, castelos, ruínas
+            ├── effects/         ← nuvens, neblina, partículas
+            └── misc/            ← outros
 
 Usage:
-    Drop any PNG/WEBP/JPG into the correct subfolder.
+    Drop any PNG/WEBP/JPG into the correct subfolder inside assets/.
     The library auto-detects and registers it.
 """
 
@@ -38,6 +41,7 @@ logger = logging.getLogger("MAKEMAP")
 # Library lives alongside the source code
 _SOURCE_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 LIBRARY_DIR = _SOURCE_ROOT / "library"
+ASSETS_DIR = LIBRARY_DIR / "assets"
 LIBRARY_DB = LIBRARY_DIR / "library.sqlite"
 
 SUPPORTED_FORMATS = {".png", ".webp", ".svg", ".jpg", ".jpeg"}
@@ -81,8 +85,9 @@ class AssetLibrary(QObject):
 
         # Ensure directory structure
         LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+        ASSETS_DIR.mkdir(exist_ok=True)
         for folder in CATEGORY_FOLDERS:
-            (LIBRARY_DIR / folder).mkdir(exist_ok=True)
+            (ASSETS_DIR / folder).mkdir(exist_ok=True)
 
         # Database
         self._db = self._init_db()
@@ -120,16 +125,21 @@ class AssetLibrary(QObject):
                 height INTEGER DEFAULT 0,
                 hash TEXT DEFAULT '',
                 tags TEXT DEFAULT '[]',
+                favorite INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migration: add favorite column if missing
+        cols = [r[1] for r in db.execute("PRAGMA table_info(assets)").fetchall()]
+        if "favorite" not in cols:
+            db.execute("ALTER TABLE assets ADD COLUMN favorite INTEGER DEFAULT 0")
         db.commit()
         return db
 
     # ─── Watcher ─────────────────────────────────────────────────────────
 
     def _start_watching(self):
-        dirs = [str(LIBRARY_DIR / f) for f in CATEGORY_FOLDERS]
+        dirs = [str(ASSETS_DIR / f) for f in CATEGORY_FOLDERS]
         self._watcher.addPaths(dirs)
         self._watcher.directoryChanged.connect(lambda _: self._timer.start())
 
@@ -154,7 +164,7 @@ class AssetLibrary(QObject):
         registered = self._get_registered_paths()
 
         for folder_name in CATEGORY_FOLDERS:
-            folder = LIBRARY_DIR / folder_name
+            folder = ASSETS_DIR / folder_name
             if not folder.exists():
                 continue
 
@@ -251,6 +261,13 @@ class AssetLibrary(QObject):
 
         return self.cache.load(asset_id, path)
 
+    def get_path_by_id(self, asset_id: str) -> str | None:
+        """Get source_path for an asset by ID."""
+        row = self._db.execute(
+            "SELECT source_path FROM assets WHERE id = ?", (asset_id,)
+        ).fetchone()
+        return row["source_path"] if row else None
+
     def get_pixmap_by_name(self, name: str) -> QPixmap | None:
         """Load asset pixmap by name (convenience for brush configs)."""
         row = self._db.execute(
@@ -318,6 +335,26 @@ class AssetLibrary(QObject):
             self._db.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
             self._db.commit()
             self.asset_removed.emit(asset_id)
+
+    # ─── Favorites ───────────────────────────────────────────────────────
+
+    def toggle_favorite(self, asset_id: str) -> bool:
+        """Toggle favorite status. Returns new state."""
+        row = self._db.execute("SELECT favorite FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        if not row:
+            return False
+        new_val = 0 if row["favorite"] else 1
+        self._db.execute("UPDATE assets SET favorite = ? WHERE id = ?", (new_val, asset_id))
+        self._db.commit()
+        return bool(new_val)
+
+    def is_favorite(self, asset_id: str) -> bool:
+        row = self._db.execute("SELECT favorite FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        return bool(row["favorite"]) if row else False
+
+    def list_favorites(self) -> list[LibraryAsset]:
+        rows = self._db.execute("SELECT * FROM assets WHERE favorite = 1 ORDER BY name").fetchall()
+        return [self._row_to_asset(r) for r in rows]
 
     # ─── Helpers ─────────────────────────────────────────────────────────
 

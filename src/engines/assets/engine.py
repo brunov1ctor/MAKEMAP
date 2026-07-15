@@ -58,6 +58,12 @@ class AssetEngine(QObject):
         self._project_path = project_path
         self._uow = uow
 
+        # Adjustments service (singleton)
+        from src.services.asset_adjustments import AssetAdjustmentsService
+        if not hasattr(AssetAdjustmentsService, '_instance'):
+            AssetAdjustmentsService._instance = AssetAdjustmentsService()
+        self._adj_service = AssetAdjustmentsService._instance
+
         # Global library (always available)
         self.library = AssetLibrary(self)
 
@@ -169,10 +175,11 @@ class AssetEngine(QObject):
         )
 
     def get_pixmap(self, asset_id: str) -> QPixmap | None:
-        """Load asset pixmap — checks project DB first, then global library."""
+        """Load asset pixmap — checks project DB first, then global library.
+        Applies brightness/contrast adjustments via service if available."""
         cached = self.cache.get(asset_id)
         if cached:
-            return cached
+            return self._apply_adjustment(cached, asset_id)
 
         # Try project database
         if self._uow:
@@ -180,10 +187,20 @@ class AssetEngine(QObject):
             if info:
                 path = Path(info.source_path)
                 if path.exists():
-                    return self.cache.load(asset_id, path)
+                    pix = self.cache.load(asset_id, path)
+                    return self._apply_adjustment(pix, asset_id) if pix else None
 
         # Fallback to global library
-        return self.library.get_pixmap(asset_id)
+        pix = self.library.get_pixmap(asset_id)
+        return self._apply_adjustment(pix, asset_id) if pix else None
+
+    def _apply_adjustment(self, pixmap: QPixmap, asset_id: str) -> QPixmap:
+        """Apply brightness/contrast via service if available."""
+        if not self._adj_service:
+            return pixmap
+        info = self.get_asset(asset_id) if self._uow else None
+        path = info.source_path if info else (self.library.get_path_by_id(asset_id) or "")
+        return self._adj_service.get_adjusted_pixmap(path, pixmap)
 
     def get_pixmap_by_name(self, name: str) -> QPixmap | None:
         """Load pixmap by asset name — searches library."""

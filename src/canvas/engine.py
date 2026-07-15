@@ -21,6 +21,7 @@ from src.engines.core.transform import TransformEngine
 from src.engines.core.clipboard import ClipboardEngine
 from src.engines.core.history import HistoryEngine
 from src.engines.procedural import ProceduralEngine, GeneratorParams, GeneratorType
+from src.engines.audio import SoundEngine
 from PySide6.QtWidgets import QGraphicsPixmapItem
 
 
@@ -77,10 +78,17 @@ class CanvasEngine(QWidget):
         self.input_manager = InputManager(self.tool_manager)
         self._register_global_shortcuts()
 
+        # Sound Engine
+        self.sound_engine = SoundEngine(self)
+        self._brush_tool.set_sound_engine(self.sound_engine)
+        self.sound_engine.start()
+
         # Connect signals
         self.viewport.zoom_changed.connect(lambda z: self.zoom_changed.emit(int(z * 100)))
+        self.viewport.zoom_changed.connect(lambda z: self.sound_engine.on_zoom_changed(int(z * 100)))
         self.viewport.cursor_moved.connect(self.cursor_moved.emit)
         self.viewport.view_changed.connect(self._on_view_changed)
+        self.viewport.view_changed.connect(self._update_sound_context)
         self.tool_manager.tool_changed.connect(self.tool_changed.emit)
 
         # Override viewport events to route through tools
@@ -361,3 +369,32 @@ class CanvasEngine(QWidget):
 
     def zoom_reset(self):
         self.viewport.zoom_reset()
+
+    # --- Sound ---
+
+    def start_sound(self):
+        self.sound_engine.start()
+
+    def stop_sound(self):
+        self.sound_engine.stop()
+
+    def _update_sound_context(self):
+        """Scan visible items and notify sound engine layers."""
+        view_rect = self.viewport.mapToScene(self.viewport.viewport().rect()).boundingRect()
+        visible_items = self.viewport.scene().items(view_rect)
+        object_keys = set()
+        for item in visible_items:
+            if isinstance(item, QGraphicsPixmapItem):
+                # data(0) = asset type key (e.g. "tree", "torch", "river")
+                key = item.data(0) or ""
+                if key:
+                    object_keys.add(key.lower())
+                # data(1) = biome tag (e.g. "desert", "forest")
+                biome = item.data(1) or ""
+                if biome:
+                    self.sound_engine.on_biome_changed(biome.lower())
+                # data(2) = region/music tag
+                region = item.data(2) or ""
+                if region:
+                    self.sound_engine.on_region_entered(region.lower())
+        self.sound_engine.on_visible_objects_changed(object_keys)

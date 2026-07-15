@@ -399,6 +399,15 @@ MIGRATIONS: list[tuple[int, str, str]] = [
             created_at TEXT DEFAULT (datetime('now'))
         );
 
+        -- Asset Settings (per-project overrides: brightness, contrast, volumes)
+        CREATE TABLE IF NOT EXISTS asset_settings (
+            asset_id TEXT PRIMARY KEY,
+            brightness REAL DEFAULT 0.0,
+            contrast REAL DEFAULT 0.0,
+            sound_volume_paint REAL DEFAULT 0.7,
+            sound_volume_ambient REAL DEFAULT 0.7
+        );
+
         -- Indexes
         CREATE INDEX IF NOT EXISTS idx_regions_world ON regions(world_id);
         CREATE INDEX IF NOT EXISTS idx_regions_kingdom ON regions(kingdom_id);

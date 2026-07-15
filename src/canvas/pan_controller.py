@@ -63,7 +63,7 @@ class KeyboardPanController(QObject):
 
     def _tick(self):
         t = min(1.0, self._elapsed.elapsed() / Navigation.PAN_ACCEL_MS)
-        speed = Navigation.PAN_MIN_SPEED + (Navigation.PAN_MAX_SPEED - Navigation.PAN_MIN_SPEED) * (t * t)
+        speed = Navigation.PAN_MIN_SPEED + (Navigation.PAN_MAX_SPEED - Navigation.PAN_MIN_SPEED) * t
 
         dx, dy = 0.0, 0.0
         if self._keys_held & _LEFT_KEYS:

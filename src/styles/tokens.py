@@ -77,9 +77,9 @@ class Typography:
 
 class Navigation:
     """Keyboard pan / navigation settings."""
-    PAN_MIN_SPEED = 2.0       # px/frame at start
-    PAN_MAX_SPEED = 30.0      # px/frame at full acceleration
-    PAN_ACCEL_MS = 800        # ms to reach max speed
+    PAN_MIN_SPEED = 6.0       # px/frame at start
+    PAN_MAX_SPEED = 36.0      # px/frame at full acceleration
+    PAN_ACCEL_MS = 500        # ms to reach max speed
     PAN_FPS = 60              # timer tick rate
     ZOOM_STEP = 1.15          # scroll wheel zoom factor
     SCROLL_PAN_SPEED = 1.0    # multiplier for scroll-based pan

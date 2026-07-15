@@ -182,7 +182,7 @@ class _ProjectCard(QWidget):
 
 
 class ProjectsPanel(QWidget):
-    """Painel CRUD de projetos — overlay glass."""
+    """Painel CRUD de projetos — overlay glass, draggable."""
 
     closed = Signal()
     project_opened = Signal(object)   # Project
@@ -192,6 +192,7 @@ class ProjectsPanel(QWidget):
     def __init__(self, active_path: str = "", parent=None):
         super().__init__(parent)
         self._active_path = active_path
+        self._drag_pos = None
         self.setMinimumWidth(350)
         self.setMaximumWidth(500)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
@@ -229,6 +230,7 @@ class ProjectsPanel(QWidget):
             f"border: none; font-size: 14px; border-radius: 12px; }}"
             f"QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}"
         )
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.closed.emit)
         hdr.addWidget(close_btn)
         layout.addLayout(hdr)
@@ -261,6 +263,25 @@ class ProjectsPanel(QWidget):
         self._list_layout.setSpacing(6)
         scroll.setWidget(self._content)
         layout.addWidget(scroll)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and event.pos().y() < 50:
+            self._drag_pos = event.pos()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None:
+            new_pos = self.mapToParent(event.pos() - self._drag_pos)
+            self.move(new_pos)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
 
     def set_active(self, path: str):
         self._active_path = path

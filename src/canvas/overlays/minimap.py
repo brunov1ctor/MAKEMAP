@@ -213,7 +213,8 @@ class MiniMap(QFrame):
 
     def _schedule_refresh(self, *_args):
         """Ensure refresh happens on next timer tick (avoids redundant repaints)."""
-        pass  # timer already running at 66ms
+        if not self._refresh_timer.isActive():
+            self._refresh_timer.start()
 
     def _refresh(self):
         """Fit the mini view to scene content and draw viewport indicator."""
@@ -235,6 +236,7 @@ class MiniMap(QFrame):
         margin = max(items_rect.width(), items_rect.height()) * 0.1
         fit_rect = items_rect.adjusted(-margin, -margin, margin, margin)
         self._mini_view.fitInView(fit_rect, Qt.AspectRatioMode.KeepAspectRatio)
+        self._mini_view.viewport().update()
 
         # Viewport indicator
         vp = self._main_viewport

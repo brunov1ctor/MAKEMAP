@@ -47,6 +47,7 @@ class BrushTool(BaseTool):
         self._asset_engine = asset_engine
         self._history = history_engine
         self._minimap = None
+        self._sound_engine = None
         self._cursor_item: QGraphicsEllipseItem | None = None
         self._stroke_items: list = []
 
@@ -75,6 +76,9 @@ class BrushTool(BaseTool):
         self._bounds_height: int | None = None
         self._bounds_shape: str | None = None
 
+        # Active boundary item (selected terrain panel)
+        self._active_boundary: object | None = None  # MapBoundary
+
     @property
     def size(self) -> float:
         return self._engine.config.size
@@ -99,16 +103,31 @@ class BrushTool(BaseTool):
     def set_asset_engine(self, asset_engine: AssetEngine):
         self._asset_engine = asset_engine
 
+    def set_sound_engine(self, sound_engine):
+        """Inject SoundEngine for brush audio feedback."""
+        self._sound_engine = sound_engine
+
     def set_map_bounds(self, width: int | None, height: int | None, shape: str | None):
         """Set map painting bounds. None = infinite."""
         self._bounds_width = width
         self._bounds_height = height
         self._bounds_shape = shape
 
+    def set_active_boundary(self, boundary):
+        """Set the active boundary (selected terrain panel). None = no constraint."""
+        self._active_boundary = boundary
+
     def _is_within_bounds(self, scene_pos: QPointF) -> bool:
-        """Check if a scene position is within map bounds."""
+        """Check if a scene position is within the active boundary."""
+        # Infinite mode — no constraint
         if self._bounds_width is None:
             return True
+        # If there's an active boundary item, use its shape for hit-testing
+        if self._active_boundary and self._active_boundary._item:
+            item = self._active_boundary._item
+            local_pos = item.mapFromScene(scene_pos)
+            return item.path().contains(local_pos)
+        # Fallback to simple bounds
         x, y = scene_pos.x(), scene_pos.y()
         hw = self._bounds_width / 2
         hh = self._bounds_height / 2
@@ -182,12 +201,15 @@ class BrushTool(BaseTool):
         self._active_terrain_layer = layer
         self._last_terrain_pos = pos
 
-        # Paint first point (read item.pos() after potential expansion)
+        # Notify sound engine
+        if self._sound_engine:
+            # Use asset name as sound key (e.g. "terrain" from folder name)
+            asset_key = self._get_asset_sound_key(self._active_asset_id)
+            self._sound_engine.on_brush_stroke_start(asset_key)
+
+        # Paint first point — convert scene pos to layer-local coords
         params = self._terrain_params()
-        local = QPointF(
-            pos.x() - layer.item.pos().x(),
-            pos.y() - layer.item.pos().y(),
-        )
+        local = self._scene_to_layer(pos, layer)
         layer.paint_at(local, params)
         layer.update_live()
 
@@ -225,11 +247,7 @@ class BrushTool(BaseTool):
                 self._last_terrain_pos.x() + dx * t,
                 self._last_terrain_pos.y() + dy * t,
             )
-            # Convert to local AFTER potential expansion (item.pos may change)
-            local = QPointF(
-                scene_pt.x() - layer.item.pos().x(),
-                scene_pt.y() - layer.item.pos().y(),
-            )
+            local = self._scene_to_layer(scene_pt, layer)
             layer.paint_at(local, params)
             # Erase same area from other terrain layers
             if not params.erase:
@@ -240,8 +258,9 @@ class BrushTool(BaseTool):
 
     def _scene_to_layer(self, scene_pos: QPointF, layer: TerrainLayer) -> QPointF:
         """Convert scene coordinates to layer-local pixel coordinates."""
-        item_pos = layer.item.pos()
-        return QPointF(scene_pos.x() - item_pos.x(), scene_pos.y() - item_pos.y())
+        # mapFromScene handles parent transforms (boundary position)
+        item_local = layer.item.mapFromScene(scene_pos)
+        return item_local
 
     def _erase_other_layers(self, scene_pos: QPointF, params: TerrainBrushParams):
         """Erase the painted area from all other terrain layers."""
@@ -254,10 +273,7 @@ class BrushTool(BaseTool):
         for asset_id, layer in self._terrain_layers.items():
             if asset_id == self._active_asset_id:
                 continue
-            local = QPointF(
-                scene_pos.x() - layer.item.pos().x(),
-                scene_pos.y() - layer.item.pos().y(),
-            )
+            local = self._scene_to_layer(scene_pos, layer)
             layer.paint_at(local, erase_params)
             layer.update_live()
 
@@ -270,6 +286,22 @@ class BrushTool(BaseTool):
                 layer.finish_stroke()
         self._active_terrain_layer = None
         self._last_terrain_pos = None
+
+        # Notify sound engine stroke ended
+        if self._sound_engine:
+            self._sound_engine.on_brush_stroke_end()
+
+    def _get_asset_sound_key(self, asset_id: str) -> str:
+        """Get the sound folder key for an asset (category name)."""
+        if not self._asset_engine or not asset_id:
+            return "terrain"
+        lib = getattr(self._asset_engine, 'library', None)
+        if not lib:
+            return "terrain"
+        row = lib._db.execute(
+            "SELECT category FROM assets WHERE id = ?", (asset_id,)
+        ).fetchone()
+        return row["category"] if row else "terrain"
 
     def _terrain_params(self) -> TerrainBrushParams:
         return TerrainBrushParams(
@@ -294,10 +326,20 @@ class BrushTool(BaseTool):
                     layer.set_texture(pixmap, self.texture_scale, self.texture_rotation)
             return layer
 
-        # Create layer at scene origin, starts small and expands dynamically
+        # Determine parent item (boundary item if active)
+        parent_item = None
+        if self._active_boundary and self._active_boundary._item:
+            parent_item = self._active_boundary._item
+
+        # Create layer — starts small and expands dynamically
         map_size = self.INITIAL_LAYER_SIZE
-        layer = TerrainLayer(self.viewport.scene(), map_size, map_size)
-        layer.item.setPos(-map_size / 2, -map_size / 2)
+        layer = TerrainLayer(self.viewport.scene(), map_size, map_size, parent_item=parent_item)
+
+        if parent_item:
+            # Position relative to parent (boundary center is 0,0)
+            layer.item.setPos(-map_size / 2, -map_size / 2)
+        else:
+            layer.item.setPos(-map_size / 2, -map_size / 2)
 
         if self.mask_mode:
             layer.set_mask_only(True)
@@ -325,20 +367,35 @@ class BrushTool(BaseTool):
         if not pixmap or pixmap.isNull():
             return
 
-        item = QGraphicsPixmapItem(pixmap)
+        # Parent to boundary item so stamp moves with the terrain
+        parent_item = None
+        if self._active_boundary and self._active_boundary._item:
+            parent_item = self._active_boundary._item
+
+        item = QGraphicsPixmapItem(pixmap, parent_item)
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         item.setTransformOriginPoint(pixmap.width() / 2, pixmap.height() / 2)
-        item.setPos(
-            stamp.position.x() - pixmap.width() / 2,
-            stamp.position.y() - pixmap.height() / 2,
-        )
+
+        if parent_item:
+            # Convert scene position to parent-local
+            local_pos = parent_item.mapFromScene(stamp.position)
+            item.setPos(
+                local_pos.x() - pixmap.width() / 2,
+                local_pos.y() - pixmap.height() / 2,
+            )
+        else:
+            item.setPos(
+                stamp.position.x() - pixmap.width() / 2,
+                stamp.position.y() - pixmap.height() / 2,
+            )
+            self.viewport.scene().addItem(item)
+
         item.setScale(stamp.scale)
         item.setRotation(stamp.rotation)
         item.setOpacity(stamp.opacity)
         item.setZValue(10)
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
         item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
-        self.viewport.scene().addItem(item)
         self._stroke_items.append(item)
 
     # ─── Cursor ─────────────────────────────────────────────────────
