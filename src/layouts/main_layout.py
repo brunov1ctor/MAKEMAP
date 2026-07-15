@@ -12,6 +12,7 @@ from src.layouts.panels.top_bar import TopBar
 from src.layouts.panels.toolbar import CanvasToolbar
 from src.layouts.panels.brush_panel import BrushToolPanel
 from src.layouts.panels.grid_panel import GridSettingsPanel
+from src.layouts.panels.terrain_panel import TerrainSettingsPanel
 from src.layouts.panels.explorer import ExplorerPanel, FilterPanel
 from src.layouts.panels.canvas_area import CanvasArea
 from src.layouts.panels.inspector import InspectorPanel, QuestPanel, LayersPanel
@@ -19,6 +20,7 @@ from src.layouts.panels.progression import ProgressionBar
 from src.layouts.panels.status_bar import StatusBar
 from src.layouts.panels.logs_panel import QtLogHandler, open_logs_dialog
 from src.canvas.overlays import Compass, MiniMap
+from src.canvas.map_boundary import MapBoundary
 from src.engines.integrator import EngineIntegrator
 
 
@@ -43,6 +45,7 @@ class MainLayout(QWidget):
 
         self.canvas_toolbar = CanvasToolbar(self)
         self.canvas_toolbar.tool_selected.connect(self.canvas.engine.tool_manager.activate)
+        self.canvas_toolbar.tool_selected.connect(self._on_tool_selected)
         self.canvas_toolbar.action_triggered.connect(self._on_toolbar_action)
 
         # Brush properties panel (hidden by default)
@@ -53,9 +56,22 @@ class MainLayout(QWidget):
         # Grid settings panel (hidden by default)
         self.grid_panel = GridSettingsPanel(self)
         self.grid_panel.hide()
+        self.grid_panel.close_requested.connect(self._close_grid_panel)
 
-        self.canvas_toolbar.tool_selected.connect(self._on_tool_selected)
-        self.canvas_toolbar.action_triggered.connect(self._on_toolbar_action)
+        # Terrain settings panel (hidden by default)
+        self.terrain_panel = TerrainSettingsPanel(self)
+        self.terrain_panel.hide()
+        self.terrain_panel.close_requested.connect(self._close_terrain_panel)
+        self.terrain_panel.infinite_toggled.connect(self._on_terrain_infinite)
+        self.terrain_panel.dimensions_changed.connect(self._on_terrain_dims)
+        self.terrain_panel.shape_changed.connect(self._on_terrain_shape)
+        self.terrain_panel.terrain_visibility.connect(self._on_terrain_visibility)
+        self.terrain_panel.terrain_added.connect(self._on_terrain_added)
+        self.terrain_panel.terrain_removed.connect(self._on_terrain_removed)
+        self.terrain_panel.background_changed.connect(self._on_background_changed)
+
+        # Map boundary overlays: one per terrain card
+        self._terrain_boundaries: dict[str, MapBoundary] = {}
 
         # Explorer (esquerda)
         self._left_scroll = self._make_scroll()
@@ -107,6 +123,7 @@ class MainLayout(QWidget):
         self.compass = Compass(self)
         self.minimap = MiniMap(self)
         self.minimap.set_viewport(self.canvas.engine.viewport)
+        self.canvas.engine._brush_tool.set_minimap(self.minimap)
 
         # ═══ Conexões ═══
         self.canvas.engine.cursor_moved.connect(
@@ -121,6 +138,8 @@ class MainLayout(QWidget):
 
         # Zoom control integrado no minimap
         self.minimap.zoom_changed.connect(self._on_zoom_slider)
+        # Grid toggle via keyboard shortcut
+        self.canvas.engine.grid_toggled.connect(self._on_grid_toggled)
         # Compass expansão → esconde/mostra minimap
         self.compass.expanded_changed.connect(self._on_compass_toggle)
         # Logs
@@ -181,14 +200,30 @@ class MainLayout(QWidget):
         # Brush panel: lateral esquerda da área central
         if self.brush_panel.isVisible():
             bp_top = body_top + toolbar_h + 4
-            bp_h = min(body_h - toolbar_h - prog_h - 8, 600)
+            bp_h = body_h - toolbar_h - prog_h - 8
             self.brush_panel.setGeometry(center_x + 4, bp_top, self.brush_panel.PANEL_WIDTH, bp_h)
             self.brush_panel.raise_()
 
-        # Grid panel: abaixo da toolbar, entre painéis laterais
+        # Grid panel: same position as brush panel, height fits content
         if self.grid_panel.isVisible():
-            gp_h = self.grid_panel.height()
-            self.grid_panel.setGeometry(center_x, body_top + toolbar_h, center_w, gp_h)
+            gp_top = body_top + toolbar_h + 4
+            gp_h = self.grid_panel.sizeHint().height()
+            self.grid_panel.setGeometry(center_x + 4, gp_top, self.grid_panel.PANEL_WIDTH, gp_h)
+            self.grid_panel.raise_()
+
+        # Terrain panel: smart height — fits content, capped at max available
+        if self.terrain_panel.isVisible():
+            tp_top = body_top + toolbar_h + 4
+            tp_max = body_h - toolbar_h - prog_h - 8
+            # Calculate needed height from internal scroll container
+            container = self.terrain_panel.findChild(QScrollArea)
+            if container and container.widget():
+                needed = container.widget().sizeHint().height() + 20  # margins
+            else:
+                needed = self.terrain_panel.sizeHint().height()
+            tp_h = min(needed, tp_max)
+            self.terrain_panel.setGeometry(center_x + 4, tp_top, self.terrain_panel.PANEL_WIDTH, tp_h)
+            self.terrain_panel.raise_()
 
         # Progression: centro-baixo, entre laterais, acima do status
         self.progression.setGeometry(center_x, body_bottom - prog_h, center_w, prog_h)
@@ -220,10 +255,10 @@ class MainLayout(QWidget):
     def _on_tool_selected(self, tool_name: str):
         """Mostra/esconde brush panel conforme a ferramenta ativa."""
         if tool_name == "Brush":
-            self.brush_panel.show()
             self.grid_panel.hide()
+            self.terrain_panel.hide()
+            self.brush_panel.show()
             self._connect_brush_panel()
-            # Load assets for the currently selected tab
             self.brush_panel._on_tab_changed(self.brush_panel._tabs.currentIndex())
         else:
             self.brush_panel.hide()
@@ -367,8 +402,14 @@ class MainLayout(QWidget):
 
     def _on_toolbar_action(self, name: str):
         """Handles non-tool toolbar buttons."""
+        # Panel actions deactivate brush tool
+        if name in ("Grid", "Terreno"):
+            self.canvas.engine.tool_manager.activate("Selecionar")
+            self.brush_panel.hide()
+
         actions = {
             "Grid": self._toggle_grid_panel,
+            "Terreno": self._toggle_terrain_panel,
             "Snap": self.canvas.engine.snap.toggle,
             "Undo": self.canvas.engine.history.undo,
             "Redo": self.canvas.engine.history.redo,
@@ -381,9 +422,30 @@ class MainLayout(QWidget):
         """Toggle grid visibility and settings panel."""
         self.canvas.engine._toggle_grid()
         visible = self.canvas.engine.grid.visible
-        self.grid_panel.setVisible(visible)
         if visible:
+            self.brush_panel.hide()
+            self.terrain_panel.hide()
+            self.grid_panel.show()
             self._connect_grid_panel()
+        else:
+            self.grid_panel.hide()
+        self._reposition()
+
+    def _close_grid_panel(self):
+        """Close grid panel and disable grid."""
+        self.canvas.engine._toggle_grid()
+        self.grid_panel.hide()
+        self._reposition()
+
+    def _on_grid_toggled(self, visible: bool):
+        """Called when grid is toggled via keyboard shortcut."""
+        if visible:
+            self.brush_panel.hide()
+            self.terrain_panel.hide()
+            self.grid_panel.show()
+            self._connect_grid_panel()
+        else:
+            self.grid_panel.hide()
         self._reposition()
 
     def _connect_grid_panel(self):
@@ -411,8 +473,10 @@ class MainLayout(QWidget):
             self.canvas.engine._update_grid()
 
         def _update_opacity(v):
-            grid.color_major = QColor(255, 255, 255, int(v * 60))
-            grid.color_minor = QColor(255, 255, 255, int(v * 25))
+            alpha_major = int(v * 2.55)  # 0-100 → 0-255
+            alpha_minor = int(v * 1.0)   # 0-100 → 0-100
+            grid.color_major = QColor(255, 255, 255, min(255, alpha_major))
+            grid.color_minor = QColor(255, 255, 255, min(255, alpha_minor))
             self.canvas.engine._update_grid()
 
         def _update_shape(shape_name):
@@ -427,3 +491,153 @@ class MainLayout(QWidget):
 
     def _open_logs(self):
         open_logs_dialog(self, self.log_handler)
+
+    # ─── Terrain Panel ───
+
+    def _toggle_terrain_panel(self):
+        """Toggle terrain settings panel."""
+        if self.terrain_panel.isVisible():
+            self._close_terrain_panel()
+        else:
+            self.brush_panel.hide()
+            self.grid_panel.hide()
+            self.terrain_panel.show()
+        self._reposition()
+
+    def _close_terrain_panel(self):
+        """Close terrain panel and uncheck toolbar button."""
+        self.terrain_panel.hide()
+        self.canvas_toolbar.uncheck_action("Terreno")
+        self._reposition()
+
+    def _on_terrain_infinite(self, infinite: bool):
+        """Toggle terrain boundaries visibility."""
+        if infinite:
+            self.canvas.engine.clear_map_bounds()
+            # Hide all terrain boundaries
+            for boundary in self._terrain_boundaries.values():
+                boundary.hide()
+        else:
+            # Restore terrain boundaries based on eye icon state
+            w = self.terrain_panel.map_width
+            h = self.terrain_panel.map_height
+            shape = self.terrain_panel.map_shape
+            self.canvas.engine.set_map_bounds(w, h, shape)
+            for tid, boundary in self._terrain_boundaries.items():
+                card = self.terrain_panel._cards.get(tid)
+                if card and card.is_visible:
+                    boundary.show(w, h, shape)
+        self._reposition()
+
+    def _on_terrain_dims(self, width: int, height: int):
+        """Update only the selected terrain boundary dimensions."""
+        if not self.terrain_panel.is_infinite:
+            self.canvas.engine.set_map_bounds(width, height, self.terrain_panel.map_shape)
+        # Only update the selected terrain boundary
+        sel_id = self.terrain_panel.selected_terrain_id
+        if sel_id:
+            boundary = self._terrain_boundaries.get(sel_id)
+            if boundary and boundary.visible:
+                boundary.update_dimensions(width, height)
+
+    def _on_terrain_shape(self, shape: str):
+        """Update only the selected terrain boundary shape."""
+        if not self.terrain_panel.is_infinite:
+            self.canvas.engine.set_map_bounds(
+                self.terrain_panel.map_width, self.terrain_panel.map_height, shape
+            )
+        # Only update the selected terrain boundary
+        sel_id = self.terrain_panel.selected_terrain_id
+        if sel_id:
+            boundary = self._terrain_boundaries.get(sel_id)
+            if boundary and boundary.visible:
+                boundary.update_shape(shape)
+
+    def _on_terrain_visibility(self, terrain_id: str, visible: bool):
+        """Toggle terrain boundary visibility from card eye icon."""
+        # Only show boundaries when not in infinite mode
+        if self.terrain_panel.is_infinite:
+            return
+        boundary = self._terrain_boundaries.get(terrain_id)
+        if not boundary:
+            return
+        w = self.terrain_panel.map_width
+        h = self.terrain_panel.map_height
+        shape = self.terrain_panel.map_shape
+        if visible:
+            boundary.show(w, h, shape)
+            # If boundary has no position yet, place at viewport center
+            if boundary.position.isNull():
+                view_center = self.canvas.engine.viewport.mapToScene(
+                    self.canvas.engine.viewport.viewport().rect().center()
+                )
+                boundary.set_position(view_center)
+            self._fit_to_boundary(boundary)
+        else:
+            boundary.hide()
+
+    def _fit_to_boundary(self, boundary):
+        """Zoom and center the viewport to fit the given boundary."""
+        if not boundary._item:
+            return
+        rect = boundary._item.mapToScene(boundary._item.boundingRect()).boundingRect()
+        # Add some padding
+        padding = 80
+        rect.adjust(-padding, -padding, padding, padding)
+        self.canvas.engine.viewport.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        # Update zoom state
+        new_zoom = self.canvas.engine.viewport.transform().m11()
+        self.canvas.engine.viewport._zoom = new_zoom
+        self.canvas.engine.viewport.zoom_changed.emit(new_zoom)
+        self.canvas.engine.viewport.view_changed.emit()
+
+    def _on_terrain_added(self, terrain_id: str, name: str):
+        """Create a boundary overlay for the new terrain at viewport center."""
+        scene = self.canvas.engine.viewport.scene()
+        # Get the terrain card color
+        card = self.terrain_panel._cards.get(terrain_id)
+        color = None
+        if card:
+            # Extract color from the swatch widget
+            swatch = card.layout().itemAt(0).widget()
+            if swatch:
+                ss = swatch.styleSheet()
+                # Parse "background: #RRGGBB;" from stylesheet
+                import re
+                m = re.search(r'background:\s*(#[0-9a-fA-F]{6})', ss)
+                if m:
+                    color = QColor(m.group(1))
+        boundary = MapBoundary(scene, color)
+        w = self.terrain_panel.map_width
+        h = self.terrain_panel.map_height
+        shape = self.terrain_panel.map_shape
+        # Only show if not in infinite mode
+        if not self.terrain_panel.is_infinite:
+            boundary.show(w, h, shape)
+            # Position at current viewport center
+            view_center = self.canvas.engine.viewport.mapToScene(
+                self.canvas.engine.viewport.viewport().rect().center()
+            )
+            boundary.set_position(view_center)
+        self._terrain_boundaries[terrain_id] = boundary
+
+    def _on_terrain_removed(self, terrain_id: str):
+        """Remove boundary overlay for deleted terrain."""
+        boundary = self._terrain_boundaries.pop(terrain_id, None)
+        if boundary:
+            boundary.hide()
+
+    def _on_background_changed(self, bg_type: str, value: str):
+        """Apply background change to the canvas viewport."""
+        viewport = self.canvas.engine.viewport
+        if bg_type == "none":
+            viewport.set_background(None, None)
+        elif bg_type == "color":
+            viewport.set_background(QColor(value), None)
+        elif bg_type in ("image", "gif"):
+            from PySide6.QtGui import QPixmap
+            pix = QPixmap(value)
+            if not pix.isNull():
+                viewport.set_background(None, pix)
+            else:
+                viewport.set_background(None, None)

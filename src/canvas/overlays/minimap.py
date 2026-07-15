@@ -168,6 +168,7 @@ class MiniMap(QFrame):
         layout.addWidget(self._zoom_row)
 
         self._updating = False
+        self._hidden_items: list = []
 
     # ─── Zoom API ────────────────────────────────────────────────────────
 
@@ -199,6 +200,17 @@ class MiniMap(QFrame):
         viewport.scene().changed.connect(self._schedule_refresh)
         self._refresh()
 
+    def register_hidden_item(self, item):
+        """Register a scene item that should not appear in the minimap."""
+        self._hidden_items.append(item)
+
+    def unregister_hidden_item(self, item):
+        """Remove item from the minimap hidden list."""
+        try:
+            self._hidden_items.remove(item)
+        except ValueError:
+            pass
+
     def _schedule_refresh(self, *_args):
         """Ensure refresh happens on next timer tick (avoids redundant repaints)."""
         pass  # timer already running at 66ms
@@ -210,6 +222,11 @@ class MiniMap(QFrame):
         scene = self._main_viewport.scene()
         if not scene:
             return
+
+        # Temporarily hide overlay items (brush cursor etc.)
+        shown = [item for item in self._hidden_items if item.isVisible()]
+        for item in shown:
+            item.hide()
 
         # Fit to items bounding rect (with margin)
         items_rect = scene.itemsBoundingRect()
@@ -225,6 +242,10 @@ class MiniMap(QFrame):
         bottom_right = vp.mapToScene(vp.viewport().width(), vp.viewport().height())
         view_rect = QRectF(top_left, bottom_right)
         self._mini_view.set_viewport_rect(view_rect)
+
+        # Restore
+        for item in shown:
+            item.show()
 
     # ─── Toggle ──────────────────────────────────────────────────────────
 

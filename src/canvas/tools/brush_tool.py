@@ -37,6 +37,8 @@ class BrushTool(BaseTool):
     name = "Brush"
     shortcut = "B"
     cursor = Qt.CursorShape.CrossCursor
+    TERRAIN_SPACING_RATIO = 0.08  # fraction of brush size between stamps
+    INITIAL_LAYER_SIZE = 2048     # starting layer dimensions
 
     def __init__(self, viewport: Viewport, brush_engine: BrushEngine,
                  asset_engine: AssetEngine = None, history_engine: HistoryEngine = None):
@@ -44,6 +46,7 @@ class BrushTool(BaseTool):
         self._engine = brush_engine
         self._asset_engine = asset_engine
         self._history = history_engine
+        self._minimap = None
         self._cursor_item: QGraphicsEllipseItem | None = None
         self._stroke_items: list = []
 
@@ -66,6 +69,11 @@ class BrushTool(BaseTool):
         self.texture_rotation = 0.0
         self.erase_mode = False
         self.mask_mode = False
+
+        # Map bounds (None = infinite)
+        self._bounds_width: int | None = None
+        self._bounds_height: int | None = None
+        self._bounds_shape: str | None = None
 
     @property
     def size(self) -> float:
@@ -91,6 +99,28 @@ class BrushTool(BaseTool):
     def set_asset_engine(self, asset_engine: AssetEngine):
         self._asset_engine = asset_engine
 
+    def set_map_bounds(self, width: int | None, height: int | None, shape: str | None):
+        """Set map painting bounds. None = infinite."""
+        self._bounds_width = width
+        self._bounds_height = height
+        self._bounds_shape = shape
+
+    def _is_within_bounds(self, scene_pos: QPointF) -> bool:
+        """Check if a scene position is within map bounds."""
+        if self._bounds_width is None:
+            return True
+        x, y = scene_pos.x(), scene_pos.y()
+        hw = self._bounds_width / 2
+        hh = self._bounds_height / 2
+        if self._bounds_shape == "circle":
+            r = min(hw, hh)
+            return (x * x + y * y) <= r * r
+        elif self._bounds_shape == "square":
+            s = min(hw, hh)
+            return -s <= x <= s and -s <= y <= s
+        else:  # rectangle
+            return -hw <= x <= hw and -hh <= y <= hh
+
     def set_active_asset(self, asset_id: str):
         """Called when user selects an asset in the panel."""
         self._active_asset_id = asset_id
@@ -112,6 +142,8 @@ class BrushTool(BaseTool):
 
     def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
         if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if not self._is_within_bounds(scene_pos):
             return
 
         if self._is_terrain_mode or (self.mask_mode and self._active_asset_id):
@@ -150,14 +182,26 @@ class BrushTool(BaseTool):
         self._active_terrain_layer = layer
         self._last_terrain_pos = pos
 
-        # Paint first point (convert scene coords to layer-local coords)
+        # Paint first point (read item.pos() after potential expansion)
         params = self._terrain_params()
-        local = self._scene_to_layer(pos, layer)
+        local = QPointF(
+            pos.x() - layer.item.pos().x(),
+            pos.y() - layer.item.pos().y(),
+        )
         layer.paint_at(local, params)
         layer.update_live()
 
+        # Erase same area from other terrain layers
+        if not params.erase:
+            self._erase_other_layers(pos, params)
+
     def _continue_terrain_stroke(self, pos: QPointF):
         if not self._last_terrain_pos:
+            self._last_terrain_pos = pos
+            return
+
+        # Skip if outside bounds
+        if not self._is_within_bounds(pos):
             self._last_terrain_pos = pos
             return
 
@@ -166,25 +210,31 @@ class BrushTool(BaseTool):
 
         dx = pos.x() - self._last_terrain_pos.x()
         dy = pos.y() - self._last_terrain_pos.y()
-        dist = math.sqrt(dx * dx + dy * dy)
+        dist = math.hypot(dx, dy)
 
-        if dist < 1.0:
+        spacing = max(1.0, self.size * self.TERRAIN_SPACING_RATIO)
+
+        if dist < spacing:
             return
 
-        step = max(1.0, self.size * 0.15)
-        steps = max(1, int(dist / step))
+        steps = max(1, math.ceil(dist / spacing))
 
         for i in range(1, steps + 1):
             t = i / steps
-            interp = QPointF(
+            scene_pt = QPointF(
                 self._last_terrain_pos.x() + dx * t,
                 self._last_terrain_pos.y() + dy * t,
             )
-            local = self._scene_to_layer(interp, layer)
+            # Convert to local AFTER potential expansion (item.pos may change)
+            local = QPointF(
+                scene_pt.x() - layer.item.pos().x(),
+                scene_pt.y() - layer.item.pos().y(),
+            )
             layer.paint_at(local, params)
+            # Erase same area from other terrain layers
+            if not params.erase:
+                self._erase_other_layers(scene_pt, params)
 
-        local = self._scene_to_layer(pos, layer)
-        layer.paint_at(local, params)
         layer.update_live()
         self._last_terrain_pos = pos
 
@@ -193,9 +243,31 @@ class BrushTool(BaseTool):
         item_pos = layer.item.pos()
         return QPointF(scene_pos.x() - item_pos.x(), scene_pos.y() - item_pos.y())
 
+    def _erase_other_layers(self, scene_pos: QPointF, params: TerrainBrushParams):
+        """Erase the painted area from all other terrain layers."""
+        erase_params = TerrainBrushParams(
+            size=params.size,
+            opacity=params.opacity,
+            softness=params.softness,
+            erase=True,
+        )
+        for asset_id, layer in self._terrain_layers.items():
+            if asset_id == self._active_asset_id:
+                continue
+            local = QPointF(
+                scene_pos.x() - layer.item.pos().x(),
+                scene_pos.y() - layer.item.pos().y(),
+            )
+            layer.paint_at(local, erase_params)
+            layer.update_live()
+
     def _end_terrain_stroke(self):
         if self._active_terrain_layer:
             self._active_terrain_layer.finish_stroke()
+        # Finish stroke on other affected layers too
+        for asset_id, layer in self._terrain_layers.items():
+            if asset_id != self._active_asset_id:
+                layer.finish_stroke()
         self._active_terrain_layer = None
         self._last_terrain_pos = None
 
@@ -222,8 +294,8 @@ class BrushTool(BaseTool):
                     layer.set_texture(pixmap, self.texture_scale, self.texture_rotation)
             return layer
 
-        # Create layer centered at scene origin (map covers -2048 to +2048)
-        map_size = 4096
+        # Create layer at scene origin, starts small and expands dynamically
+        map_size = self.INITIAL_LAYER_SIZE
         layer = TerrainLayer(self.viewport.scene(), map_size, map_size)
         layer.item.setPos(-map_size / 2, -map_size / 2)
 
@@ -271,6 +343,10 @@ class BrushTool(BaseTool):
 
     # ─── Cursor ─────────────────────────────────────────────────────
 
+    def set_minimap(self, minimap):
+        """Set minimap reference so cursor can be hidden from it."""
+        self._minimap = minimap
+
     def _show_cursor(self):
         if self._cursor_item:
             return
@@ -280,9 +356,13 @@ class BrushTool(BaseTool):
         self._cursor_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         self._cursor_item.setZValue(10000)
         self.viewport.scene().addItem(self._cursor_item)
+        if self._minimap:
+            self._minimap.register_hidden_item(self._cursor_item)
 
     def _hide_cursor(self):
         if self._cursor_item:
+            if self._minimap:
+                self._minimap.unregister_hidden_item(self._cursor_item)
             self.viewport.scene().removeItem(self._cursor_item)
             self._cursor_item = None
 

@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 *.pyo
 logs/
+library/library.sqlite
+library/thumbnails/

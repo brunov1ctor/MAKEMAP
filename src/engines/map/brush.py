@@ -69,6 +69,7 @@ class BrushEngine(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = BrushConfig()
+        self.config.scatter = 0.0  # default no scatter so stamps stay inside cursor
         self.mode = BrushMode.PAINT
         self._active = False
         self._last_pos: QPointF | None = None

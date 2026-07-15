@@ -45,9 +45,9 @@ class CanvasToolbar(QFrame):
 
         tools = [
             ("⬚", "Selecionar", "V", True),
-            ("✥", "Mover", "M", True),
             ("✋", "Pan", "H", True),
             None,
+            ("🗺", "Terreno", "", False, True),  # toggle action
             ("🖌", "Brush", "B", True),
             ("▭", "Região", "R", True),
             ("⟋", "Estrada", "P", True),
@@ -74,12 +74,14 @@ class CanvasToolbar(QFrame):
                 layout.addWidget(self._sep())
                 continue
 
-            icon, name, shortcut, is_tool = item
+            icon, name, shortcut, is_tool = item[:4]
+            is_toggle = item[4] if len(item) > 4 else False
+
             btn = QToolButton()
             btn.setText(icon)
             btn.setToolTip(f"{name} ({shortcut})" if shortcut else name)
             btn.setFixedSize(32, 32)
-            btn.setCheckable(is_tool)
+            btn.setCheckable(is_tool or is_toggle)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(f"""
                 QToolButton {{
@@ -102,7 +104,7 @@ class CanvasToolbar(QFrame):
             else:
                 btn.clicked.connect(lambda checked, n=name: self._on_action(n))
             layout.addWidget(btn)
-            self._tool_buttons.append((name, btn, is_tool))
+            self._tool_buttons.append((name, btn, is_tool, is_toggle))
 
         layout.addStretch()
 
@@ -117,13 +119,28 @@ class CanvasToolbar(QFrame):
         _paint_glass(self, event, radius=10)
 
     def _on_tool(self, name: str):
-        for n, btn, is_tool in self._tool_buttons:
+        for n, btn, is_tool, is_toggle in self._tool_buttons:
             if is_tool:
                 btn.setChecked(n == name)
+            elif is_toggle:
+                btn.setChecked(False)
         self.tool_selected.emit(name)
 
     def _on_action(self, name: str):
+        # Uncheck all tool buttons when a toggle action is activated
+        for n, btn, is_tool, is_toggle in self._tool_buttons:
+            if is_tool:
+                btn.setChecked(False)
+            elif is_toggle:
+                btn.setChecked(n == name and btn.isChecked())
         self.action_triggered.emit(name)
+
+    def uncheck_action(self, name: str):
+        """Programmatically uncheck a toggle action button."""
+        for n, btn, is_tool, is_toggle in self._tool_buttons:
+            if n == name and is_toggle:
+                btn.setChecked(False)
+                break
 
     def _sep(self):
         s = QFrame()

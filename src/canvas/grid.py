@@ -28,8 +28,8 @@ class GridManager:
         self.cell_size = 64
         self.subdivisions = 4
         self.shape = GridShape.SQUARE
-        self.color_major = QColor(255, 255, 255, 25)
-        self.color_minor = QColor(255, 255, 255, 10)
+        self.color_major = QColor(255, 255, 255, 80)
+        self.color_minor = QColor(255, 255, 255, 35)
         self.visible = True
 
     def set_visible(self, visible: bool):
@@ -90,37 +90,39 @@ class GridManager:
             self._group.addToGroup(line)
             y += sub_size
 
-    # ─── Hexagon ─────────────────────────────────────────────────────────
+    # ─── Hexagon (flat-top honeycomb) ─────────────────────────────────
 
     def _draw_hexagon(self, view_rect: QRectF):
         pen = QPen(self.color_major, 1)
         pen.setCosmetic(True)
 
-        s = self.cell_size
-        h = s * math.sqrt(3) / 2
-        col_w = s * 1.5
-        row_h = h * 2
+        s = self.cell_size / 2  # radius (center to vertex)
+        w = s * 2              # hex width
+        h = s * math.sqrt(3)   # hex height
+        col_step = w * 0.75    # horizontal distance between centers
+        row_step = h           # vertical distance between centers
 
-        col_start = int(view_rect.left() / col_w) - 1
-        col_end = int(view_rect.right() / col_w) + 2
-        row_start = int(view_rect.top() / row_h) - 1
-        row_end = int(view_rect.bottom() / row_h) + 2
+        col_start = int(view_rect.left() / col_step) - 1
+        col_end = int(view_rect.right() / col_step) + 2
+        row_start = int(view_rect.top() / row_step) - 1
+        row_end = int(view_rect.bottom() / row_step) + 2
 
         for col in range(col_start, col_end):
             for row in range(row_start, row_end):
-                cx = col * col_w
-                cy = row * row_h + (h if col % 2 else 0)
+                cx = col * col_step
+                cy = row * row_step + (row_step * 0.5 if col % 2 else 0)
                 path = self._hex_path(cx, cy, s)
                 item = QGraphicsPathItem(path)
                 item.setPen(pen)
                 self._group.addToGroup(item)
 
-    def _hex_path(self, cx: float, cy: float, size: float) -> QPainterPath:
+    def _hex_path(self, cx: float, cy: float, radius: float) -> QPainterPath:
+        """Flat-top hexagon path."""
         path = QPainterPath()
         for i in range(6):
-            angle = math.radians(60 * i - 30)
-            px = cx + size * math.cos(angle)
-            py = cy + size * math.sin(angle)
+            angle = math.radians(60 * i)  # flat-top: starts at 0°
+            px = cx + radius * math.cos(angle)
+            py = cy + radius * math.sin(angle)
             if i == 0:
                 path.moveTo(px, py)
             else:

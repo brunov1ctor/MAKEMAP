@@ -5,12 +5,10 @@ from __future__ import annotations
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import (
-    QWheelEvent, QMouseEvent, QKeyEvent, QPainter, QColor, QTransform,
+    QWheelEvent, QMouseEvent, QKeyEvent, QPainter, QColor, QTransform, QPixmap,
 )
 
-from src.styles.tokens import Colors
-
-ZOOM_STEP = 1.15
+from src.styles.tokens import Colors, Navigation
 
 
 class Viewport(QGraphicsView):
@@ -52,6 +50,31 @@ class Viewport(QGraphicsView):
         self._panning = False
         self._pan_start = QPointF()
         self._space_held = False
+        self._bg_color: QColor | None = None
+        self._bg_pixmap: QPixmap | None = None
+
+    # --- Background ---
+
+    def set_background(self, color: QColor | None, pixmap: QPixmap | None):
+        """Set a solid color or scaled image as the viewport background."""
+        self._bg_color = color
+        self._bg_pixmap = pixmap
+        if color and not pixmap:
+            self.setBackgroundBrush(color)
+        elif not color and not pixmap:
+            self.setBackgroundBrush(QColor(Colors.BG_SECONDARY))
+        else:
+            # Use transparent brush so drawBackground handles it
+            self.setBackgroundBrush(Qt.BrushStyle.NoBrush)
+        self.viewport().update()
+
+    def drawBackground(self, painter: QPainter, rect: QRectF):
+        if self._bg_pixmap:
+            # Draw the pixmap scaled to fill the visible viewport area
+            view_rect = self.mapToScene(self.viewport().rect()).boundingRect()
+            painter.drawPixmap(view_rect.toRect(), self._bg_pixmap)
+        else:
+            super().drawBackground(painter, rect)
 
     # --- Public API ---
 
@@ -94,10 +117,10 @@ class Viewport(QGraphicsView):
         self.view_changed.emit()
 
     def zoom_in(self):
-        self.set_zoom(self._zoom * ZOOM_STEP)
+        self.set_zoom(self._zoom * Navigation.ZOOM_STEP)
 
     def zoom_out(self):
-        self.set_zoom(self._zoom / ZOOM_STEP)
+        self.set_zoom(self._zoom / Navigation.ZOOM_STEP)
 
     def zoom_reset(self):
         self.set_zoom(1.0)
@@ -116,7 +139,7 @@ class Viewport(QGraphicsView):
     # --- Events ---
 
     def wheelEvent(self, event: QWheelEvent):
-        factor = ZOOM_STEP if event.angleDelta().y() > 0 else 1.0 / ZOOM_STEP
+        factor = Navigation.ZOOM_STEP if event.angleDelta().y() > 0 else 1.0 / Navigation.ZOOM_STEP
         center = QPointF(event.position().x(), event.position().y())
         self.set_zoom(self._zoom * factor, center)
 

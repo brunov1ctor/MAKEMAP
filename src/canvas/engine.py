@@ -9,9 +9,11 @@ from PySide6.QtGui import QMouseEvent, QKeyEvent
 from src.canvas.viewport import Viewport
 from src.canvas.grid import GridManager
 from src.canvas.snap import SnapManager
+from src.canvas.pan_controller import KeyboardPanController, PAN_KEYS
 from src.canvas.tools.base import ToolManager
-from src.canvas.tools.defaults import SelectTool, MoveTool, PanTool
+from src.canvas.tools.defaults import SelectTool, PanTool
 from src.canvas.tools.brush_tool import BrushTool, RegionTool, RoadTool, RiverTool
+from src.canvas.map_boundary import MovableBoundaryItem
 from src.engines.map.brush import BrushEngine
 from src.canvas.input_manager import InputManager
 from src.engines.core.selection import SelectionEngine
@@ -29,6 +31,7 @@ class CanvasEngine(QWidget):
     cursor_moved = Signal(float, float)
     tool_changed = Signal(str)
     selection_changed = Signal(list)  # list of selected IDs
+    grid_toggled = Signal(bool)  # grid visible state
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -93,9 +96,15 @@ class CanvasEngine(QWidget):
         # Grid starts hidden — user activates via toolbar or 'G' key
         self.grid.visible = False
 
+        # ─── Keyboard pan ───
+        self._pan = KeyboardPanController(self.viewport, self)
+        self._pan.panned.connect(self._on_pan_delta)
+
+        # ─── Map bounds (None = infinite) ───
+        self._map_bounds: dict | None = None  # {width, height, shape}
+
     def _register_default_tools(self):
         self.tool_manager.register(SelectTool(self.viewport, self.selection))
-        self.tool_manager.register(MoveTool(self.viewport, self.transform, self.history))
         self.tool_manager.register(PanTool(self.viewport))
 
         # Brush (asset painting)
@@ -170,6 +179,7 @@ class CanvasEngine(QWidget):
         self.grid.toggle()
         if self.grid.visible:
             self._update_grid()
+        self.grid_toggled.emit(self.grid.visible)
 
     def _on_view_changed(self):
         if self.grid.visible:
@@ -177,6 +187,13 @@ class CanvasEngine(QWidget):
 
     def _update_grid(self):
         view_rect = self.viewport.mapToScene(self.viewport.viewport().rect()).boundingRect()
+        # Clip grid to map bounds if set
+        if self._map_bounds:
+            from PySide6.QtCore import QRectF
+            hw = self._map_bounds["width"] / 2
+            hh = self._map_bounds["height"] / 2
+            bounds = QRectF(-hw, -hh, self._map_bounds["width"], self._map_bounds["height"])
+            view_rect = view_rect.intersected(bounds)
         self.grid.update(view_rect)
 
     # --- Event routing ---
@@ -189,7 +206,14 @@ class CanvasEngine(QWidget):
             self.viewport.setCursor(Qt.CursorShape.ClosedHandCursor)
             return
 
+        # Let boundary items handle their own press
         scene_pos = self.viewport.mapToScene(int(event.position().x()), int(event.position().y()))
+        item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
+        if isinstance(item, MovableBoundaryItem) and item._hit_border(item.mapFromScene(scene_pos)):
+            from PySide6.QtWidgets import QGraphicsView
+            QGraphicsView.mousePressEvent(self.viewport, event)
+            return
+
         self.tool_manager.mouse_press(event, scene_pos)
 
     def _on_mouse_move(self, event: QMouseEvent):
@@ -207,6 +231,20 @@ class CanvasEngine(QWidget):
             )
             return
 
+        # Let boundary items handle hover/drag
+        item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
+        if isinstance(item, MovableBoundaryItem):
+            from PySide6.QtWidgets import QGraphicsView
+            QGraphicsView.mouseMoveEvent(self.viewport, event)
+            return
+
+        # Check if a boundary is being dragged (cursor may have left the item)
+        for scene_item in self.viewport.scene().items():
+            if isinstance(scene_item, MovableBoundaryItem) and scene_item._dragging:
+                from PySide6.QtWidgets import QGraphicsView
+                QGraphicsView.mouseMoveEvent(self.viewport, event)
+                return
+
         self.tool_manager.mouse_move(event, scene_pos)
 
     def _on_mouse_release(self, event: QMouseEvent):
@@ -217,7 +255,15 @@ class CanvasEngine(QWidget):
             self.viewport.setCursor(Qt.CursorShape.ArrowCursor)
             return
 
+        # Let boundary items handle release
         scene_pos = self.viewport.mapToScene(int(event.position().x()), int(event.position().y()))
+        # Check if any boundary is being dragged
+        for scene_item in self.viewport.scene().items():
+            if isinstance(scene_item, MovableBoundaryItem) and scene_item._dragging:
+                from PySide6.QtWidgets import QGraphicsView
+                QGraphicsView.mouseReleaseEvent(self.viewport, event)
+                return
+
         self.tool_manager.mouse_release(event, scene_pos)
 
     def _on_key_press(self, event: QKeyEvent):
@@ -248,8 +294,14 @@ class CanvasEngine(QWidget):
                 self.history.redo()
                 return
 
-        # Snap toggle
-        if event.text().upper() == "S":
+        # Arrow keys + WASD — pan the map (continuous with acceleration)
+        if event.key() in PAN_KEYS:
+            if not event.isAutoRepeat():
+                self._pan.key_pressed(event.key())
+            return
+
+        # Snap toggle (Shift+S, since S alone is pan)
+        if event.key() == Qt.Key.Key_S and event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             self.snap.toggle()
             return
 
@@ -262,9 +314,44 @@ class CanvasEngine(QWidget):
                 self.viewport.setCursor(Qt.CursorShape.ArrowCursor)
             return
 
+        # Stop pan keys
+        if not event.isAutoRepeat() and event.key() in PAN_KEYS:
+            self._pan.key_released(event.key())
+
         self.input_manager.handle_key_release(event)
 
+    def _on_pan_delta(self, dx: float, dy: float):
+        """Compensate active brush stroke and continue painting while panning."""
+        if self._brush_tool._active_terrain_layer is not None:
+            # The viewport moved, so the scene point under the cursor changed.
+            # Get current cursor screen pos and compute new scene pos.
+            cursor_screen = self.viewport.viewport().mapFromGlobal(
+                self.viewport.cursor().pos()
+            )
+            scene_pos = self.viewport.mapToScene(cursor_screen)
+            # Update last pos to avoid a jump, then paint at new scene pos
+            self._brush_tool._last_terrain_pos = QPointF(
+                scene_pos.x() - dx, scene_pos.y() - dy
+            )
+            self._brush_tool._continue_terrain_stroke(scene_pos)
+        elif self._brush_tool._last_terrain_pos is not None:
+            self._brush_tool._last_terrain_pos += QPointF(dx, dy)
+
     # --- Public API ---
+
+    def set_map_bounds(self, width: int, height: int, shape: str):
+        """Set finite map bounds. Brush and grid will be clipped."""
+        self._map_bounds = {"width": width, "height": height, "shape": shape}
+        self._brush_tool.set_map_bounds(width, height, shape)
+        if self.grid.visible:
+            self._update_grid()
+
+    def clear_map_bounds(self):
+        """Set map to infinite (no bounds)."""
+        self._map_bounds = None
+        self._brush_tool.set_map_bounds(None, None, None)
+        if self.grid.visible:
+            self._update_grid()
 
     def zoom_in(self):
         self.viewport.zoom_in()
