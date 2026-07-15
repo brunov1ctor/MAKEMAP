@@ -18,6 +18,8 @@ from src.engines.core.selection import SelectionEngine
 from src.engines.core.transform import TransformEngine
 from src.engines.core.clipboard import ClipboardEngine
 from src.engines.core.history import HistoryEngine
+from src.engines.procedural import ProceduralEngine, GeneratorParams, GeneratorType
+from PySide6.QtWidgets import QGraphicsPixmapItem
 
 
 class CanvasEngine(QWidget):
@@ -58,6 +60,12 @@ class CanvasEngine(QWidget):
         # History Engine (Undo/Redo)
         self.history = HistoryEngine(self)
 
+        # Procedural Engine
+        self.procedural = ProceduralEngine()
+
+        # Asset engine (injected later via set_asset_engine)
+        self._asset_engine = None
+
         # Tools
         self.tool_manager = ToolManager(self.viewport, self)
         self._register_default_tools()
@@ -69,6 +77,7 @@ class CanvasEngine(QWidget):
         # Connect signals
         self.viewport.zoom_changed.connect(lambda z: self.zoom_changed.emit(int(z * 100)))
         self.viewport.cursor_moved.connect(self.cursor_moved.emit)
+        self.viewport.view_changed.connect(self._on_view_changed)
         self.tool_manager.tool_changed.connect(self.tool_changed.emit)
 
         # Override viewport events to route through tools
@@ -89,15 +98,61 @@ class CanvasEngine(QWidget):
         self.tool_manager.register(MoveTool(self.viewport, self.transform, self.history))
         self.tool_manager.register(PanTool(self.viewport))
 
-        # Brush (terrain painting)
+        # Brush (asset painting)
         self.brush_engine = BrushEngine(self)
-        self.brush_engine.add_asset("terrain_dot")  # asset padrão para pintura
-        self.tool_manager.register(BrushTool(self.viewport, self.brush_engine, self.history))
+        self._brush_tool = BrushTool(self.viewport, self.brush_engine, history_engine=self.history)
+        self.tool_manager.register(self._brush_tool)
+
+        # Region tool with procedural generation callback
+        self._region_tool = RegionTool(self.viewport)
+        self._region_tool.on_region_finalized(self._on_region_finalized)
+        self.tool_manager.register(self._region_tool)
 
         # Map tools
-        self.tool_manager.register(RegionTool(self.viewport))
         self.tool_manager.register(RoadTool(self.viewport))
         self.tool_manager.register(RiverTool(self.viewport))
+
+    def set_asset_engine(self, asset_engine):
+        """Injeta o AssetEngine após o projeto ser carregado."""
+        self._asset_engine = asset_engine
+        self._brush_tool.set_asset_engine(asset_engine)
+
+    def _on_region_finalized(self, polygon):
+        """Renderiza geração procedural dentro do polígono finalizado."""
+        if not self._asset_engine:
+            return
+
+        params = GeneratorParams(
+            area=polygon.boundingRect(),
+            polygon=polygon,
+            seed=0,
+        )
+        # Usa o gerador de floresta como padrão (configurável depois)
+        result = self.procedural.generate(GeneratorType.FOREST, params)
+        self._render_generation_result(result)
+
+    def _render_generation_result(self, result):
+        """Renderiza GenerationResult na cena como QGraphicsPixmapItems."""
+        for gen_item in result.items:
+            if not gen_item.asset_id:
+                continue
+            pixmap = self._asset_engine.get_pixmap(gen_item.asset_id) if self._asset_engine else None
+            if not pixmap or pixmap.isNull():
+                continue
+            item = QGraphicsPixmapItem(pixmap)
+            item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+            item.setTransformOriginPoint(pixmap.width() / 2, pixmap.height() / 2)
+            item.setPos(
+                gen_item.position.x() - pixmap.width() / 2,
+                gen_item.position.y() - pixmap.height() / 2,
+            )
+            item.setScale(gen_item.scale)
+            item.setRotation(gen_item.rotation)
+            item.setOpacity(gen_item.opacity)
+            item.setZValue(10 + gen_item.z_offset)
+            item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+            item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+            self.viewport.scene().addItem(item)
 
     def _on_selection_changed(self, ids: list):
         """Show/hide transform handles based on selection."""
@@ -113,6 +168,10 @@ class CanvasEngine(QWidget):
 
     def _toggle_grid(self):
         self.grid.toggle()
+        if self.grid.visible:
+            self._update_grid()
+
+    def _on_view_changed(self):
         if self.grid.visible:
             self._update_grid()
 

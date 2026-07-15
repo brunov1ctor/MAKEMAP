@@ -1,4 +1,8 @@
-"""Asset Engine — complete pipeline: import, metadata, thumbnail, cache, browse."""
+"""Asset Engine — complete pipeline: import, metadata, thumbnail, cache, browse.
+
+Uses the global AssetLibrary (~/.makemap/library/) as primary source.
+Project-level assets are a secondary layer for project-specific overrides.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ from PySide6.QtGui import QPixmap, QImage
 from src.engines.assets.importer import AssetImporter, ImportResult
 from src.engines.assets.thumbnail import ThumbnailGenerator
 from src.engines.assets.cache import AssetCache
+from src.engines.assets.library import AssetLibrary
 
 if TYPE_CHECKING:
     from src.database.unit_of_work import UnitOfWork
@@ -43,18 +48,27 @@ class AssetInfo:
 
 
 class AssetEngine(QObject):
-    """Manages the full asset pipeline for a project."""
+    """Manages assets — delegates to global library + project-level overrides."""
 
     asset_imported = Signal(str)  # asset_id
     asset_deleted = Signal(str)  # asset_id
 
-    def __init__(self, project_path: Path, uow: UnitOfWork | None = None, parent=None):
+    def __init__(self, project_path: Path = None, uow: UnitOfWork | None = None, parent=None):
         super().__init__(parent)
         self._project_path = project_path
         self._uow = uow
 
-        self.importer = AssetImporter(project_path / "assets")
-        self.thumbnails = ThumbnailGenerator(project_path / "thumbnails")
+        # Global library (always available)
+        self.library = AssetLibrary(self)
+
+        # Project-level (optional, for project-specific imports)
+        if project_path:
+            self.importer = AssetImporter(project_path / "assets")
+            self.thumbnails = ThumbnailGenerator(project_path / "thumbnails")
+        else:
+            self.importer = None
+            self.thumbnails = None
+
         self.cache = AssetCache()
 
     def set_uow(self, uow: UnitOfWork):
@@ -155,20 +169,29 @@ class AssetEngine(QObject):
         )
 
     def get_pixmap(self, asset_id: str) -> QPixmap | None:
-        """Load asset pixmap (from cache or disk)."""
+        """Load asset pixmap — checks project DB first, then global library."""
         cached = self.cache.get(asset_id)
         if cached:
             return cached
 
-        info = self.get_asset(asset_id)
-        if not info:
-            return None
+        # Try project database
+        if self._uow:
+            info = self.get_asset(asset_id)
+            if info:
+                path = Path(info.source_path)
+                if path.exists():
+                    return self.cache.load(asset_id, path)
 
-        path = Path(info.source_path)
-        if not path.exists():
-            return None
+        # Fallback to global library
+        return self.library.get_pixmap(asset_id)
 
-        return self.cache.load(asset_id, path)
+    def get_pixmap_by_name(self, name: str) -> QPixmap | None:
+        """Load pixmap by asset name — searches library."""
+        return self.library.get_pixmap_by_name(name)
+
+    def get_id_by_name(self, name: str) -> str | None:
+        """Get asset ID by name — searches library."""
+        return self.library.get_id_by_name(name)
 
     def get_thumbnail(self, asset_id: str, size: str = "medium") -> QPixmap | None:
         """Get thumbnail pixmap."""

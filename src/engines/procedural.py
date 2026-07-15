@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QRectF
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QPolygonF
 
 
 # ─── Enums ───────────────────────────────────────────────────────────────────
@@ -39,6 +40,7 @@ class GeneratedItem:
 @dataclass
 class GeneratorParams:
     area: QRectF = field(default_factory=lambda: QRectF(0, 0, 500, 500))
+    polygon: QPolygonF | None = None  # máscara poligonal opcional
     density: float = 0.5          # 0-1
     seed: int = 0
     scale_min: float = 0.7
@@ -71,6 +73,15 @@ class BaseGenerator:
     def _rng(self, seed: int) -> random.Random:
         return random.Random(seed)
 
+    def _point_is_valid(self, point: QPointF, params: GeneratorParams) -> bool:
+        """Valida ponto contra área, polígono e zonas de exclusão."""
+        if not params.area.contains(point):
+            return False
+        if params.polygon is not None:
+            if not params.polygon.containsPoint(point, Qt.FillRule.OddEvenFill):
+                return False
+        return not self._in_exclusion(point, params.exclusion_zones)
+
     def _in_exclusion(self, point: QPointF, zones: list[QRectF]) -> bool:
         return any(z.contains(point) for z in zones)
 
@@ -100,7 +111,7 @@ class ForestGenerator(BaseGenerator):
                 jx = x + rng.uniform(-params.variation * step * 0.5, params.variation * step * 0.5)
                 jy = y + rng.uniform(-params.variation * step * 0.5, params.variation * step * 0.5)
                 pt = QPointF(jx, jy)
-                if area.contains(pt) and not self._in_exclusion(pt, params.exclusion_zones):
+                if self._point_is_valid(pt, params):
                     rot, scale = self._random_transform(rng, params)
                     items.append(GeneratedItem(
                         asset_id=self._pick_asset(rng, params),
@@ -120,10 +131,10 @@ class MountainGenerator(BaseGenerator):
         for _ in range(max(1, count)):
             pt = QPointF(rng.uniform(area.x(), area.right()),
                          rng.uniform(area.y(), area.bottom()))
-            if self._in_exclusion(pt, params.exclusion_zones):
+            if not self._point_is_valid(pt, params):
                 continue
             rot, scale = self._random_transform(rng, params)
-            scale *= 1.5  # mountains are bigger
+            scale *= 1.5
             items.append(GeneratedItem(
                 asset_id=self._pick_asset(rng, params),
                 position=pt, rotation=rot * 0.1, scale=scale,
@@ -144,7 +155,7 @@ class VillageGenerator(BaseGenerator):
             dist = rng.uniform(radius * 0.2, radius * 0.8)
             pt = QPointF(center.x() + math.cos(angle) * dist,
                          center.y() + math.sin(angle) * dist)
-            if self._in_exclusion(pt, params.exclusion_zones):
+            if not self._point_is_valid(pt, params):
                 continue
             rot, scale = self._random_transform(rng, params)
             items.append(GeneratedItem(
@@ -163,7 +174,7 @@ class RockGenerator(BaseGenerator):
         for _ in range(max(1, count)):
             pt = QPointF(rng.uniform(area.x(), area.right()),
                          rng.uniform(area.y(), area.bottom()))
-            if self._in_exclusion(pt, params.exclusion_zones):
+            if not self._point_is_valid(pt, params):
                 continue
             rot, scale = self._random_transform(rng, params)
             items.append(GeneratedItem(

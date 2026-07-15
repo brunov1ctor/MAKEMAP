@@ -10,8 +10,6 @@ from PySide6.QtGui import (
 
 from src.styles.tokens import Colors
 
-ZOOM_MIN = 0.05
-ZOOM_MAX = 32.0
 ZOOM_STEP = 1.15
 
 
@@ -20,6 +18,7 @@ class Viewport(QGraphicsView):
 
     zoom_changed = Signal(float)  # emits current zoom level (1.0 = 100%)
     cursor_moved = Signal(float, float)  # scene X, Y
+    view_changed = Signal()  # emitted on any pan or zoom
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,6 +43,10 @@ class Viewport(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
+        # Enable mouse tracking so mouseMoveEvent fires without button press
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+
         # State
         self._zoom = 1.0
         self._panning = False
@@ -61,8 +64,7 @@ class Viewport(QGraphicsView):
         return int(self._zoom * 100)
 
     def set_zoom(self, level: float, center: QPointF | None = None):
-        level = max(ZOOM_MIN, min(ZOOM_MAX, level))
-        if level == self._zoom:
+        if level <= 0 or level == self._zoom:
             return
 
         if center is None:
@@ -89,6 +91,7 @@ class Viewport(QGraphicsView):
         )
 
         self.zoom_changed.emit(self._zoom)
+        self.view_changed.emit()
 
     def zoom_in(self):
         self.set_zoom(self._zoom * ZOOM_STEP)
@@ -139,6 +142,7 @@ class Viewport(QGraphicsView):
             self.verticalScrollBar().setValue(
                 self.verticalScrollBar().value() - int(delta.y())
             )
+            self.view_changed.emit()
             return
         super().mouseMoveEvent(event)
 

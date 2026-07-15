@@ -29,6 +29,7 @@ class CanvasToolbar(QFrame):
     """Toolbar superior completa — ferramentas de edição profissional."""
 
     tool_selected = Signal(str)
+    action_triggered = Signal(str)  # non-tool buttons (Grid, Snap, Undo, etc.)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -98,6 +99,8 @@ class CanvasToolbar(QFrame):
             """)
             if is_tool:
                 btn.clicked.connect(lambda checked, n=name: self._on_tool(n))
+            else:
+                btn.clicked.connect(lambda checked, n=name: self._on_action(n))
             layout.addWidget(btn)
             self._tool_buttons.append((name, btn, is_tool))
 
@@ -118,6 +121,9 @@ class CanvasToolbar(QFrame):
             if is_tool:
                 btn.setChecked(n == name)
         self.tool_selected.emit(name)
+
+    def _on_action(self, name: str):
+        self.action_triggered.emit(name)
 
     def _sep(self):
         s = QFrame()

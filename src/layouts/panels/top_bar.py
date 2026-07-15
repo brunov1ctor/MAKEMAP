@@ -145,6 +145,7 @@ class TopBar(QFrame):
     module_changed = Signal(str)
     search_requested = Signal(str)
     arquivo_clicked = Signal()
+    logs_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -221,10 +222,12 @@ class TopBar(QFrame):
         for i, (icon, name) in enumerate(modules):
             btn = TopNavigationButton(icon, name)
             if name == "Arquivo":
-                # Arquivo não participa do grupo exclusivo
                 btn.setCheckable(False)
                 btn.clicked.connect(self._on_arquivo)
                 self._arquivo_btn = btn
+            elif name == "Logs":
+                btn.setCheckable(False)
+                btn.clicked.connect(self._on_logs)
             else:
                 self._button_group.addButton(btn, i)
                 btn.clicked.connect(lambda checked, n=name: self._on_module(n))
@@ -271,6 +274,9 @@ class TopBar(QFrame):
 
     def _on_arquivo(self):
         self.arquivo_clicked.emit()
+
+    def _on_logs(self):
+        self.logs_clicked.emit()
 
     def _on_module(self, name: str):
         self.module_changed.emit(name)

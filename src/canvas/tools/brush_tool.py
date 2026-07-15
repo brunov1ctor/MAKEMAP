@@ -1,48 +1,84 @@
-"""Canvas tools — Brush (terrain paint), Region, Road, River."""
+"""Canvas tools — Brush (terrain + object paint), Region, Road, River."""
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtCore import Qt, QPointF, QRectF, QRect
 from PySide6.QtGui import (
     QMouseEvent, QPen, QColor, QBrush, QPainterPath, QPolygonF,
     QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsPathItem, QGraphicsPolygonItem,
+    QGraphicsPixmapItem,
 )
 
 from src.canvas.tools.base import BaseTool
+from src.engines.map.terrain_layer import TerrainLayer, TerrainBrushParams
 
 if TYPE_CHECKING:
     from src.canvas.viewport import Viewport
     from src.engines.map.brush import BrushEngine
+    from src.engines.assets.engine import AssetEngine
     from src.engines.core.history import HistoryEngine
 
 
-# ─── Brush Tool (delegates to BrushEngine) ────────────────────────────────
+# ─── Brush Tool (terrain + object) ──────────────────────────────────────
 
 class BrushTool(BaseTool):
-    """Brush — pinta terreno usando o BrushEngine para lógica de stroke."""
+    """Brush — terrain mask painting + object stamp placement.
+
+    Terrain assets (category='terrain'): paints into a TerrainLayer mask.
+    Object assets (all others): places individual QGraphicsPixmapItems.
+    """
 
     name = "Brush"
     shortcut = "B"
     cursor = Qt.CursorShape.CrossCursor
 
-    def __init__(self, viewport: Viewport, brush_engine: BrushEngine, history_engine: HistoryEngine = None):
+    def __init__(self, viewport: Viewport, brush_engine: BrushEngine,
+                 asset_engine: AssetEngine = None, history_engine: HistoryEngine = None):
         super().__init__(viewport)
         self._engine = brush_engine
+        self._asset_engine = asset_engine
         self._history = history_engine
         self._cursor_item: QGraphicsEllipseItem | None = None
-        self._stroke_items: list[QGraphicsEllipseItem] = []
+        self._stroke_items: list = []
 
-        # Visual defaults (engine controla tamanho/spacing, aqui só cor visual)
-        self.color = QColor(34, 139, 34, 160)
+        # Terrain layers: asset_id -> TerrainLayer
+        self._terrain_layers: dict[str, TerrainLayer] = {}
+        self._active_terrain_layer: TerrainLayer | None = None
+        self._active_asset_id: str = ""
+        self._is_terrain_mode = False
+
+        # Undo state
+        self._undo_rect: QRect | None = None
+        self._undo_snapshot = None
+
+        # Stroke interpolation for terrain
+        self._last_terrain_pos: QPointF | None = None
+
+        # Brush params (synced from panel)
+        self.softness = 0.5
+        self.texture_scale = 1.0
+        self.texture_rotation = 0.0
+        self.erase_mode = False
+        self.mask_mode = False
 
     @property
     def size(self) -> float:
         return self._engine.config.size
+
+    def update_cursor_size(self):
+        """Refresh cursor circle diameter when brush size changes."""
+        if self._cursor_item:
+            rect = self._cursor_item.rect()
+            cx = rect.x() + rect.width() / 2
+            cy = rect.y() + rect.height() / 2
+            r = self.size / 2
+            self._cursor_item.setRect(cx - r, cy - r, self.size, self.size)
 
     def activate(self):
         super().activate()
@@ -52,45 +88,188 @@ class BrushTool(BaseTool):
         super().deactivate()
         self._hide_cursor()
 
+    def set_asset_engine(self, asset_engine: AssetEngine):
+        self._asset_engine = asset_engine
+
+    def set_active_asset(self, asset_id: str):
+        """Called when user selects an asset in the panel."""
+        self._active_asset_id = asset_id
+        self._is_terrain_mode = self._check_is_terrain(asset_id)
+
+    def _check_is_terrain(self, asset_id: str) -> bool:
+        """Check if asset belongs to 'terrain' category."""
+        if not self._asset_engine or not asset_id:
+            return False
+        lib = getattr(self._asset_engine, 'library', None)
+        if not lib:
+            return False
+        row = lib._db.execute(
+            "SELECT category FROM assets WHERE id = ?", (asset_id,)
+        ).fetchone()
+        return row["category"] == "terrain" if row else False
+
+    # ─── Mouse Events ─────────────────────────────────────────────────
+
     def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._stroke_items.clear()
-            self._engine.stamp_placed.connect(self._on_stamp)
-            self._engine.begin_stroke(scene_pos)
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
+        if self._is_terrain_mode or (self.mask_mode and self._active_asset_id):
+            self._begin_terrain_stroke(scene_pos)
+        elif self._active_asset_id:
+            self._begin_object_stroke(scene_pos)
 
     def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
-        # Update cursor preview
+        # Update cursor
         if self._cursor_item:
             r = self.size / 2
             self._cursor_item.setRect(scene_pos.x() - r, scene_pos.y() - r, self.size, self.size)
 
-        if self._engine.is_active:
+        if self._active_terrain_layer:
+            self._continue_terrain_stroke(scene_pos)
+        elif self._engine.is_active:
             self._engine.continue_stroke(scene_pos)
 
     def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
-        if event.button() == Qt.MouseButton.LeftButton and self._engine.is_active:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
+        if self._active_terrain_layer:
+            self._end_terrain_stroke()
+        elif self._engine.is_active:
             self._engine.end_stroke()
             try:
-                self._engine.stamp_placed.disconnect(self._on_stamp)
-            except RuntimeError:
+                self._engine.stamp_placed.disconnect(self._on_object_stamp)
+            except (RuntimeError, TypeError):
                 pass
 
-    def _on_stamp(self, stamp):
-        """Renderiza um stamp do engine na scene."""
-        pos = stamp.position
-        r = self.size / 2
-        item = QGraphicsEllipseItem(pos.x() - r, pos.y() - r, self.size, self.size)
-        item.setPen(QPen(Qt.PenStyle.NoPen))
+    # ─── Terrain Stroke ──────────────────────────────────────────────
 
-        grad = QRadialGradient(pos, r)
-        grad.setColorAt(0.0, self.color)
-        grad.setColorAt(0.7, QColor(self.color.red(), self.color.green(), self.color.blue(), int(self.color.alpha() * 0.5)))
-        grad.setColorAt(1.0, QColor(self.color.red(), self.color.green(), self.color.blue(), 0))
-        item.setBrush(QBrush(grad))
+    def _begin_terrain_stroke(self, pos: QPointF):
+        layer = self._get_or_create_terrain_layer(self._active_asset_id)
+        self._active_terrain_layer = layer
+        self._last_terrain_pos = pos
+
+        # Paint first point (convert scene coords to layer-local coords)
+        params = self._terrain_params()
+        local = self._scene_to_layer(pos, layer)
+        layer.paint_at(local, params)
+        layer.update_live()
+
+    def _continue_terrain_stroke(self, pos: QPointF):
+        if not self._last_terrain_pos:
+            self._last_terrain_pos = pos
+            return
+
+        layer = self._active_terrain_layer
+        params = self._terrain_params()
+
+        dx = pos.x() - self._last_terrain_pos.x()
+        dy = pos.y() - self._last_terrain_pos.y()
+        dist = math.sqrt(dx * dx + dy * dy)
+
+        if dist < 1.0:
+            return
+
+        step = max(1.0, self.size * 0.15)
+        steps = max(1, int(dist / step))
+
+        for i in range(1, steps + 1):
+            t = i / steps
+            interp = QPointF(
+                self._last_terrain_pos.x() + dx * t,
+                self._last_terrain_pos.y() + dy * t,
+            )
+            local = self._scene_to_layer(interp, layer)
+            layer.paint_at(local, params)
+
+        local = self._scene_to_layer(pos, layer)
+        layer.paint_at(local, params)
+        layer.update_live()
+        self._last_terrain_pos = pos
+
+    def _scene_to_layer(self, scene_pos: QPointF, layer: TerrainLayer) -> QPointF:
+        """Convert scene coordinates to layer-local pixel coordinates."""
+        item_pos = layer.item.pos()
+        return QPointF(scene_pos.x() - item_pos.x(), scene_pos.y() - item_pos.y())
+
+    def _end_terrain_stroke(self):
+        if self._active_terrain_layer:
+            self._active_terrain_layer.finish_stroke()
+        self._active_terrain_layer = None
+        self._last_terrain_pos = None
+
+    def _terrain_params(self) -> TerrainBrushParams:
+        return TerrainBrushParams(
+            size=self.size,
+            opacity=self._engine.config.opacity,
+            softness=self.softness,
+            texture_scale=self.texture_scale,
+            texture_rotation=self.texture_rotation,
+            erase=self.erase_mode,
+            mask_only=self.mask_mode,
+        )
+
+    def _get_or_create_terrain_layer(self, asset_id: str) -> TerrainLayer:
+        """Get existing terrain layer for this asset or create new one."""
+        if asset_id in self._terrain_layers:
+            layer = self._terrain_layers[asset_id]
+            layer.set_mask_only(self.mask_mode)
+            # Ensure texture is loaded when switching back to paint mode
+            if not self.mask_mode and not layer.has_texture() and self._asset_engine:
+                pixmap = self._asset_engine.get_pixmap(asset_id)
+                if pixmap and not pixmap.isNull():
+                    layer.set_texture(pixmap, self.texture_scale, self.texture_rotation)
+            return layer
+
+        # Create layer centered at scene origin (map covers -2048 to +2048)
+        map_size = 4096
+        layer = TerrainLayer(self.viewport.scene(), map_size, map_size)
+        layer.item.setPos(-map_size / 2, -map_size / 2)
+
+        if self.mask_mode:
+            layer.set_mask_only(True)
+        elif self._asset_engine:
+            pixmap = self._asset_engine.get_pixmap(asset_id)
+            if pixmap and not pixmap.isNull():
+                layer.set_texture(pixmap, self.texture_scale, self.texture_rotation)
+
+        self._terrain_layers[asset_id] = layer
+        return layer
+
+    # ─── Object Stroke ───────────────────────────────────────────────
+
+    def _begin_object_stroke(self, pos: QPointF):
+        self._stroke_items.clear()
+        self._engine.stamp_placed.connect(self._on_object_stamp)
+        self._engine.begin_stroke(pos)
+
+    def _on_object_stamp(self, stamp):
+        """Render object stamp as individual QGraphicsPixmapItem."""
+        if not self._asset_engine or not stamp.asset_id:
+            return
+
+        pixmap = self._asset_engine.get_pixmap(stamp.asset_id)
+        if not pixmap or pixmap.isNull():
+            return
+
+        item = QGraphicsPixmapItem(pixmap)
+        item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        item.setTransformOriginPoint(pixmap.width() / 2, pixmap.height() / 2)
+        item.setPos(
+            stamp.position.x() - pixmap.width() / 2,
+            stamp.position.y() - pixmap.height() / 2,
+        )
+        item.setScale(stamp.scale)
+        item.setRotation(stamp.rotation)
+        item.setOpacity(stamp.opacity)
         item.setZValue(10)
-
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
         self.viewport.scene().addItem(item)
         self._stroke_items.append(item)
+
+    # ─── Cursor ─────────────────────────────────────────────────────
 
     def _show_cursor(self):
         if self._cursor_item:
@@ -111,7 +290,10 @@ class BrushTool(BaseTool):
 # ─── Region Tool ───────────────────────────────────────────────────────────
 
 class RegionTool(BaseTool):
-    """Região — desenha polígono fechado ao clicar pontos."""
+    """Região — desenha polígono fechado ao clicar pontos.
+    
+    Chama callbacks registrados via on_region_finalized(callback) quando fechado.
+    """
 
     name = "Região"
     shortcut = "R"
@@ -123,6 +305,11 @@ class RegionTool(BaseTool):
         self._preview: QGraphicsPathItem | None = None
         self._color = QColor(79, 195, 247, 60)
         self._border_color = QColor(79, 195, 247, 200)
+        self._finalize_callbacks: list = []
+
+    def on_region_finalized(self, callback):
+        """Registra callback(QPolygonF) chamado ao finalizar região."""
+        self._finalize_callbacks.append(callback)
 
     def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -165,6 +352,8 @@ class RegionTool(BaseTool):
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
         item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
         self.viewport.scene().addItem(item)
+        for cb in self._finalize_callbacks:
+            cb(polygon)
         self._points.clear()
 
     def _clear_preview(self):

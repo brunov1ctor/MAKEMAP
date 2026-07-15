@@ -25,22 +25,12 @@ from src.layouts.panels.projects_panel import ProjectsPanel
 VERSION = "0.1.0"
 APP_NAME = "MAKEMAP"
 
-LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
-
 
 def setup_logging() -> logging.Logger:
+    """Configura logging global — apenas para o painel Qt (sem arquivo)."""
     logger = logging.getLogger(APP_NAME)
     logger.setLevel(logging.DEBUG)
-
-    # Arquivo único rotativo (sobrescreve o anterior)
-    log_file = LOG_DIR / "makemap.log"
-    fh = logging.FileHandler(log_file, mode="w", encoding="utf-8")
-    fh.setLevel(logging.DEBUG)
-
-    fmt = logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s")
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
+    logger.handlers.clear()
     return logger
 
 
@@ -53,9 +43,11 @@ class MainWindow(QMainWindow):
 
         self.project: Project | None = None
         self.uow: UnitOfWork | None = None
-        self.asset_engine: AssetEngine | None = None
         self.autosave = AutosaveService(self)
         self.autosave.state_changed.connect(self._on_save_state)
+
+        # Global asset engine (works without project)
+        self.asset_engine = AssetEngine(parent=self)
 
         # AmbientBackground como central widget, MainLayout como filho
         self._bg = AmbientBackground()
@@ -69,6 +61,9 @@ class MainWindow(QMainWindow):
         self.layout_widget = MainLayout()
         self.layout_widget.setAttribute(Qt.WA_TranslucentBackground)
         bg_layout.addWidget(self.layout_widget)
+
+        # Inject asset engine into canvas immediately
+        self.layout_widget.canvas.engine.set_asset_engine(self.asset_engine)
 
         # Projects panel (overlay)
         self._projects_panel = ProjectsPanel(parent=self._bg)
@@ -101,7 +96,6 @@ class MainWindow(QMainWindow):
         try:
             self.project = Project.create(PROJECTS_DIR, name)
             self._on_project_loaded()
-            # Se o painel estiver aberto, atualiza
             if self._projects_panel.isVisible():
                 self._projects_panel.set_active(str(self.project.path))
                 self._projects_panel.refresh()
@@ -161,11 +155,9 @@ class MainWindow(QMainWindow):
     def _show_projects(self):
         p = self._projects_panel
         p.set_active(str(self.project.path) if self.project else "")
-        # Dimensionar corretamente
         pw = 420
         ph = min(550, self.height() - 100)
         p.setFixedSize(pw, ph)
-        # Posicionar abaixo da topbar, à esquerda
         p.move(20, 76)
         p.raise_()
         p.show()
@@ -190,7 +182,6 @@ class MainWindow(QMainWindow):
             import shutil
             shutil.rmtree(target)
         self.project = None
-        self.asset_engine = None
         self.setWindowTitle(f"{APP_NAME} — v{VERSION}")
         self.layout_widget.top_bar.set_project_name("")
         self._projects_panel.set_active("")
@@ -213,7 +204,6 @@ class MainWindow(QMainWindow):
             self.uow = None
         self.project.delete()
         self.project = None
-        self.asset_engine = None
         self.setWindowTitle(f"{APP_NAME} — v{VERSION}")
         self.layout_widget.top_bar.set_project_name("")
         self.layout_widget.status_bar.save_label.setText("")
@@ -222,7 +212,6 @@ class MainWindow(QMainWindow):
 
     def _do_open(self, path: Path):
         try:
-            # Check recovery
             if AutosaveService.has_recovery(path):
                 reply = QMessageBox.question(
                     self, "Recuperação",
@@ -242,17 +231,18 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Erro ao Abrir", str(e))
 
     def _on_project_loaded(self):
-        # Close previous DB if any
+        # Close previous DB
         if self.uow:
             self.uow.close()
 
-        # Initialize database
+        # Initialize project database
         self.uow = UnitOfWork(self.project.db_path)
 
-        # Initialize Asset Engine
-        self.asset_engine = AssetEngine(self.project.path, self.uow)
+        # Connect project DB to asset engine
+        self.asset_engine.set_uow(self.uow)
+        self.asset_engine._project_path = self.project.path
 
-        self.setWindowTitle(f"{APP_NAME} — {self.project.meta.name}")
+        self.setWindowTitle(f"{APP_NAME} \u2014 {self.project.meta.name}")
         self.layout_widget.top_bar.set_project_name(self.project.meta.name)
         self.layout_widget.status_bar.save_label.setText("Salvo")
         self.layout_widget.engines.update_stats()
@@ -277,12 +267,12 @@ class MainWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, "Nome do Projeto", "Nome:", text=default)
         return name.strip(), ok
 
-
     def closeEvent(self, event):
         if not self._confirm_discard():
             event.ignore()
             return
         self.autosave.stop()
+        self.asset_engine.library.stop()
         if self.uow:
             self.uow.close()
         event.accept()
@@ -304,11 +294,11 @@ class Application:
 
         self.window = MainWindow()
 
-        # Conectar logs ao painel
-        self.logger.addHandler(self.window.layout_widget.logs_panel.handler)
+        # Conectar logs ao handler
+        self.logger.addHandler(self.window.layout_widget.log_handler)
 
     def run(self) -> int:
-        self.window.show()
+        self.window.showMaximized()
         self.logger.info("Janela principal exibida")
         return self.app.exec()
 

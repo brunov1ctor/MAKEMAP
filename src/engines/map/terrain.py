@@ -8,7 +8,7 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal, QPointF, QRectF
-from PySide6.QtGui import QColor, QImage, QPainter, QRadialGradient
+from PySide6.QtGui import QColor, QImage, QPainter, QRadialGradient, QBrush, QPixmap
 
 from src.engines.map.brush import BrushEngine, BrushConfig, BrushMode
 
@@ -38,6 +38,8 @@ class TerrainDef:
     color: QColor = field(default_factory=lambda: QColor(34, 139, 34))
     texture_path: str = ""
     blend_priority: int = 0  # higher = painted on top
+    texture_asset_id: str = ""  # asset registrado no AssetEngine
+    texture_scale: float = 1.0
 
 
 # Default terrain palette
@@ -134,10 +136,11 @@ class TerrainEngine(QObject):
     layer_added = Signal(str)  # terrain_id
     layer_removed = Signal(str)
 
-    def __init__(self, width: int = 4096, height: int = 4096, parent=None):
+    def __init__(self, width: int = 4096, height: int = 4096, asset_engine=None, parent=None):
         super().__init__(parent)
         self._width = width
         self._height = height
+        self._asset_engine = asset_engine
         self._layers: dict[str, TerrainLayer] = {}
         self._terrain_defs: dict[str, TerrainDef] = {}
         self._active_terrain_id: str = ""
@@ -146,6 +149,10 @@ class TerrainEngine(QObject):
         # Register default terrains
         for td in DEFAULT_TERRAINS:
             self.register_terrain(td)
+
+    def set_asset_engine(self, asset_engine):
+        """Injeta o AssetEngine para renderizar texturas."""
+        self._asset_engine = asset_engine
 
     # --- Terrain Definitions ---
 
@@ -266,9 +273,21 @@ class TerrainEngine(QObject):
 
         painter = QPainter(composite)
         for layer in self.layers:
-            # Create colored image from mask
+            # Create colored/textured image
             colored = QImage(self._width, self._height, QImage.Format.Format_ARGB32)
-            colored.fill(layer.terrain_def.color)
+            colored.fill(QColor(0, 0, 0, 0))
+
+            texture_pixmap = None
+            if self._asset_engine and layer.terrain_def.texture_asset_id:
+                texture_pixmap = self._asset_engine.get_pixmap(layer.terrain_def.texture_asset_id)
+
+            tile_painter = QPainter(colored)
+            if texture_pixmap and not texture_pixmap.isNull():
+                # Tile texture across the image
+                tile_painter.fillRect(colored.rect(), QBrush(texture_pixmap))
+            else:
+                tile_painter.fillRect(colored.rect(), layer.terrain_def.color)
+            tile_painter.end()
 
             # Apply mask as alpha
             for y in range(self._height):

@@ -3,48 +3,69 @@
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton,
     QLineEdit, QTreeWidget, QTreeWidgetItem, QWidget, QScrollArea,
-    QSizePolicy, QGridLayout,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors, Metrics, Typography
 from src.components.collapsible_panel import CollapsiblePanel
+from src.layouts.panels.brush_panel import FlowLayout
 
 
 # ─── Filter Chip ───────────────────────────────────────────────────────────
 
-class _FilterChip(QToolButton):
+class _FilterChip(QFrame):
     filter_toggled = Signal(str, bool)
 
     def __init__(self, icon: str, label: str, key: str, parent=None):
         super().__init__(parent)
         self._key = key
-        self.setText(f"{icon} {label}")
-        self.setCheckable(True)
-        self.setChecked(True)
+        self._checked = True
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.setFixedHeight(26)
-        self.setStyleSheet(f"""
-            QToolButton {{
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 13px;
-                font-size: {Typography.SIZE_XXS}px;
-                color: {Colors.TEXT_SECONDARY};
-                padding: 3px 10px;
-                background: transparent;
-            }}
-            QToolButton:hover {{
-                background: {Colors.PANEL_HOVER};
-                border-color: {Colors.BORDER_HOVER};
-            }}
-            QToolButton:checked {{
-                color: {Colors.ACCENT};
-                background: {Colors.ACCENT_DIM};
-                border-color: {Colors.ACCENT};
-            }}
+        self.setStyleSheet("background: transparent; border: none;")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 8, 2)
+        layout.setSpacing(4)
+
+        self._box = QLabel("✓")
+        self._box.setFixedSize(16, 16)
+        self._box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_box_style()
+        layout.addWidget(self._box)
+
+        lbl = QLabel(f"{icon} {label}")
+        lbl.setStyleSheet(f"""
+            font-size: {Typography.SIZE_XXS}px;
+            color: {Colors.TEXT_SECONDARY};
+            background: transparent; border: none;
         """)
-        self.toggled.connect(lambda checked: self.filter_toggled.emit(self._key, checked))
+        layout.addWidget(lbl)
+
+    def _update_box_style(self):
+        if self._checked:
+            self._box.setStyleSheet(f"""
+                background: {Colors.ACCENT}; border: 1px solid {Colors.ACCENT};
+                border-radius: 3px; color: #ffffff; font-size: 10px; font-weight: bold;
+            """)
+            self._box.setText("✓")
+        else:
+            self._box.setStyleSheet(f"""
+                background: transparent; border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 3px; color: transparent; font-size: 10px;
+            """)
+            self._box.setText("")
+
+    def mousePressEvent(self, event):
+        self._checked = not self._checked
+        self._update_box_style()
+        self.filter_toggled.emit(self._key, self._checked)
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, checked: bool):
+        self._checked = checked
+        self._update_box_style()
 
 
 # ─── 2.1 Filter Panel ─────────────────────────────────────────────────────
@@ -74,9 +95,8 @@ class FilterPanel(CollapsiblePanel):
         header_layout = self._main_layout.itemAt(0).layout()
         header_layout.insertWidget(header_layout.count() - 1, self._toggle_all)
 
-        # Chips
-        grid = QGridLayout()
-        grid.setSpacing(4)
+        # Chips in flow layout
+        flow = FlowLayout(spacing=2)
 
         categories = [
             ("👹", "Mobs", "Mobs"), ("🧙", "NPCs", "NPCs"),
@@ -87,15 +107,15 @@ class FilterPanel(CollapsiblePanel):
         ]
 
         self._chips = []
-        for i, (icon, label, key) in enumerate(categories):
+        for icon, label, key in categories:
             chip = _FilterChip(icon, label, key)
             chip.filter_toggled.connect(self.filter_toggled.emit)
-            grid.addWidget(chip, i // 2, i % 2)
+            flow.addWidget(chip)
             self._chips.append(chip)
 
         grid_widget = QWidget()
         grid_widget.setStyleSheet("background: transparent; border: none;")
-        grid_widget.setLayout(grid)
+        grid_widget.setLayout(flow)
         self.content_layout.addWidget(grid_widget)
 
         self._toggle_all.clicked.connect(self._on_toggle_all)

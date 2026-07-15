@@ -1,7 +1,7 @@
 """5. Progressão do Mundo — painel blockchain redimensionável."""
 
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QToolButton, QScrollArea, QInputDialog,
+    QFrame, QHBoxLayout, QLabel, QScrollArea, QInputDialog,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter
@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QPainter
 from src.styles.tokens import Colors, Typography
 from src.components.collapsible_panel import CollapsiblePanel
 from src.components.blockchain import (
-    Block, ChainCanvas, Pipeline, PIPELINE_THEMES, biome_color,
+    Block, ChainCanvas, Pipeline, PIPELINE_THEMES, biome_color, RectNode,
 )
 
 
@@ -74,30 +74,8 @@ class ProgressionBar(CollapsiblePanel):
         header_layout = self._main_layout.itemAt(1).layout()
 
         self._tabs_layout = QHBoxLayout()
-        self._tabs_layout.setSpacing(2)
+        self._tabs_layout.setSpacing(0)
         header_layout.insertLayout(header_layout.count() - 1, self._tabs_layout)
-
-        btn_style = f"""
-            QToolButton {{ border: none; border-radius: 4px; font-size: 10px;
-                color: {Colors.TEXT_MUTED}; background: transparent; }}
-            QToolButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
-        """
-
-        for text, tip, slot in [
-            ("+", "Novo Pipeline", "_add_pipeline"),
-            ("◈+", "Novo Bloco", "_add_block"),
-        ]:
-            btn = QToolButton()
-            btn.setText(text)
-            btn.setToolTip(tip)
-            btn.setFixedSize(22 if len(text) > 1 else 18, 18)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(btn_style if text != "+" else f"""
-                QToolButton {{ border: none; font-size: 11px; color: {Colors.ACCENT}; background: transparent; border-radius: 4px; }}
-                QToolButton:hover {{ background: {Colors.ACCENT_DIM}; }}
-            """)
-            btn.clicked.connect(getattr(self, slot))
-            header_layout.insertWidget(header_layout.count() - 1, btn)
 
         # Scroll area
         self._scroll = QScrollArea()
@@ -137,26 +115,21 @@ class ProgressionBar(CollapsiblePanel):
         for block in pipe.canvas._blocks:
             block.edit_requested.connect(self._edit_block)
             block.delete_requested.connect(self._delete_block)
+        pipe.canvas.rect_requested.connect(self._add_rect)
         self._pipelines.append(pipe)
         self._rebuild_tabs()
 
     def _add_pipeline(self):
-        name, ok = QInputDialog.getText(self, "Novo Pipeline", "Nome:")
-        if ok and name:
-            self._create_pipeline(name, len(self._pipelines) % len(PIPELINE_THEMES))
-            self._switch_pipeline(len(self._pipelines) - 1)
+        name = f"Pipeline {len(self._pipelines) + 1}"
+        self._create_pipeline(name, len(self._pipelines) % len(PIPELINE_THEMES))
+        self._switch_pipeline(len(self._pipelines) - 1)
 
-    def _add_block(self):
+
+    def _add_rect(self):
         if not self._pipelines:
             return
-        name, ok = QInputDialog.getText(self, "Novo Bloco", "Nome:")
-        if not ok or not name:
-            return
-        levels, ok2 = QInputDialog.getText(self, "Info", "Nível/Info:")
-        if not ok2:
-            levels = ""
         pipe = self._pipelines[self._current_idx]
-        block = Block("🗺", name, levels, biome_color(name), "○")
+        block = Block("🗺", "Novo", "", "#4FC3F7", "○")
         block.edit_requested.connect(self._edit_block)
         block.delete_requested.connect(self._delete_block)
         pipe.canvas.add_block(block)
@@ -189,24 +162,62 @@ class ProgressionBar(CollapsiblePanel):
             item = self._tabs_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+
         for i, pipe in enumerate(self._pipelines):
-            btn = QToolButton()
-            btn.setText(pipe.name)
-            btn.setFixedHeight(16)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            tab = QFrame()
+            tab.setCursor(Qt.CursorShape.PointingHandCursor)
+            tab.setFixedHeight(20)
             is_active = (i == self._current_idx)
             c = pipe.theme["color"]
-            btn.setStyleSheet(f"""
-                QToolButton {{
-                    border: none; border-radius: 4px; padding: 1px 6px;
-                    font-size: 8px; font-weight: {Typography.WEIGHT_BOLD};
-                    color: {c if is_active else Colors.TEXT_MUTED};
-                    background: {pipe.theme['glow'] if is_active else 'transparent'};
+            tab.setStyleSheet(f"""
+                QFrame {{
+                    border: none;
+                    border-bottom: 2px solid {c if is_active else 'transparent'};
+                    background: {'rgba(255,255,255,0.05)' if is_active else 'transparent'};
+                    border-top-left-radius: 4px;
+                    border-top-right-radius: 4px;
+                    padding: 0 8px;
                 }}
-                QToolButton:hover {{ background: {pipe.theme['glow']}; color: {c}; }}
+                QFrame:hover {{
+                    background: rgba(255,255,255,0.08);
+                    border-bottom: 2px solid {c};
+                }}
             """)
-            btn.clicked.connect(lambda checked, idx=i: self._switch_pipeline(idx))
-            self._tabs_layout.addWidget(btn)
+            tab_lay = QHBoxLayout(tab)
+            tab_lay.setContentsMargins(6, 0, 6, 0)
+            tab_lay.setSpacing(0)
+            lbl = QLabel(pipe.name)
+            lbl.setStyleSheet(f"""
+                font-size: 9px; font-weight: {Typography.WEIGHT_BOLD};
+                color: {c if is_active else Colors.TEXT_MUTED};
+                background: transparent; border: none;
+            """)
+            tab_lay.addWidget(lbl)
+            tab.mousePressEvent = lambda e, idx=i: self._switch_pipeline(idx)
+            self._tabs_layout.addWidget(tab)
+
+        # Botão + como última aba
+        add_tab = QFrame()
+        add_tab.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_tab.setFixedSize(20, 20)
+        add_tab.setStyleSheet(f"""
+            QFrame {{
+                border: none; background: transparent;
+                border-top-left-radius: 4px; border-top-right-radius: 4px;
+            }}
+            QFrame:hover {{ background: rgba(255,255,255,0.08); }}
+        """)
+        add_lay = QHBoxLayout(add_tab)
+        add_lay.setContentsMargins(0, 0, 0, 0)
+        add_lbl = QLabel("+")
+        add_lbl.setStyleSheet(f"""
+            font-size: 12px; color: {Colors.ACCENT};
+            background: transparent; border: none;
+        """)
+        add_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        add_lay.addWidget(add_lbl)
+        add_tab.mousePressEvent = lambda e: self._add_pipeline()
+        self._tabs_layout.addWidget(add_tab)
 
     def _on_drag(self, delta: int):
         new_h = max(self.MIN_HEIGHT, min(self.MAX_HEIGHT, self._current_height + delta))

@@ -52,6 +52,15 @@ class AssetImporter:
             if existing:
                 return ImportResult(True, asset_path=existing, hash=file_hash)
 
+        # If source is already inside the import dir, don't copy
+        try:
+            source.resolve().relative_to(self._dir.resolve())
+            # Already in place
+            self._hashes.add(file_hash)
+            return ImportResult(True, asset_path=source, hash=file_hash)
+        except ValueError:
+            pass
+
         # Copy to project
         dest = self._dir / source.name
         if dest.exists():
