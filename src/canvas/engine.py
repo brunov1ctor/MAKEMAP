@@ -383,6 +383,25 @@ class CanvasEngine(QWidget):
         view_rect = self.viewport.mapToScene(self.viewport.viewport().rect()).boundingRect()
         visible_items = self.viewport.scene().items(view_rect)
         object_keys = set()
+
+        # Calculate terrain coverage in viewport
+        terrain_coverage: dict[str, float] = {}
+        view_area = view_rect.width() * view_rect.height()
+
+        for asset_id, layer in self._brush_tool._terrain_layers.items():
+            item = layer.item
+            item_rect = item.mapRectToScene(item.boundingRect())
+            intersection = view_rect.intersected(item_rect)
+            if not intersection.isEmpty():
+                # Get the sound key (category) for this terrain
+                sound_key = self._brush_tool._get_asset_sound_key(asset_id)
+                coverage = (intersection.width() * intersection.height()) / max(1.0, view_area)
+                terrain_coverage[sound_key] = terrain_coverage.get(sound_key, 0.0) + min(1.0, coverage)
+
+        # Notify sound engine about visible terrains
+        if terrain_coverage:
+            self.sound_engine.on_visible_terrains_changed(terrain_coverage)
+
         for item in visible_items:
             if isinstance(item, QGraphicsPixmapItem):
                 # data(0) = asset type key (e.g. "tree", "torch", "river")

@@ -19,7 +19,7 @@ logger = logging.getLogger("MAKEMAP")
 
 
 SOUNDS_DIR = Path(__file__).resolve().parents[3] / "library" / "sounds"
-FADE_MS = 3000
+FADE_MS = 5000
 FADE_STEP_MS = 50
 
 
@@ -305,41 +305,37 @@ class MusicLayer(QObject):
 # ─── Layer 5: Brush Sounds ───────────────────────────────────────────────────
 
 class BrushSoundLayer(QObject):
-    """Sounds triggered by brush actions.
+    """Sounds triggered by brush actions + viewport-based ambient.
 
     - Painting sound: loops while actively painting (e.g. earth/dirt sound)
-    - Ambient sound: fades in after painting stops (e.g. empty land breeze)
+    - Ambient sound: plays based on visible terrain in viewport with crossfade
 
     Structure:
         sounds/brush/<asset_key>/
-            paint_*.ogg    ← plays while painting
-            ambient_*.ogg  ← plays after painting stops (idle terrain sound)
+            paint_*.mp3    ← plays while painting
+            ambient_*.mp3  ← plays when terrain is visible in viewport
     """
-
-    IDLE_DELAY_MS = 3000  # time after stroke ends before ambient kicks in
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._paint_sounds: dict[str, list[Path]] = {}
         self._ambient_sounds: dict[str, list[Path]] = {}
         self._active_paint: tuple[QMediaPlayer, QAudioOutput] | None = None
-        self._active_ambient: tuple[QMediaPlayer, QAudioOutput] | None = None
         self._current_key: str | None = None
         self._master = 0.7
         self._paint_vol_mult = 0.7
-        self._ambient_vol_mult = 0.7
 
-        # Timer to start ambient after idle
-        self._idle_timer = QTimer(self)
-        self._idle_timer.setSingleShot(True)
-        self._idle_timer.timeout.connect(self._start_ambient)
+        # Viewport-based ambient: key -> (player, output, current_volume, target_volume)
+        self._ambient_players: dict[str, tuple[QMediaPlayer, QAudioOutput]] = {}
+        self._ambient_volumes: dict[str, float] = {}   # current volume per key
+        self._ambient_targets: dict[str, float] = {}   # target volume per key
+        self._ambient_files: dict[str, Path] = {}      # file per key for crossfade
+        self._ambient_crossfading: dict[str, bool] = {}  # crossfade state per key
 
-        # Fade for ambient
-        self._ambient_volume = 0.0
-        self._ambient_target = 0.0
+        # Fade timer for all ambient crossfades
         self._fade_timer = QTimer(self)
         self._fade_timer.setInterval(FADE_STEP_MS)
-        self._fade_timer.timeout.connect(self._fade_ambient_step)
+        self._fade_timer.timeout.connect(self._fade_step)
 
         self._load_all()
 
@@ -358,114 +354,394 @@ class BrushSoundLayer(QObject):
                 elif name.startswith("ambient"):
                     self._ambient_sounds.setdefault(key, []).append(f)
 
+    # ─── Paint Sound ─────────────────────────────────────────────────────
+
     def on_stroke_start(self, asset_key: str, master: float):
-        """Called when brush stroke begins."""
+        """Called when brush stroke begins.
+        
+        asset_key: the specific asset_id being painted.
+        """
         self._master = master
         self._current_key = asset_key
+        self._paint_vol_mult = self._load_paint_volume(asset_key)
 
-        # Load per-asset volume from library DB
-        paint_vol_mult, ambient_vol_mult = self._load_asset_volumes(asset_key)
-        self._paint_vol_mult = paint_vol_mult
-        self._ambient_vol_mult = ambient_vol_mult
+        # Resolve which sound files to use for this asset
+        paint_files = self._get_paint_files(asset_key)
 
-        logger.info("BrushSound: stroke start key='%s', available paint=%s, ambient=%s",
-                    asset_key, list(self._paint_sounds.keys()), list(self._ambient_sounds.keys()))
+        if paint_files:
+            if self._active_paint:
+                # Already playing (finishing previous stroke) — resume looping
+                try:
+                    self._active_paint[0].mediaStatusChanged.disconnect(self._on_paint_finished)
+                except (RuntimeError, TypeError):
+                    pass
+                # Restart crossfade loop
+                self._paint_looping = True
+            else:
+                f = random.choice(paint_files)
+                self._paint_file = f
+                output = QAudioOutput(self)
+                output.setVolume(master * self._paint_vol_mult)
+                player = QMediaPlayer(self)
+                player.setAudioOutput(output)
+                player.setSource(_make_url(f))
+                player.setLoops(1)
+                player.positionChanged.connect(self._on_paint_position)
+                player.mediaStatusChanged.connect(self._on_paint_loop_end)
+                player.play()
+                self._active_paint = (player, output)
+                self._paint_looping = True
+                self._paint_crossfading = False
+                self._paint_next: tuple[QMediaPlayer, QAudioOutput] | None = None
 
-        # Stop ambient fade-in
-        self._idle_timer.stop()
-        self._stop_ambient()
+    def _on_paint_position(self, position: int):
+        """Start crossfade near end of current paint loop."""
+        if not self._active_paint or not self._paint_looping or self._paint_crossfading:
+            return
+        player = self._active_paint[0]
+        duration = player.duration()
+        if duration <= 0:
+            return
+        # Start crossfade 1.5s before end
+        crossfade_start = duration - 1500
+        if position >= crossfade_start:
+            self._start_paint_crossfade()
 
-        # Start paint sound
-        if asset_key in self._paint_sounds and not self._active_paint:
-            f = random.choice(self._paint_sounds[asset_key])
-            logger.info("BrushSound: playing paint sound %s", f.name)
-            output = QAudioOutput(self)
-            output.setVolume(master * self._paint_vol_mult)
-            player = QMediaPlayer(self)
-            player.setAudioOutput(output)
-            player.setSource(_make_url(f))
-            player.setLoops(QMediaPlayer.Loops.Infinite)
-            player.play()
-            self._active_paint = (player, output)
-        elif asset_key not in self._paint_sounds:
-            logger.warning("BrushSound: no paint sound for key='%s'", asset_key)
+    def _start_paint_crossfade(self):
+        """Spawn next player and fade between them."""
+        if not self._paint_looping or not hasattr(self, '_paint_file'):
+            return
+        self._paint_crossfading = True
+        vol = self._master * self._paint_vol_mult
 
-    def _load_asset_volumes(self, asset_key: str) -> tuple[float, float]:
-        """Load per-asset sound volumes from project DB."""
+        # Create next player starting at volume 0
+        output = QAudioOutput(self)
+        output.setVolume(0.0)
+        player = QMediaPlayer(self)
+        player.setAudioOutput(output)
+        player.setSource(_make_url(self._paint_file))
+        player.setLoops(1)
+        player.play()
+        self._paint_next = (player, output)
+
+        # Fade: old out, new in over 1.5s
+        self._paint_fade_steps = 30  # 30 steps * 50ms = 1.5s
+        self._paint_fade_step = 0
+        self._paint_fade_timer = QTimer(self)
+        self._paint_fade_timer.setInterval(50)
+        self._paint_fade_timer.timeout.connect(self._paint_fade_tick)
+        self._paint_fade_timer.start()
+
+    def _paint_fade_tick(self):
+        """Crossfade tick between old and new paint player."""
+        self._paint_fade_step += 1
+        progress = self._paint_fade_step / self._paint_fade_steps
+        vol = self._master * self._paint_vol_mult
+
+        # Fade old out
+        if self._active_paint:
+            self._active_paint[1].setVolume(vol * (1.0 - progress))
+        # Fade new in
+        if self._paint_next:
+            self._paint_next[1].setVolume(vol * progress)
+
+        if self._paint_fade_step >= self._paint_fade_steps:
+            self._paint_fade_timer.stop()
+            # Swap: new becomes active
+            if self._active_paint:
+                self._active_paint[0].stop()
+                try:
+                    self._active_paint[0].positionChanged.disconnect(self._on_paint_position)
+                except (RuntimeError, TypeError):
+                    pass
+            self._active_paint = self._paint_next
+            self._active_paint[0].positionChanged.connect(self._on_paint_position)
+            self._active_paint[0].mediaStatusChanged.connect(self._on_paint_loop_end)
+            self._paint_next = None
+            self._paint_crossfading = False
+
+    def _on_paint_loop_end(self, status):
+        """Handle end of a paint loop iteration."""
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            if self._paint_looping and not self._paint_crossfading:
+                # Crossfade didn't trigger (very short file), restart directly
+                if self._active_paint:
+                    self._active_paint[0].setPosition(0)
+                    self._active_paint[0].play()
+
+    def _get_paint_files(self, asset_key: str) -> list[Path]:
+        """Get paint sound files for a specific asset.
+        
+        Looks for sounds assigned to this specific asset_id first,
+        then falls back to category-level sounds.
+        """
+        # Check if this specific asset has sounds assigned
+        if asset_key in self._paint_sounds:
+            return self._paint_sounds[asset_key]
+
+        # Fallback: look up category from DB
+        category = self._get_category(asset_key)
+        if category and category in self._paint_sounds:
+            return self._paint_sounds[category]
+
+        return []
+
+    def _get_ambient_files(self, asset_key: str) -> list[Path]:
+        """Get ambient sound files for a specific asset."""
+        if asset_key in self._ambient_sounds:
+            return self._ambient_sounds[asset_key]
+
+        category = self._get_category(asset_key)
+        if category and category in self._ambient_sounds:
+            return self._ambient_sounds[category]
+
+        return []
+
+    def _get_category(self, asset_key: str) -> str | None:
+        """Get category name for an asset_id from DB."""
         try:
-            from PySide6.QtWidgets import QApplication
-            window = QApplication.instance().activeWindow()
-            if window and hasattr(window, 'uow') and window.uow:
-                # Get first asset in this category to read its settings
-                import sqlite3
-                from src.engines.assets.library import LIBRARY_DB
-                db = sqlite3.connect(str(LIBRARY_DB))
-                db.row_factory = sqlite3.Row
-                row = db.execute(
-                    "SELECT id FROM assets WHERE category = ? LIMIT 1", (asset_key,)
-                ).fetchone()
-                db.close()
-                if row:
-                    settings = window.uow.asset_settings.get(row["id"])
-                    vp = settings.get("sound_volume_paint", 0.7)
-                    va = settings.get("sound_volume_ambient", 0.7)
-                    return vp, va
+            import sqlite3
+            from src.engines.assets.library import LIBRARY_DB
+            db = sqlite3.connect(str(LIBRARY_DB))
+            db.row_factory = sqlite3.Row
+            row = db.execute(
+                "SELECT category FROM assets WHERE id = ?", (asset_key,)
+            ).fetchone()
+            db.close()
+            return row["category"] if row else None
         except Exception:
-            pass
-        return 0.7, 0.7
+            return None
 
     def on_stroke_end(self):
-        """Called when brush stroke ends."""
-        # Stop paint sound
+        """Called when brush stroke ends. Let paint sound finish naturally."""
+        self._paint_looping = False
+        # Let current playback finish without spawning next crossfade
         if self._active_paint:
-            self._active_paint[0].stop()
-            self._active_paint = None
+            self._active_paint[0].mediaStatusChanged.connect(self._on_paint_finished)
 
-        # Schedule ambient start
-        if self._current_key and self._current_key in self._ambient_sounds:
-            self._idle_timer.start(self.IDLE_DELAY_MS)
+    def _on_paint_finished(self, status):
+        """Clean up paint player after it finishes."""
+        if status == QMediaPlayer.MediaStatus.EndOfMedia and not self._paint_looping:
+            if self._active_paint:
+                try:
+                    self._active_paint[0].positionChanged.disconnect(self._on_paint_position)
+                except (RuntimeError, TypeError):
+                    pass
+                try:
+                    self._active_paint[0].mediaStatusChanged.disconnect(self._on_paint_finished)
+                except (RuntimeError, TypeError):
+                    pass
+                self._active_paint[0].stop()
+                self._active_paint = None
 
-    def _start_ambient(self):
-        """Start ambient terrain sound with fade-in."""
-        if not self._current_key or self._current_key not in self._ambient_sounds:
+    def _load_paint_volume(self, asset_key: str) -> float:
+        """Load paint volume from the sound folder config."""
+        # Check for volume file in the asset's sound folder
+        sound_dir = SOUNDS_DIR / "brush" / asset_key
+        vol_file = sound_dir / ".volume_paint"
+        if vol_file.exists():
+            try:
+                return float(vol_file.read_text().strip())
+            except (ValueError, OSError):
+                pass
+        # Fallback: check category folder
+        category = self._get_category(asset_key)
+        if category:
+            cat_dir = SOUNDS_DIR / "brush" / category
+            vol_file = cat_dir / ".volume_paint"
+            if vol_file.exists():
+                try:
+                    return float(vol_file.read_text().strip())
+                except (ValueError, OSError):
+                    pass
+        return 0.7
+
+    # ─── Viewport Ambient Sound ──────────────────────────────────────────
+
+    def update_visible_terrains(self, terrain_keys: dict[str, float], master: float):
+        """Update ambient sounds based on visible terrains in viewport.
+
+        Args:
+            terrain_keys: dict of {terrain_key: coverage_ratio} where coverage
+                          is 0.0-1.0 representing how much of the viewport
+                          this terrain occupies.
+            master: master volume (zoom-adjusted).
+        """
+        self._master = master
+
+        # Set targets for visible terrains
+        for key, coverage in terrain_keys.items():
+            ambient_files = self._get_ambient_files(key)
+            if not ambient_files:
+                continue
+            target = master * coverage
+            self._ambient_targets[key] = target
+
+            # Start player if not already active
+            if key not in self._ambient_players:
+                f = random.choice(ambient_files)
+                output = QAudioOutput(self)
+                output.setVolume(0.0)
+                player = QMediaPlayer(self)
+                player.setAudioOutput(output)
+                player.setSource(_make_url(f))
+                player.setLoops(1)
+                player.play()
+                self._ambient_players[key] = (player, output)
+                self._ambient_volumes[key] = 0.0
+                self._ambient_files[key] = f
+                self._ambient_crossfading[key] = False
+                # Monitor position for crossfade
+                player.positionChanged.connect(
+                    lambda pos, k=key: self._on_ambient_position(k, pos)
+                )
+                player.mediaStatusChanged.connect(
+                    lambda status, k=key: self._on_ambient_loop_end(k, status)
+                )
+
+        # Fade out terrains no longer visible
+        for key in list(self._ambient_targets.keys()):
+            if key not in terrain_keys:
+                self._ambient_targets[key] = 0.0
+
+        # Start fade timer if not running
+        if not self._fade_timer.isActive():
+            self._fade_timer.start()
+
+    def _on_ambient_position(self, key: str, position: int):
+        """Start crossfade near end of ambient loop."""
+        if key not in self._ambient_players or self._ambient_crossfading.get(key):
             return
+        player = self._ambient_players[key][0]
+        duration = player.duration()
+        if duration <= 0:
+            return
+        if position >= duration - 2000:
+            self._start_ambient_crossfade(key)
 
-        f = random.choice(self._ambient_sounds[self._current_key])
+    def _start_ambient_crossfade(self, key: str):
+        """Crossfade ambient loop: spawn next player and blend."""
+        if key not in self._ambient_files:
+            return
+        self._ambient_crossfading[key] = True
+        f = self._ambient_files[key]
+        target_vol = self._ambient_volumes.get(key, 0.0)
+
+        # New player
         output = QAudioOutput(self)
         output.setVolume(0.0)
         player = QMediaPlayer(self)
         player.setAudioOutput(output)
         player.setSource(_make_url(f))
-        player.setLoops(QMediaPlayer.Loops.Infinite)
+        player.setLoops(1)
         player.play()
-        self._active_ambient = (player, output)
-        self._ambient_volume = 0.0
-        self._ambient_target = self._master * 0.6 * self._ambient_vol_mult
-        self._fade_timer.start()
 
-    def _fade_ambient_step(self):
-        step = self._ambient_target * (FADE_STEP_MS / FADE_MS)
-        if self._ambient_volume < self._ambient_target:
-            self._ambient_volume = min(self._ambient_volume + step, self._ambient_target)
-        if self._active_ambient:
-            self._active_ambient[1].setVolume(self._ambient_volume)
-        if self._ambient_volume >= self._ambient_target:
+        old_player, old_output = self._ambient_players[key]
+
+        # Crossfade over 2s (40 steps * 50ms)
+        steps = 40
+        step_count = [0]
+
+        timer = QTimer(self)
+        timer.setInterval(50)
+
+        def tick():
+            step_count[0] += 1
+            progress = step_count[0] / steps
+            old_output.setVolume(target_vol * (1.0 - progress))
+            output.setVolume(target_vol * progress)
+            if step_count[0] >= steps:
+                timer.stop()
+                old_player.stop()
+                # Swap
+                self._ambient_players[key] = (player, output)
+                self._ambient_crossfading[key] = False
+                player.positionChanged.connect(
+                    lambda pos, k=key: self._on_ambient_position(k, pos)
+                )
+                player.mediaStatusChanged.connect(
+                    lambda status, k=key: self._on_ambient_loop_end(k, status)
+                )
+
+        timer.timeout.connect(tick)
+        timer.start()
+
+    def _on_ambient_loop_end(self, key: str, status):
+        """Handle end of ambient loop if crossfade didn't trigger."""
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            if not self._ambient_crossfading.get(key) and key in self._ambient_players:
+                # Very short file or crossfade missed, restart
+                self._ambient_players[key][0].setPosition(0)
+                self._ambient_players[key][0].play()
+
+    def set_volume(self, vol: float):
+        """Update all ambient volumes based on zoom/master changes."""
+        old_master = self._master
+        self._master = vol
+        for key in list(self._ambient_targets.keys()):
+            if self._ambient_targets[key] > 0 and old_master > 0.01:
+                # Scale target proportionally to new master
+                ratio = self._ambient_targets[key] / old_master
+                self._ambient_targets[key] = vol * ratio
+            elif self._ambient_targets[key] > 0:
+                self._ambient_targets[key] = vol
+        if not self._fade_timer.isActive() and self._ambient_players:
+            self._fade_timer.start()
+
+    def _fade_step(self):
+        """Smooth crossfade all ambient channels toward their targets."""
+        all_done = True
+        to_remove = []
+
+        for key in list(self._ambient_targets.keys()):
+            current = self._ambient_volumes.get(key, 0.0)
+            target = self._ambient_targets[key]
+            step = max(0.005, abs(target - current) * (FADE_STEP_MS / FADE_MS) + 0.005)
+
+            if current < target:
+                current = min(current + step, target)
+            elif current > target:
+                current = max(current - step, target)
+
+            self._ambient_volumes[key] = current
+
+            if key in self._ambient_players:
+                self._ambient_players[key][1].setVolume(current)
+
+            if abs(current - target) > 0.005:
+                all_done = False
+            elif target == 0.0 and current <= 0.005:
+                # Fully faded out — stop and remove
+                to_remove.append(key)
+
+        for key in to_remove:
+            if key in self._ambient_players:
+                self._ambient_players[key][0].stop()
+                del self._ambient_players[key]
+            self._ambient_volumes.pop(key, None)
+            self._ambient_targets.pop(key, None)
+
+        if all_done:
             self._fade_timer.stop()
 
-    def _stop_ambient(self):
-        self._fade_timer.stop()
-        if self._active_ambient:
-            self._active_ambient[0].stop()
-            self._active_ambient = None
-        self._ambient_volume = 0.0
-
     def stop(self):
-        self._idle_timer.stop()
         self._fade_timer.stop()
+        self._paint_looping = False
+        if hasattr(self, '_paint_fade_timer') and self._paint_fade_timer:
+            self._paint_fade_timer.stop()
         if self._active_paint:
             self._active_paint[0].stop()
             self._active_paint = None
-        self._stop_ambient()
+        if hasattr(self, '_paint_next') and self._paint_next:
+            self._paint_next[0].stop()
+            self._paint_next = None
+        for player, output in self._ambient_players.values():
+            player.stop()
+        self._ambient_players.clear()
+        self._ambient_volumes.clear()
+        self._ambient_targets.clear()
+        self._ambient_files.clear()
+        self._ambient_crossfading.clear()
 
 
 # ─── Main Engine ─────────────────────────────────────────────────────────────
@@ -524,6 +800,7 @@ class SoundEngine(QObject):
         factor = self._zoom_factor()
         vol = factor * self._master_volume
         self.biome.set_volume(vol)
+        self.brush.set_volume(vol)
         self.music.set_volume(self._master_volume * 0.5)
 
     def on_biome_changed(self, biome: str | None):
@@ -548,6 +825,11 @@ class SoundEngine(QObject):
     def on_brush_stroke_end(self):
         """Call when user stops painting."""
         self.brush.on_stroke_end()
+
+    def on_visible_terrains_changed(self, terrain_keys: dict[str, float]):
+        """Call with {terrain_key: coverage_ratio} for visible terrains."""
+        vol = self._zoom_factor() * self._master_volume
+        self.brush.update_visible_terrains(terrain_keys, vol)
 
     def _periodic_update(self):
         """Periodic volume sync."""

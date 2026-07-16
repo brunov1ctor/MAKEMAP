@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QPropertyAnimation, QEasingCurve, QUrl
 from PySide6.QtGui import (
-    QWheelEvent, QMouseEvent, QKeyEvent, QPainter, QColor, QTransform, QPixmap,
+    QWheelEvent, QMouseEvent, QKeyEvent, QPainter, QColor, QTransform, QPixmap, QImage,
 )
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink, QVideoFrame
 
 from src.styles.tokens import Colors, Navigation
 
@@ -52,11 +53,14 @@ class Viewport(QGraphicsView):
         self._space_held = False
         self._bg_color: QColor | None = None
         self._bg_pixmap: QPixmap | None = None
+        self._bg_video_player: QMediaPlayer | None = None
+        self._bg_video_sink: QVideoSink | None = None
 
     # --- Background ---
 
     def set_background(self, color: QColor | None, pixmap: QPixmap | None):
         """Set a solid color or scaled image as the viewport background."""
+        self._stop_video_bg()
         self._bg_color = color
         self._bg_pixmap = pixmap
         if color and not pixmap:
@@ -67,6 +71,39 @@ class Viewport(QGraphicsView):
             # Use transparent brush so drawBackground handles it
             self.setBackgroundBrush(Qt.BrushStyle.NoBrush)
         self.viewport().update()
+
+    def set_video_background(self, path: str):
+        """Set an MP4/WebM/MOV as animated background."""
+        self._stop_video_bg()
+        self._bg_color = None
+        self._bg_pixmap = None
+        self.setBackgroundBrush(Qt.BrushStyle.NoBrush)
+
+        self._bg_video_sink = QVideoSink(self)
+        self._bg_video_sink.videoFrameChanged.connect(self._on_video_frame)
+
+        self._bg_video_player = QMediaPlayer(self)
+        audio = QAudioOutput(self)
+        audio.setVolume(0.0)
+        self._bg_video_player.setAudioOutput(audio)
+        self._bg_video_player.setVideoSink(self._bg_video_sink)
+        self._bg_video_player.setSource(QUrl.fromLocalFile(path))
+        self._bg_video_player.setLoops(QMediaPlayer.Loops.Infinite)
+        self._bg_video_player.play()
+
+    def _on_video_frame(self, frame: QVideoFrame):
+        """Capture video frame and use as background pixmap."""
+        image = frame.toImage()
+        if not image.isNull():
+            self._bg_pixmap = QPixmap.fromImage(image)
+            self.viewport().update()
+
+    def _stop_video_bg(self):
+        """Stop video background playback."""
+        if self._bg_video_player:
+            self._bg_video_player.stop()
+            self._bg_video_player = None
+        self._bg_video_sink = None
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
         if self._bg_pixmap:

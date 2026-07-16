@@ -157,6 +157,12 @@ class AssetLibrary(QObject):
         # Detect orphan paths (file was renamed/moved/deleted)
         for path_str in registered:
             if not Path(path_str).exists():
+                # Clean up thumbnail before removing from DB
+                row = self._db.execute(
+                    "SELECT id FROM assets WHERE source_path = ?", (path_str,)
+                ).fetchone()
+                if row:
+                    self.thumbnails.invalidate(row["id"])
                 self._db.execute("DELETE FROM assets WHERE source_path = ?", (path_str,))
         self._db.commit()
 
@@ -181,6 +187,9 @@ class AssetLibrary(QObject):
         # Ensure all registered assets have thumbnails
         self._ensure_thumbnails()
 
+        # Clean orphan thumbnails (no matching asset in DB)
+        self._clean_orphan_thumbnails()
+
     def _ensure_thumbnails(self):
         """Regenerate missing thumbnails for all registered assets."""
         rows = self._db.execute("SELECT id, source_path FROM assets").fetchall()
@@ -190,6 +199,18 @@ class AssetLibrary(QObject):
                 src = Path(row["source_path"])
                 if src.exists():
                     self.thumbnails.generate(src, row["id"])
+
+    def _clean_orphan_thumbnails(self):
+        """Remove thumbnail files that don't match any asset in the database."""
+        registered_ids = {
+            row["id"] for row in self._db.execute("SELECT id FROM assets").fetchall()
+        }
+        for thumb_file in self._thumb_dir.iterdir():
+            if thumb_file.suffix.lower() == ".png":
+                asset_id = thumb_file.stem
+                if asset_id not in registered_ids:
+                    thumb_file.unlink()
+                    logger.info("Library: thumbnail órfão removido %s", thumb_file.name)
 
     def _register(self, file: Path, category: str):
         """Register a single file into the library."""

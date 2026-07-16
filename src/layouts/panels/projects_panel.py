@@ -1,5 +1,6 @@
 """Projects Panel — CRUD de projetos estilo MAKEVID."""
 
+import logging
 import time
 import shutil
 from pathlib import Path
@@ -175,7 +176,7 @@ class _ProjectCard(QWidget):
                 self._name_lbl.setText(new_name)
                 self.renamed.emit(self._path, new_name)
             except Exception as e:
-                print(f"[ProjectCard] rename error: {e}")
+                logging.getLogger("MAKEMAP").warning("Rename error: %s", e)
         self._name_edit.hide()
         self._name_lbl.show()
         self._btn_rename.setText("Renomear")
@@ -331,7 +332,7 @@ class ProjectsPanel(QWidget):
             self.project_opened.emit(proj)
             self.refresh()
         except Exception as e:
-            print(f"[ProjectsPanel] open error: {e}")
+            logging.getLogger("MAKEMAP").warning("Open error: %s", e)
 
     def _on_delete(self, path: str):
         self.delete_requested.emit(path)
