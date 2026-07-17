@@ -34,7 +34,7 @@ class CanvasToolbar(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(42)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAutoFillBackground(False)
         self.setStyleSheet("background: transparent; border: none;")

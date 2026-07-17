@@ -292,8 +292,19 @@ class BrushTool(BaseTool):
             self._sound_engine.on_brush_stroke_end()
 
     def _get_asset_sound_key(self, asset_id: str) -> str:
-        """Get the sound key for an asset — returns the asset_id itself."""
-        return asset_id
+        """Get the sound key for an asset — returns the asset category."""
+        if not self._asset_engine or not asset_id:
+            return asset_id
+        lib = getattr(self._asset_engine, 'library', None)
+        if not lib:
+            return asset_id
+        try:
+            row = lib._db.execute(
+                "SELECT category FROM assets WHERE id = ?", (asset_id,)
+            ).fetchone()
+            return row["category"] if row and row["category"] else asset_id
+        except Exception:
+            return asset_id
 
     def _terrain_params(self) -> TerrainBrushParams:
         return TerrainBrushParams(

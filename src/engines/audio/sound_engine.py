@@ -356,14 +356,11 @@ class BrushSoundLayer(QObject):
 
     # ─── Paint Sound ─────────────────────────────────────────────────────
 
-    def on_stroke_start(self, asset_key: str, master: float):
-        """Called when brush stroke begins.
-        
-        asset_key: the specific asset_id being painted.
-        """
+    def on_stroke_start(self, asset_key: str, master: float, paint_volume: float = 0.7):
+        """Called when brush stroke begins."""
         self._master = master
         self._current_key = asset_key
-        self._paint_vol_mult = self._load_paint_volume(asset_key)
+        self._paint_vol_mult = paint_volume
 
         # Resolve which sound files to use for this asset
         paint_files = self._get_paint_files(asset_key)
@@ -438,25 +435,25 @@ class BrushSoundLayer(QObject):
         progress = self._paint_fade_step / self._paint_fade_steps
         vol = self._master * self._paint_vol_mult
 
-        # Fade old out
         if self._active_paint:
             self._active_paint[1].setVolume(vol * (1.0 - progress))
-        # Fade new in
         if self._paint_next:
             self._paint_next[1].setVolume(vol * progress)
 
         if self._paint_fade_step >= self._paint_fade_steps:
             self._paint_fade_timer.stop()
-            # Swap: new becomes active
             if self._active_paint:
                 self._active_paint[0].stop()
                 try:
                     self._active_paint[0].positionChanged.disconnect(self._on_paint_position)
                 except (RuntimeError, TypeError):
                     pass
-            self._active_paint = self._paint_next
-            self._active_paint[0].positionChanged.connect(self._on_paint_position)
-            self._active_paint[0].mediaStatusChanged.connect(self._on_paint_loop_end)
+            if self._paint_next:
+                self._active_paint = self._paint_next
+                self._active_paint[0].positionChanged.connect(self._on_paint_position)
+                self._active_paint[0].mediaStatusChanged.connect(self._on_paint_loop_end)
+            else:
+                self._active_paint = None
             self._paint_next = None
             self._paint_crossfading = False
 
@@ -470,47 +467,10 @@ class BrushSoundLayer(QObject):
                     self._active_paint[0].play()
 
     def _get_paint_files(self, asset_key: str) -> list[Path]:
-        """Get paint sound files for a specific asset.
-        
-        Looks for sounds assigned to this specific asset_id first,
-        then falls back to category-level sounds.
-        """
-        # Check if this specific asset has sounds assigned
-        if asset_key in self._paint_sounds:
-            return self._paint_sounds[asset_key]
-
-        # Fallback: look up category from DB
-        category = self._get_category(asset_key)
-        if category and category in self._paint_sounds:
-            return self._paint_sounds[category]
-
-        return []
+        return self._paint_sounds.get(asset_key, [])
 
     def _get_ambient_files(self, asset_key: str) -> list[Path]:
-        """Get ambient sound files for a specific asset."""
-        if asset_key in self._ambient_sounds:
-            return self._ambient_sounds[asset_key]
-
-        category = self._get_category(asset_key)
-        if category and category in self._ambient_sounds:
-            return self._ambient_sounds[category]
-
-        return []
-
-    def _get_category(self, asset_key: str) -> str | None:
-        """Get category name for an asset_id from DB."""
-        try:
-            import sqlite3
-            from src.engines.assets.library import LIBRARY_DB
-            db = sqlite3.connect(str(LIBRARY_DB))
-            db.row_factory = sqlite3.Row
-            row = db.execute(
-                "SELECT category FROM assets WHERE id = ?", (asset_key,)
-            ).fetchone()
-            db.close()
-            return row["category"] if row else None
-        except Exception:
-            return None
+        return self._ambient_sounds.get(asset_key, [])
 
     def on_stroke_end(self):
         """Called when brush stroke ends. Let paint sound finish naturally."""
@@ -533,28 +493,6 @@ class BrushSoundLayer(QObject):
                     pass
                 self._active_paint[0].stop()
                 self._active_paint = None
-
-    def _load_paint_volume(self, asset_key: str) -> float:
-        """Load paint volume from the sound folder config."""
-        # Check for volume file in the asset's sound folder
-        sound_dir = SOUNDS_DIR / "brush" / asset_key
-        vol_file = sound_dir / ".volume_paint"
-        if vol_file.exists():
-            try:
-                return float(vol_file.read_text().strip())
-            except (ValueError, OSError):
-                pass
-        # Fallback: check category folder
-        category = self._get_category(asset_key)
-        if category:
-            cat_dir = SOUNDS_DIR / "brush" / category
-            vol_file = cat_dir / ".volume_paint"
-            if vol_file.exists():
-                try:
-                    return float(vol_file.read_text().strip())
-                except (ValueError, OSError):
-                    pass
-        return 0.7
 
     # ─── Viewport Ambient Sound ──────────────────────────────────────────
 
@@ -751,8 +689,9 @@ class SoundEngine(QObject):
 
     volume_changed = Signal(str, float)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, asset_settings=None):
         super().__init__(parent)
+        self._asset_settings = asset_settings
         self._enabled = True
         self._master_volume = 0.7
         self._zoom = 1.0
@@ -820,7 +759,11 @@ class SoundEngine(QObject):
     def on_brush_stroke_start(self, asset_key: str):
         """Call when user starts painting with brush."""
         vol = self._zoom_factor() * self._master_volume
-        self.brush.on_stroke_start(asset_key, vol)
+        paint_volume = 0.7
+        if self._asset_settings:
+            settings = self._asset_settings.get(asset_key)
+            paint_volume = settings.get("sound_volume_paint", 0.7)
+        self.brush.on_stroke_start(asset_key, vol, paint_volume)
 
     def on_brush_stroke_end(self):
         """Call when user stops painting."""

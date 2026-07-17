@@ -39,13 +39,13 @@ class FlowLayout(QLayout):
         self._do_layout(rect)
 
     def sizeHint(self):
-        return self.minimumSize()
+        w = self.geometry().width() or 280
+        h = self._do_layout(QRect(0, 0, w, 0), test_only=True)
+        margins = self.contentsMargins()
+        return QSize(w, h + margins.top() + margins.bottom())
 
     def minimumSize(self):
-        size = QSize()
-        for item in self._items:
-            size = size.expandedTo(item.minimumSize())
-        return size
+        return self.sizeHint()
 
     def _do_layout(self, rect, test_only=False):
         x = rect.x()

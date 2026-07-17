@@ -26,7 +26,7 @@ class CollapsiblePanel(QFrame):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAutoFillBackground(False)
         self.setStyleSheet("background: transparent; border: none;")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self._main_layout = QVBoxLayout(self)
         self._main_layout.setContentsMargins(10, 6, 10, 6)
@@ -87,7 +87,7 @@ class CollapsiblePanel(QFrame):
         self._content.setVisible(self._expanded)
         self._update_arrow()
         if self._expanded:
-            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         else:
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.collapsed_changed.emit(not self._expanded)

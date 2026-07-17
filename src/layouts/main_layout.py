@@ -23,6 +23,7 @@ from src.canvas.overlays import Compass, MiniMap
 from src.canvas.map_boundary import MapBoundary
 from src.engines.integrator import EngineIntegrator
 from src.layouts.mediator import BrushMediator, TerrainMediator, GridMediator
+from src.layouts.panel_manager import PanelManager
 
 
 class MainLayout(QWidget):
@@ -51,7 +52,7 @@ class MainLayout(QWidget):
 
         self.brush_panel = BrushToolPanel(self)
         self.brush_panel.hide()
-        self.brush_panel.close_requested.connect(lambda: (self.brush_panel.hide(), self._reposition()))
+        self.brush_panel.close_requested.connect(lambda: (self._panel_mgr.hide("Brush"), self._reposition()))
 
         self.grid_panel = GridSettingsPanel(self)
         self.grid_panel.hide()
@@ -66,6 +67,20 @@ class MainLayout(QWidget):
         self._terrain_med = TerrainMediator(self)
         self._grid_med = GridMediator(self)
 
+        # ═══ Panel Manager ═══
+        self._panel_mgr = PanelManager(self)
+        self._panel_mgr.register(
+            "Brush", self.brush_panel, fill_height=True,
+            on_show=lambda: self._brush_med.connect_panel(),
+        )
+        self._panel_mgr.register(
+            "Grid", self.grid_panel,
+            on_show=lambda: self._grid_med.connect_panel(),
+        )
+        self._panel_mgr.register(
+            "Terrain", self.terrain_panel,
+        )
+
         # Terrain panel signals → mediator
         self.terrain_panel.infinite_toggled.connect(self._terrain_med.on_infinite)
         self.terrain_panel.dimensions_changed.connect(self._terrain_med.on_dims)
@@ -75,24 +90,22 @@ class MainLayout(QWidget):
         self.terrain_panel.terrain_removed.connect(self._terrain_med.on_removed)
         self.terrain_panel.terrain_selected.connect(self._terrain_med.on_selected)
         self.terrain_panel.background_changed.connect(self._terrain_med.on_background)
+        self.terrain_panel.content_changed.connect(self._reposition)
 
         # Map boundary overlays reference
         self._terrain_boundaries = self._terrain_med.boundaries
 
         # Explorer (esquerda)
-        self._left_scroll = self._make_scroll()
-        left_container = QWidget()
-        left_container.setAttribute(Qt.WA_TranslucentBackground)
-        left_container.setStyleSheet("background: transparent;")
-        left_lay = QVBoxLayout(left_container)
+        self._left_container = QWidget(self)
+        self._left_container.setAttribute(Qt.WA_TranslucentBackground)
+        self._left_container.setStyleSheet("background: transparent;")
+        left_lay = QVBoxLayout(self._left_container)
         left_lay.setContentsMargins(4, 4, 4, 4)
         left_lay.setSpacing(8)
         self.left_panel = ExplorerPanel()
         self.filters_panel = FilterPanel()
         left_lay.addWidget(self.left_panel, 1)
-        left_lay.addWidget(self.filters_panel)
-        left_lay.addStretch()
-        self._left_scroll.setWidget(left_container)
+        left_lay.addWidget(self.filters_panel, 0)
         self.left_panel.collapsed_changed.connect(
             lambda collapsed: left_lay.setStretchFactor(self.left_panel, 0 if collapsed else 1)
         )
@@ -188,33 +201,16 @@ class MainLayout(QWidget):
         self.canvas.setGeometry(0, 0, w, h)
         self.canvas.lower()
         self.top_bar.setGeometry(0, 0, w, top_h)
-        self._left_scroll.setGeometry(0, body_top, self.LEFT_W, body_h)
+        self._left_container.setGeometry(0, body_top, self.LEFT_W, body_h)
         self._right_scroll.setGeometry(w - self.RIGHT_W, body_top, self.RIGHT_W, body_h)
-        self.canvas_toolbar.setGeometry(center_x, body_top, center_w, toolbar_h)
+        tb_w = min(self.canvas_toolbar.sizeHint().width(), center_w)
+        tb_x = center_x + (center_w - tb_w) // 2
+        self.canvas_toolbar.setGeometry(tb_x, body_top, tb_w, toolbar_h)
 
-        if self.brush_panel.isVisible():
-            bp_top = body_top + toolbar_h + 4
-            bp_h = body_h - toolbar_h - prog_h - 8
-            self.brush_panel.setGeometry(center_x + 4, bp_top, self.brush_panel.PANEL_WIDTH, bp_h)
-            self.brush_panel.raise_()
-
-        if self.grid_panel.isVisible():
-            gp_top = body_top + toolbar_h + 4
-            gp_h = self.grid_panel.sizeHint().height()
-            self.grid_panel.setGeometry(center_x + 4, gp_top, self.grid_panel.PANEL_WIDTH, gp_h)
-            self.grid_panel.raise_()
-
-        if self.terrain_panel.isVisible():
-            tp_top = body_top + toolbar_h + 4
-            tp_max = body_h - toolbar_h - prog_h - 8
-            container = self.terrain_panel.findChild(QScrollArea)
-            if container and container.widget():
-                needed = container.widget().sizeHint().height() + 20
-            else:
-                needed = self.terrain_panel.sizeHint().height()
-            tp_h = min(needed, tp_max)
-            self.terrain_panel.setGeometry(center_x + 4, tp_top, self.terrain_panel.PANEL_WIDTH, tp_h)
-            self.terrain_panel.raise_()
+        panel_x = center_x + 4
+        panel_y = body_top + toolbar_h + 4
+        panel_max_h = body_h - toolbar_h - prog_h - 8
+        self._panel_mgr.layout(panel_x, panel_y, self.brush_panel.PANEL_WIDTH, panel_max_h)
 
         self.progression.setGeometry(center_x, body_bottom - prog_h, center_w, prog_h)
         self.status_bar.setGeometry(0, h - status_h, w, status_h)
@@ -247,13 +243,10 @@ class MainLayout(QWidget):
 
     def _on_tool_selected(self, tool_name: str):
         if tool_name == "Brush":
-            self.grid_panel.hide()
-            self.terrain_panel.hide()
-            self.brush_panel.show()
-            self._brush_med.connect_panel()
+            self._panel_mgr.show("Brush")
             self.brush_panel._on_tab_clicked(0)
         else:
-            self.brush_panel.hide()
+            self._panel_mgr.hide("Brush")
         self._reposition()
 
     # ─── Toolbar Actions ───
@@ -278,29 +271,22 @@ class MainLayout(QWidget):
 
     def _toggle_grid_panel(self):
         self.canvas.engine._toggle_grid()
-        visible = self.canvas.engine.grid.visible
-        if visible:
-            self.brush_panel.hide()
-            self.terrain_panel.hide()
-            self.grid_panel.show()
-            self._grid_med.connect_panel()
+        if self.canvas.engine.grid.visible:
+            self._panel_mgr.show("Grid")
         else:
-            self.grid_panel.hide()
+            self._panel_mgr.hide("Grid")
         self._reposition()
 
     def _close_grid_panel(self):
         self.canvas.engine._toggle_grid()
-        self.grid_panel.hide()
+        self._panel_mgr.hide("Grid")
         self._reposition()
 
     def _on_grid_toggled(self, visible: bool):
         if visible:
-            self.brush_panel.hide()
-            self.terrain_panel.hide()
-            self.grid_panel.show()
-            self._grid_med.connect_panel()
+            self._panel_mgr.show("Grid")
         else:
-            self.grid_panel.hide()
+            self._panel_mgr.hide("Grid")
         self._reposition()
 
     # ─── Terrain Panel ───
@@ -311,16 +297,11 @@ class MainLayout(QWidget):
             window.new_project()
 
     def _toggle_terrain_panel(self):
-        if self.terrain_panel.isVisible():
-            self._close_terrain_panel()
-        else:
-            self.brush_panel.hide()
-            self.grid_panel.hide()
-            self.terrain_panel.show()
+        self._panel_mgr.toggle("Terrain")
         self._reposition()
 
     def _close_terrain_panel(self):
-        self.terrain_panel.hide()
+        self._panel_mgr.hide("Terrain")
         self.canvas_toolbar.uncheck_action("Terreno")
         self._reposition()
 
@@ -343,7 +324,7 @@ class MainLayout(QWidget):
     def _canvas_widgets(self) -> list[QWidget]:
         return [
             self.canvas_toolbar, self.brush_panel,
-            self.grid_panel, self.terrain_panel, self._left_scroll,
+            self.grid_panel, self.terrain_panel, self._left_container,
             self._right_scroll, self.progression, self.compass, self.minimap,
         ]
 

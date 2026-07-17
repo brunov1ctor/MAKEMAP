@@ -16,6 +16,7 @@ from src.styles.tokens import Colors
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.terrain.terrain_card import TerrainCard
 from src.layouts.panels.terrain.background import BackgroundSection
+from src.layouts.panel_manager import paint_glass_panel
 
 
 class TerrainSettingsPanel(QFrame):
@@ -34,6 +35,7 @@ class TerrainSettingsPanel(QFrame):
     terrain_renamed = Signal(str, str)
     terrain_visibility = Signal(str, bool)
     background_changed = Signal(str, str)
+    content_changed = Signal()  # emitted when visible content changes size
 
     _PALETTE = [
         QColor(34, 139, 34), QColor(210, 180, 100), QColor(30, 100, 180),
@@ -253,8 +255,9 @@ class TerrainSettingsPanel(QFrame):
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
-        self._scroll.setFixedHeight(160)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._scroll.setStyleSheet(f"""
             QScrollArea {{ background: transparent; border: none; }}
             QScrollBar:vertical {{
@@ -283,10 +286,11 @@ class TerrainSettingsPanel(QFrame):
 
         # ─── Background Section ───
         bg_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "..", "..", "..", "library", "backgrounds")
+                              "..", "..", "..", "..", "library", "backgrounds")
         self._bg_section = BackgroundSection(bg_dir)
         self._bg_section.background_changed.connect(self.background_changed.emit)
         self._bg_section.close_requested.connect(self.close_requested.emit)
+        self._bg_section.content_changed.connect(self.content_changed.emit)
         layout.addWidget(self._bg_section)
 
         layout.addStretch()
@@ -474,16 +478,4 @@ class TerrainSettingsPanel(QFrame):
         return self._current_shape
 
     def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), 10, 10)
-        p.fillPath(path, QColor(11, 25, 41, 235))
-        grad = QLinearGradient(0, 0, 0, h * 0.15)
-        grad.setColorAt(0.0, QColor(255, 255, 255, 10))
-        grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-        p.fillPath(path, QBrush(grad))
-        p.setPen(QPen(QColor(255, 255, 255, 25), 1))
-        p.drawPath(path)
-        p.end()
+        paint_glass_panel(self)

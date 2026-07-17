@@ -15,6 +15,7 @@ from PySide6.QtGui import (
 from src.styles.tokens import Colors
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.brush.flow_layout import FlowLayout
+from src.layouts.panel_manager import paint_glass_panel
 
 
 _BG_SECTION = "rgba(255, 255, 255, 0.04)"
@@ -491,16 +492,4 @@ class BrushToolPanel(QFrame):
         self.tab_changed.emit(category)
 
     def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), 10, 10)
-        p.fillPath(path, QColor(11, 25, 41, 235))
-        grad = QLinearGradient(0, 0, 0, h * 0.15)
-        grad.setColorAt(0.0, QColor(255, 255, 255, 10))
-        grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-        p.fillPath(path, QBrush(grad))
-        p.setPen(QPen(QColor(255, 255, 255, 25), 1))
-        p.drawPath(path)
-        p.end()
+        paint_glass_panel(self)

@@ -6,7 +6,7 @@ import os
 
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton,
-    QWidget, QScrollArea, QLineEdit, QGridLayout, QTabBar,
+    QWidget, QScrollArea, QLineEdit, QGridLayout, QTabBar, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal, QSize, QUrl, QTimer, QFileSystemWatcher
 from PySide6.QtGui import QColor, QPixmap, QMovie
@@ -21,6 +21,7 @@ class BackgroundSection(QFrame):
 
     background_changed = Signal(str, str)  # type, value
     close_requested = Signal()
+    content_changed = Signal()  # emitted when visible content changes (expand/collapse)
 
     def __init__(self, bg_dir: str, parent=None):
         super().__init__(parent)
@@ -210,7 +211,8 @@ class BackgroundSection(QFrame):
 
         self._bg_grid_scroll = QScrollArea()
         self._bg_grid_scroll.setWidgetResizable(True)
-        self._bg_grid_scroll.setFixedHeight(140)
+        self._bg_grid_scroll.setMinimumHeight(80)
+        self._bg_grid_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._bg_grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._bg_grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._bg_grid_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -292,6 +294,7 @@ class BackgroundSection(QFrame):
                 self._bg_file_widget.show()
                 current_idx = self._bg_tabs.currentIndex()
                 self._load_bg_assets(self._bg_categories[current_idx])
+        self.content_changed.emit()
 
     # ─── Color logic ───
 

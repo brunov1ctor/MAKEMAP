@@ -1,21 +1,16 @@
 """5. Progressão do Mundo — painel blockchain redimensionável."""
 
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QScrollArea, QInputDialog,
+    QFrame, QHBoxLayout, QVBoxLayout, QLabel, QScrollArea, QInputDialog, QSizePolicy,
 )
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import Qt, Signal, QRectF
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
 
 from src.styles.tokens import Colors, Typography
-from src.components.collapsible_panel import CollapsiblePanel
-from src.components.blockchain import (
-    Block, ChainCanvas, Pipeline, PIPELINE_THEMES, biome_color, RectNode,
-)
+from src.components.blockchain import Block, Pipeline, PIPELINE_THEMES
 
 
 class _ResizeHandle(QFrame):
-    """Handle de arraste no topo do painel."""
-
     drag_delta = Signal(int)
 
     def __init__(self, parent=None):
@@ -50,34 +45,47 @@ class _ResizeHandle(QFrame):
         self._dragging = False
 
 
-class ProgressionBar(CollapsiblePanel):
-    """Painel blockchain — blocos arrastáveis com conexões neon, redimensionável."""
+class ProgressionBar(QFrame):
+    """Painel blockchain — blocos arrastáveis, redimensionável por arraste."""
 
     size_changed = Signal()
     MIN_HEIGHT = 80
     MAX_HEIGHT = 500
 
     def __init__(self, parent=None):
-        super().__init__(title="Progressão do Mundo", icon="🗺", parent=parent, radius=10)
+        super().__init__(parent)
         self._current_height = 120
         self.setFixedHeight(self._current_height)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setStyleSheet("background: transparent; border: none;")
 
         self._pipelines: list[Pipeline] = []
         self._current_idx = 0
 
-        # Handle de arraste
+        main = QVBoxLayout(self)
+        main.setContentsMargins(0, 0, 0, 0)
+        main.setSpacing(0)
+
         self._resize_handle = _ResizeHandle(self)
         self._resize_handle.drag_delta.connect(self._on_drag)
-        self._main_layout.insertWidget(0, self._resize_handle)
+        main.addWidget(self._resize_handle)
 
-        # Header controls
-        header_layout = self._main_layout.itemAt(1).layout()
-
+        header = QHBoxLayout()
+        header.setContentsMargins(10, 2, 10, 2)
+        header.setSpacing(6)
+        title = QLabel("🗺 Progressão do Mundo")
+        title.setStyleSheet(f"""
+            font-size: {Typography.SIZE_XXS}px; font-weight: {Typography.WEIGHT_BOLD};
+            color: {Colors.TEXT_MUTED}; background: transparent; border: none;
+        """)
+        header.addWidget(title)
+        header.addStretch()
         self._tabs_layout = QHBoxLayout()
         self._tabs_layout.setSpacing(0)
-        header_layout.insertLayout(header_layout.count() - 1, self._tabs_layout)
+        header.addLayout(self._tabs_layout)
+        main.addLayout(header)
 
-        # Scroll area
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -89,21 +97,20 @@ class ProgressionBar(CollapsiblePanel):
             QScrollBar:vertical {{ width: 5px; background: transparent; }}
             QScrollBar::handle:vertical {{ background: {Colors.BORDER}; border-radius: 2px; }}
         """)
-        self.content_layout.addWidget(self._scroll, 1)
+        main.addWidget(self._scroll, 1)
 
-        # Pipelines padrão
         self._create_pipeline("Principal", 0, [
-            ("🌲", "Floresta", "Lv 1–10", "✓"),
-            ("🏔", "Vale", "Lv 10–20", "✓"),
-            ("🌿", "Pântano", "Lv 20–30", "◉"),
-            ("⛰", "Montanhas", "Lv 30–40", "○"),
-            ("🏜", "Deserto", "Lv 40–50", "○"),
-            ("🌋", "Vulcão", "Lv 60–70", "○"),
-            ("🌑", "Sombras", "Lv 80–90", "○"),
-            ("⚔", "End Game", "Lv 90–100", "○"),
+            ("🌲", "Floresta", "Lv 1-10", "✓"),
+            ("🏔", "Vale", "Lv 10-20", "✓"),
+            ("🌿", "Pântano", "Lv 20-30", "◉"),
+            ("⛰", "Montanhas", "Lv 30-40", "○"),
+            ("🏜", "Deserto", "Lv 40-50", "○"),
+            ("🌋", "Vulcão", "Lv 60-70", "○"),
+            ("🌑", "Sombras", "Lv 80-90", "○"),
+            ("⚔", "End Game", "Lv 90-100", "○"),
         ])
         self._create_pipeline("Side Quests", 1, [
-            ("📜", "Tutorial", "Lv 1–5", "✓"),
+            ("📜", "Tutorial", "Lv 1-5", "✓"),
             ("🏴", "Arena PvP", "Lv 20+", "○"),
             ("💎", "Crafting", "Lv 15+", "○"),
         ])
@@ -124,7 +131,6 @@ class ProgressionBar(CollapsiblePanel):
         self._create_pipeline(name, len(self._pipelines) % len(PIPELINE_THEMES))
         self._switch_pipeline(len(self._pipelines) - 1)
 
-
     def _add_rect(self):
         if not self._pipelines:
             return
@@ -139,11 +145,9 @@ class ProgressionBar(CollapsiblePanel):
         if not ok:
             return
         levels, ok2 = QInputDialog.getText(self, "Info", "Nível:", text=block._levels)
-        if not ok2:
-            levels = block._levels
+        levels = levels if ok2 else block._levels
         icon, ok3 = QInputDialog.getText(self, "Ícone", "Emoji:", text=block._icon)
-        if not ok3:
-            icon = block._icon
+        icon = icon if ok3 else block._icon
         block.update_data(icon, name, levels)
 
     def _delete_block(self, block: Block):
@@ -174,13 +178,10 @@ class ProgressionBar(CollapsiblePanel):
                     border: none;
                     border-bottom: 2px solid {c if is_active else 'transparent'};
                     background: {'rgba(255,255,255,0.05)' if is_active else 'transparent'};
-                    border-top-left-radius: 4px;
-                    border-top-right-radius: 4px;
-                    padding: 0 8px;
+                    border-top-left-radius: 4px; border-top-right-radius: 4px; padding: 0 8px;
                 }}
                 QFrame:hover {{
-                    background: rgba(255,255,255,0.08);
-                    border-bottom: 2px solid {c};
+                    background: rgba(255,255,255,0.08); border-bottom: 2px solid {c};
                 }}
             """)
             tab_lay = QHBoxLayout(tab)
@@ -196,24 +197,18 @@ class ProgressionBar(CollapsiblePanel):
             tab.mousePressEvent = lambda e, idx=i: self._switch_pipeline(idx)
             self._tabs_layout.addWidget(tab)
 
-        # Botão + como última aba
         add_tab = QFrame()
         add_tab.setCursor(Qt.CursorShape.PointingHandCursor)
         add_tab.setFixedSize(20, 20)
-        add_tab.setStyleSheet(f"""
-            QFrame {{
-                border: none; background: transparent;
-                border-top-left-radius: 4px; border-top-right-radius: 4px;
-            }}
-            QFrame:hover {{ background: rgba(255,255,255,0.08); }}
+        add_tab.setStyleSheet("""
+            QFrame { border: none; background: transparent;
+                border-top-left-radius: 4px; border-top-right-radius: 4px; }
+            QFrame:hover { background: rgba(255,255,255,0.08); }
         """)
         add_lay = QHBoxLayout(add_tab)
         add_lay.setContentsMargins(0, 0, 0, 0)
         add_lbl = QLabel("+")
-        add_lbl.setStyleSheet(f"""
-            font-size: 12px; color: {Colors.ACCENT};
-            background: transparent; border: none;
-        """)
+        add_lbl.setStyleSheet(f"font-size: 12px; color: {Colors.ACCENT}; background: transparent; border: none;")
         add_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         add_lay.addWidget(add_lbl)
         add_tab.mousePressEvent = lambda e: self._add_pipeline()
@@ -226,7 +221,17 @@ class ProgressionBar(CollapsiblePanel):
             self.setFixedHeight(new_h)
             self.size_changed.emit()
 
-    def toggle(self):
-        super().toggle()
-        self.setFixedHeight(self._current_height if self.is_expanded() else 28)
-        self.size_changed.emit()
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, w, h), 10, 10)
+        p.fillPath(path, QColor(11, 25, 41, 200))
+        grad = QLinearGradient(0, 0, 0, h * 0.25)
+        grad.setColorAt(0.0, QColor(255, 255, 255, 10))
+        grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.fillPath(path, QBrush(grad))
+        p.setPen(QPen(QColor(255, 255, 255, 30), 1))
+        p.drawPath(path)
+        p.end()
