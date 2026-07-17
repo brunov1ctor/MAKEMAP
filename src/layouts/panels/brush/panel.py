@@ -173,32 +173,31 @@ class BrushToolPanel(QFrame):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        # layout raiz do QFrame — tudo dentro dele recebe o fundo glass via paintEvent
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        scroll.setStyleSheet(f"""
+        # ── parte superior com scroll (sliders) ──
+        self._top_scroll = QScrollArea()
+        self._top_scroll.setWidgetResizable(True)
+        self._top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._top_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._top_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._top_scroll.setStyleSheet(f"""
             QScrollArea {{ background: transparent; border: none; }}
             QScrollArea > QWidget > QWidget {{ background: transparent; }}
-            QScrollBar:vertical {{
-                width: 4px; background: transparent;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {_TEXT_MUTED}; border-radius: 2px; min-height: 20px;
-            }}
+            QScrollBar:vertical {{ width: 4px; background: transparent; }}
+            QScrollBar::handle:vertical {{ background: {_TEXT_MUTED}; border-radius: 2px; min-height: 20px; }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
         """)
-
-        container = QWidget()
-        container.setStyleSheet("background: transparent;")
-        self._layout = QVBoxLayout(container)
-        self._layout.setContentsMargins(10, 6, 10, 8)
-        self._layout.setSpacing(2)
+        top_w = QWidget()
+        top_w.setStyleSheet("background: transparent;")
+        self._layout = QVBoxLayout(top_w)
+        self._layout.setContentsMargins(10, 6, 10, 6)
+        self._layout.setSpacing(4)
+        self._top_scroll.setWidget(top_w)
 
         self._build_header()
         self._layout.addWidget(_separator())
@@ -207,12 +206,82 @@ class BrushToolPanel(QFrame):
         self._build_material_section()
         self._layout.addWidget(_separator())
         self._build_transform_section()
-        self._layout.addWidget(_separator())
-        self._build_favorites_section()
-        self._layout.addStretch()
 
-        scroll.setWidget(container)
-        outer.addWidget(scroll)
+        root.addWidget(self._top_scroll)
+        root.addWidget(_separator())
+
+        # ── abas ──
+        self._tab_container = QWidget()
+        self._tab_container.setStyleSheet("background: transparent;")
+        self._tab_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._tab_flow = FlowLayout(self._tab_container, spacing=2)
+        self._tab_flow.setContentsMargins(10, 4, 10, 4)
+
+        self._tab_categories = ["terrain", "trees", "rocks", "mountains", "buildings", "effects", "misc"]
+        self._tab_labels = ["🌍 Terrain", "🌲 Trees", "🪨 Rocks", "⛰ Mountains", "🏠 Buildings", "✨ Effects", "📦 Misc", "★"]
+        self._tab_buttons: list[QToolButton] = []
+
+        for i, label in enumerate(self._tab_labels):
+            btn = QToolButton()
+            btn.setText(label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QToolButton {{
+                    background: transparent; color: {_TEXT_SEC};
+                    padding: 3px 6px; font-size: 9px; border: none;
+                    border-bottom: 2px solid transparent;
+                }}
+                QToolButton:checked {{
+                    color: {_ACCENT}; border-bottom-color: {_ACCENT};
+                }}
+                QToolButton:hover {{ color: {_TEXT}; }}
+            """)
+            btn.clicked.connect(lambda checked, idx=i: self._on_tab_clicked(idx))
+            self._tab_flow.addWidget(btn)
+            self._tab_buttons.append(btn)
+
+        if self._tab_buttons:
+            self._tab_buttons[0].setChecked(True)
+        root.addWidget(self._tab_container)
+
+        # ── busca ──
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("🔍 Buscar material...")
+        self._search.setFixedHeight(26)
+        self._search.setContentsMargins(10, 0, 10, 0)
+        self._search.setStyleSheet(f"""
+            QLineEdit {{
+                background: {_BG_SECTION}; color: {_TEXT};
+                border: 1px solid {_BORDER}; border-radius: 4px;
+                padding: 2px 8px; font-size: 10px;
+                margin: 0 10px;
+            }}
+            QLineEdit:focus {{ border-color: {_ACCENT}; }}
+        """)
+        self._search.textChanged.connect(self._on_search)
+        root.addWidget(self._search)
+
+        # ── grid de assets ──
+        self._grid_scroll = QScrollArea()
+        self._grid_scroll.setWidgetResizable(True)
+        self._grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._grid_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._grid_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._grid_scroll.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{ width: 3px; background: transparent; }}
+            QScrollBar::handle:vertical {{ background: {_TEXT_MUTED}; border-radius: 1px; min-height: 16px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+        """)
+        self._grid_container = QWidget()
+        self._grid_container.setStyleSheet("background: transparent;")
+        self._grid_layout = FlowLayout(self._grid_container, spacing=4)
+        self._grid_layout.setContentsMargins(4, 4, 4, 4)
+        self._grid_scroll.setWidget(self._grid_container)
+        root.addWidget(self._grid_scroll, 1)
 
         self._asset_buttons: list[MaterialThumbnail] = []
         self._current_mode = "paint"
@@ -373,83 +442,6 @@ class BrushToolPanel(QFrame):
         section.addWidget(self.density_slider)
         self._layout.addLayout(section)
 
-    def _build_favorites_section(self):
-        section = QVBoxLayout()
-        section.setContentsMargins(0, 4, 0, 4)
-        section.setSpacing(4)
-
-        self._tab_container = QWidget()
-        self._tab_container.setStyleSheet("background: transparent;")
-        self._tab_flow = FlowLayout(self._tab_container, spacing=2)
-        self._tab_flow.setContentsMargins(0, 0, 0, 0)
-
-        self._tab_categories = ["terrain", "trees", "rocks", "mountains", "buildings", "effects", "misc"]
-        self._tab_labels = ["🌍 Terrain", "🌲 Trees", "🪨 Rocks", "⛰ Mountains", "🏠 Buildings", "✨ Effects", "📦 Misc", "★"]
-        self._tab_buttons: list[QToolButton] = []
-
-        for i, label in enumerate(self._tab_labels):
-            btn = QToolButton()
-            btn.setText(label)
-            btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(f"""
-                QToolButton {{
-                    background: transparent; color: {_TEXT_SEC};
-                    padding: 3px 6px; font-size: 9px; border: none;
-                    border-bottom: 2px solid transparent;
-                }}
-                QToolButton:checked {{
-                    color: {_ACCENT}; border-bottom-color: {_ACCENT};
-                }}
-                QToolButton:hover {{ color: {_TEXT}; }}
-            """)
-            btn.clicked.connect(lambda checked, idx=i: self._on_tab_clicked(idx))
-            self._tab_flow.addWidget(btn)
-            self._tab_buttons.append(btn)
-
-        if self._tab_buttons:
-            self._tab_buttons[0].setChecked(True)
-        section.addWidget(self._tab_container)
-
-        self._search = QLineEdit()
-        self._search.setPlaceholderText("🔍 Buscar material...")
-        self._search.setFixedHeight(24)
-        self._search.setStyleSheet(f"""
-            QLineEdit {{
-                background: {_BG_SECTION}; color: {_TEXT};
-                border: 1px solid {_BORDER}; border-radius: 4px;
-                padding: 2px 8px; font-size: 10px;
-            }}
-            QLineEdit:focus {{ border-color: {_ACCENT}; }}
-        """)
-        section.addWidget(self._search)
-
-        self._grid_scroll = QScrollArea()
-        self._grid_scroll.setWidgetResizable(True)
-        self._grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._grid_scroll.setMinimumHeight(80)
-        self._grid_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._grid_scroll.setStyleSheet(f"""
-            QScrollArea {{ background: transparent; border: none; }}
-            QScrollArea > QWidget > QWidget {{ background: transparent; }}
-            QScrollBar:vertical {{
-                width: 3px; background: transparent;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {_TEXT_MUTED}; border-radius: 1px; min-height: 16px;
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
-        """)
-
-        self._grid_container = QWidget()
-        self._grid_container.setStyleSheet("background: transparent;")
-        self._grid_layout = FlowLayout(self._grid_container, spacing=4)
-        self._grid_layout.setContentsMargins(4, 4, 4, 4)
-        self._grid_scroll.setWidget(self._grid_container)
-        section.addWidget(self._grid_scroll)
-        self._layout.addLayout(section)
-
     # ─── Public API ──────────────────────────────────────────────────────
 
     def set_assets(self, assets: list[dict]):
@@ -475,6 +467,13 @@ class BrushToolPanel(QFrame):
     def set_texture_preview(self, pixmap: QPixmap | None):
         self.texture_preview.set_texture(pixmap)
 
+    def _on_search(self, text: str):
+        query = text.strip().lower()
+        for btn in self._asset_buttons:
+            btn.setVisible(not query or query in btn.toolTip().lower())
+        self._grid_container.adjustSize()
+        self._grid_layout.update()
+
     def _on_asset_clicked(self, asset: dict):
         for btn in self._asset_buttons:
             if btn.asset_id != asset.get("id", ""):
@@ -485,6 +484,7 @@ class BrushToolPanel(QFrame):
     def _on_tab_clicked(self, index: int):
         for i, btn in enumerate(self._tab_buttons):
             btn.setChecked(i == index)
+        self._search.clear()
         if index < len(self._tab_categories):
             category = self._tab_categories[index]
         else:

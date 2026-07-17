@@ -39,9 +39,13 @@ class FlowLayout(QLayout):
         self._do_layout(rect)
 
     def sizeHint(self):
-        w = self.geometry().width() or 280
-        h = self._do_layout(QRect(0, 0, w, 0), test_only=True)
+        w = self.geometry().width()
+        if not w and self.parent():
+            w = self.parent().width()
+        w = w or 280
         margins = self.contentsMargins()
+        w -= margins.left() + margins.right()
+        h = self._do_layout(QRect(0, 0, w, 0), test_only=True)
         return QSize(w, h + margins.top() + margins.bottom())
 
     def minimumSize(self):
@@ -53,6 +57,9 @@ class FlowLayout(QLayout):
         row_h = 0
 
         for item in self._items:
+            widget = item.widget()
+            if widget and not widget.isVisible():
+                continue
             item_size = item.sizeHint()
             if x + item_size.width() > rect.right() and row_h > 0:
                 x = rect.x()

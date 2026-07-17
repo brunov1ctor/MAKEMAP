@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSlider
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSizePolicy
 from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors
@@ -41,9 +41,10 @@ class BrushSlider(QFrame):
         top.addWidget(icon_lbl)
 
         name_lbl = QLabel(label)
+        name_lbl.setMinimumWidth(0)
+        name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         name_lbl.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 10px; background: transparent; border: none;")
-        top.addWidget(name_lbl)
-        top.addStretch()
+        top.addWidget(name_lbl, 1)
 
         self._value_label = QLabel(self._format(default))
         self._value_label.setFixedWidth(40)

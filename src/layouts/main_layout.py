@@ -244,7 +244,6 @@ class MainLayout(QWidget):
     def _on_tool_selected(self, tool_name: str):
         if tool_name == "Brush":
             self._panel_mgr.show("Brush")
-            self.brush_panel._on_tab_clicked(0)
         else:
             self._panel_mgr.hide("Brush")
         self._reposition()

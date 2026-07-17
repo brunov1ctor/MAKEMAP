@@ -129,10 +129,23 @@ class AssetLibrary(QObject):
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Migration: add favorite column if missing
+        # Migrations
         cols = [r[1] for r in db.execute("PRAGMA table_info(assets)").fetchall()]
         if "favorite" not in cols:
             db.execute("ALTER TABLE assets ADD COLUMN favorite INTEGER DEFAULT 0")
+        if "sort_order" not in cols:
+            db.execute("ALTER TABLE assets ADD COLUMN sort_order INTEGER DEFAULT 0")
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS asset_sounds (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_id TEXT NOT NULL,
+                prefix   TEXT NOT NULL,
+                path     TEXT NOT NULL,
+                volume   REAL DEFAULT 0.7,
+                display_name TEXT DEFAULT '',
+                UNIQUE(asset_id, prefix)
+            )
+        """)
         db.commit()
         return db
 
@@ -325,9 +338,17 @@ class AssetLibrary(QObject):
 
     def list_by_category(self, category: str) -> list[LibraryAsset]:
         rows = self._db.execute(
-            "SELECT * FROM assets WHERE category = ? ORDER BY name", (category,)
+            "SELECT * FROM assets WHERE category = ? ORDER BY sort_order, name", (category,)
         ).fetchall()
         return [self._row_to_asset(r) for r in rows]
+
+    def set_sort_order(self, ordered_paths: list[str]):
+        """Persist sort order for a list of source_paths (index = order)."""
+        for i, path in enumerate(ordered_paths):
+            self._db.execute(
+                "UPDATE assets SET sort_order = ? WHERE source_path = ?", (i, path)
+            )
+        self._db.commit()
 
     def search(self, query: str) -> list[LibraryAsset]:
         rows = self._db.execute(
@@ -376,6 +397,35 @@ class AssetLibrary(QObject):
     def list_favorites(self) -> list[LibraryAsset]:
         rows = self._db.execute("SELECT * FROM assets WHERE favorite = 1 ORDER BY name").fetchall()
         return [self._row_to_asset(r) for r in rows]
+
+    # ─── Sounds ──────────────────────────────────────────────────────────
+
+    def get_sound(self, asset_id: str, prefix: str) -> dict | None:
+        """Retorna {path, volume, display_name} ou None."""
+        row = self._db.execute(
+            "SELECT path, volume, display_name FROM asset_sounds WHERE asset_id=? AND prefix=?",
+            (asset_id, prefix)
+        ).fetchone()
+        if not row:
+            return None
+        return {"path": row["path"], "volume": row["volume"], "display_name": row["display_name"]}
+
+    def set_sound(self, asset_id: str, prefix: str, path: str, volume: float = 0.7, display_name: str = ""):
+        """Insere ou atualiza o som de um asset."""
+        self._db.execute(
+            """INSERT INTO asset_sounds (asset_id, prefix, path, volume, display_name)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(asset_id, prefix) DO UPDATE SET
+                   path=excluded.path, volume=excluded.volume, display_name=excluded.display_name""",
+            (asset_id, prefix, path, volume, display_name)
+        )
+        self._db.commit()
+
+    def remove_sound(self, asset_id: str, prefix: str):
+        self._db.execute(
+            "DELETE FROM asset_sounds WHERE asset_id=? AND prefix=?", (asset_id, prefix)
+        )
+        self._db.commit()
 
     # ─── Helpers ─────────────────────────────────────────────────────────
 

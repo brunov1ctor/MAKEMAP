@@ -467,10 +467,26 @@ class BrushSoundLayer(QObject):
                     self._active_paint[0].play()
 
     def _get_paint_files(self, asset_key: str) -> list[Path]:
+        if asset_key not in self._paint_sounds:
+            self._reload_key(asset_key)
         return self._paint_sounds.get(asset_key, [])
 
     def _get_ambient_files(self, asset_key: str) -> list[Path]:
+        if asset_key not in self._ambient_sounds:
+            self._reload_key(asset_key)
         return self._ambient_sounds.get(asset_key, [])
+
+    def _reload_key(self, asset_key: str):
+        """Scan brush/<asset_key>/ folder on demand (sounds added after startup)."""
+        sub = SOUNDS_DIR / "brush" / asset_key
+        if not sub.is_dir():
+            return
+        for f in _scan_audio_files(sub):
+            name = f.stem.lower()
+            if name.startswith("paint"):
+                self._paint_sounds.setdefault(asset_key, []).append(f)
+            elif name.startswith("ambient"):
+                self._ambient_sounds.setdefault(asset_key, []).append(f)
 
     def on_stroke_end(self):
         """Called when brush stroke ends. Let paint sound finish naturally."""

@@ -22,16 +22,21 @@ class BrushMediator:
         """Connect brush panel sliders to BrushEngine."""
         engine = self._l.canvas.engine.brush_engine
         panel = self._l.brush_panel
+        brush_tool = self._l.canvas.engine._brush_tool
 
         panel.size_slider.set_value(engine.config.size)
         panel.opacity_slider.set_value(engine.config.opacity * 100)
         panel.density_slider.set_value(engine.config.density)
+        panel.softness_slider.set_value(brush_tool.softness * 100)
+        panel.scale_slider.set_value(brush_tool.texture_scale * 100)
+        panel.rotation_slider.set_value(brush_tool.texture_rotation)
 
         for sig in (panel.size_slider.value_changed, panel.opacity_slider.value_changed,
                     panel.softness_slider.value_changed, panel.density_slider.value_changed,
                     panel.scale_slider.value_changed, panel.rotation_slider.value_changed,
                     panel.asset_selected, panel.favorite_toggled,
-                    panel.mode_changed, panel.tab_changed):
+                    panel.mode_changed, panel.tab_changed,
+                    panel.random_rotation_check.toggled):
             try:
                 sig.disconnect()
             except (RuntimeError, TypeError):
@@ -39,10 +44,15 @@ class BrushMediator:
 
         panel.size_slider.value_changed.connect(self.on_size_changed)
         panel.opacity_slider.value_changed.connect(self.on_opacity_changed)
+        panel.softness_slider.value_changed.connect(lambda v: setattr(brush_tool, 'softness', v / 100.0))
         panel.density_slider.value_changed.connect(engine.set_density)
+        panel.scale_slider.value_changed.connect(self.on_texture_scale_changed)
+        panel.rotation_slider.value_changed.connect(self.on_texture_rotation_changed)
+        panel.random_rotation_check.toggled.connect(lambda on: setattr(brush_tool, 'random_rotation', on))
         panel.asset_selected.connect(self.on_asset_selected)
         panel.tab_changed.connect(self.on_tab_changed)
         panel.favorite_toggled.connect(self.on_favorite_toggled)
+        panel.mode_changed.connect(self.on_mode_changed)
 
         # Library change watcher
         asset_engine = self._l.canvas.engine._asset_engine
@@ -50,20 +60,16 @@ class BrushMediator:
             library = asset_engine.library
             try:
                 library.asset_added.disconnect(self.on_library_changed)
-            except (RuntimeError, TypeError):
-                pass
-            try:
                 library.asset_removed.disconnect(self.on_library_changed)
             except (RuntimeError, TypeError):
                 pass
             library.asset_added.connect(self.on_library_changed)
             library.asset_removed.connect(self.on_library_changed)
 
-        brush_tool = self._l.canvas.engine._brush_tool
-        panel.softness_slider.value_changed.connect(lambda v: setattr(brush_tool, 'softness', v / 100.0))
-        panel.scale_slider.value_changed.connect(self.on_texture_scale_changed)
-        panel.rotation_slider.value_changed.connect(self.on_texture_rotation_changed)
-        panel.mode_changed.connect(self.on_mode_changed)
+        # Populate grid with current active tab
+        idx = next((i for i, b in enumerate(panel._tab_buttons) if b.isChecked()), 0)
+        cats = panel._tab_categories
+        self.populate_assets(cats[idx] if idx < len(cats) else None)
 
     def populate_assets(self, category: str = None):
         """Load asset thumbnails into the brush panel grid."""

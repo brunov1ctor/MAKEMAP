@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QToolButton, QInputDialog, QMessageBox
 from PySide6.QtCore import Qt
 
 from src.styles.tokens import Colors
@@ -56,7 +56,21 @@ class AssetSoundManager(QWidget):
         self._total_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9pt; background: transparent; border: none;")
         t_lay.addWidget(self._total_lbl)
         t_lay.addStretch()
+
+        add_btn = QToolButton()
+        add_btn.setText("+")
+        add_btn.setFixedSize(22, 22)
+        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_btn.setToolTip("Nova categoria")
+        add_btn.setStyleSheet(
+            f"QToolButton {{ background: {Colors.ACCENT_DIM}; border: none; "
+            f"color: {Colors.ACCENT}; font-size: 14px; font-weight: bold; border-radius: 4px; }}"
+            f"QToolButton:hover {{ background: rgba(79,195,247,0.3); }}"
+        )
+        add_btn.clicked.connect(self._add_category)
+        t_lay.addWidget(add_btn)
         main.addWidget(title_frame)
+        self._assets_layout = main  # referência para inserir novas seções antes do stretch
 
         # Categories
         categories = [
@@ -70,6 +84,7 @@ class AssetSoundManager(QWidget):
         ]
         for folder_name, icon, label in categories:
             section = CategorySection(_ASSETS_DIR / folder_name, icon, label)
+            section.delete_requested.connect(self._remove_section)
             main.addWidget(section)
 
         # Backgrounds — Images
@@ -98,6 +113,30 @@ class AssetSoundManager(QWidget):
         )
         self._total_lbl.setText(f"({total})")
         main.addStretch()
+
+    def _add_category(self):
+        name, ok = QInputDialog.getText(self, "Nova Categoria", "Nome da categoria:")
+        if not ok or not name.strip():
+            return
+        folder_name = name.strip().lower().replace(" ", "_")
+        folder = _ASSETS_DIR / folder_name
+        if folder.exists():
+            QMessageBox.warning(self, "Já existe", f"A categoria '{name}' já existe.")
+            return
+        folder.mkdir(parents=True, exist_ok=True)
+        section = CategorySection(folder, "📁", name.strip())
+        section.delete_requested.connect(self._remove_section)
+        # insere antes do stretch (last item)
+        idx = self._assets_layout.count() - 1
+        self._assets_layout.insertWidget(idx, section)
+        total = sum(1 for f in _ASSETS_DIR.rglob("*") if f.is_file() and f.suffix.lower() in _SUPPORTED_IMG)
+        self._total_lbl.setText(f"({total})")
+
+    def _remove_section(self, section: CategorySection):
+        self._assets_layout.removeWidget(section)
+        section.deleteLater()
+        total = sum(1 for f in _ASSETS_DIR.rglob("*") if f.is_file() and f.suffix.lower() in _SUPPORTED_IMG)
+        self._total_lbl.setText(f"({total})")
 
     def _section_title(self, text: str) -> QFrame:
         frame = QFrame()

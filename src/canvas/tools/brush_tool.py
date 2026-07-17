@@ -203,9 +203,7 @@ class BrushTool(BaseTool):
 
         # Notify sound engine
         if self._sound_engine:
-            # Use asset name as sound key (e.g. "terrain" from folder name)
-            asset_key = self._get_asset_sound_key(self._active_asset_id)
-            self._sound_engine.on_brush_stroke_start(asset_key)
+            self._sound_engine.on_brush_stroke_start(self._active_asset_id)
 
         # Paint first point — convert scene pos to layer-local coords
         params = self._terrain_params()
