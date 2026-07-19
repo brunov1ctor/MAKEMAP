@@ -10,6 +10,44 @@ from PySide6.QtGui import QColor, QPen, QBrush, QPainter
 from src.styles.tokens import Colors, Typography
 
 
+class _ResizeGrip(QFrame):
+    """Bottom-right corner grip — drag to resize width+height together."""
+
+    drag_delta = Signal(int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(14, 14)
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        self.setStyleSheet("background: transparent; border: none;")
+        self._dragging = False
+        self._last_pos = None
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor(255, 255, 255, 90), 1.5))
+        for offset in (0, 4, 8):
+            p.drawLine(self.width() - 2 - offset, self.height() - 2,
+                       self.width() - 2, self.height() - 2 - offset)
+        p.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._last_pos = event.globalPosition().toPoint()
+
+    def mouseMoveEvent(self, event):
+        if self._dragging:
+            current = event.globalPosition().toPoint()
+            delta = current - self._last_pos
+            self._last_pos = current
+            self.drag_delta.emit(delta.x(), delta.y())
+
+    def mouseReleaseEvent(self, event):
+        self._dragging = False
+
+
 class _MiniMapView(QGraphicsView):
     """Secondary view that renders the scene in miniature."""
 
@@ -47,9 +85,13 @@ class _MiniMapView(QGraphicsView):
 
 
 class MiniMap(QFrame):
-    """Minimapa com viewport indicator e zoom horizontal integrado."""
+    """Minimapa com viewport indicator e zoom horizontal integrado — móvel e redimensionável."""
 
     zoom_changed = Signal(int)  # percent (5-500)
+    moved = Signal()  # emitted once a user drag ends, so listeners can resolve overlaps
+
+    MIN_SIZE = (140, 110)
+    MAX_SIZE = (420, 360)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -57,6 +99,10 @@ class MiniMap(QFrame):
         self._full_size = (170, 140)
         self._collapsed_size = (170, 30)
         self._main_viewport = None
+        self._user_positioned = False
+        self._dragging_move = False
+        self._drag_start_global = None
+        self._drag_start_pos = None
         self.setFixedSize(*self._full_size)
         self.setStyleSheet(f"""
             MiniMap {{
@@ -170,6 +216,60 @@ class MiniMap(QFrame):
         self._updating = False
         self._hidden_items: list = []
 
+        self._resize_grip = _ResizeGrip(self)
+        self._resize_grip.drag_delta.connect(self._on_resize_drag)
+        self._position_grip()
+
+    # ─── Move + Resize ───────────────────────────────────────────────────
+
+    def has_custom_position(self) -> bool:
+        return self._user_positioned
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_grip()
+
+    def _position_grip(self):
+        self._resize_grip.move(
+            self.width() - self._resize_grip.width() - 2,
+            self.height() - self._resize_grip.height() - 2,
+        )
+
+    def _on_resize_drag(self, dx: int, dy: int):
+        if not self._expanded:
+            return
+        w = max(self.MIN_SIZE[0], min(self.MAX_SIZE[0], self.width() + dx))
+        h = max(self.MIN_SIZE[1], min(self.MAX_SIZE[1], self.height() + dy))
+        self._full_size = (w, h)
+        self.setFixedSize(w, h)
+        self._refresh()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging_move = True
+            self._drag_start_global = event.globalPosition().toPoint()
+            self._drag_start_pos = self.pos()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._dragging_move:
+            delta = event.globalPosition().toPoint() - self._drag_start_global
+            self.move(self._drag_start_pos + delta)
+            self._user_positioned = True
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._dragging_move:
+            self._dragging_move = False
+            self.moved.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     # ─── Zoom API ────────────────────────────────────────────────────────
 
     def set_zoom(self, percent: int):
@@ -255,6 +355,7 @@ class MiniMap(QFrame):
         self._expanded = not self._expanded
         self._mini_view.setVisible(self._expanded)
         self._zoom_row.setVisible(self._expanded)
+        self._resize_grip.setVisible(self._expanded)
         if self._expanded:
             self.setFixedSize(*self._full_size)
             self._toggle_btn.setText("\u25bc")

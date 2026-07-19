@@ -28,6 +28,10 @@ class SelectionEngine(QObject):
         self._scene = scene
         self._selected: list[QGraphicsItem] = []
         self._mode = SelectionMode.CLICK
+        # None = no filtering. Otherwise, restricts what box/lasso/click
+        # selection can pick to items tagged with one of these item_type
+        # values — set via the toolbar's layer-filter dropdown.
+        self._allowed_types: set[str] | None = None
 
     # --- Properties ---
 
@@ -95,6 +99,30 @@ class SelectionEngine(QObject):
                 self._selected.append(item)
         self._emit()
 
+    # --- Layer filter ---
+
+    def set_layer_filter(self, allowed_types: set[str] | None):
+        """Restrict box/lasso/click selection to items tagged with one of
+        `allowed_types` (via item.data(0)["item_type"]). None clears the
+        filter (everything selectable again)."""
+        self._allowed_types = allowed_types
+
+    def is_selectable(self, item: QGraphicsItem) -> bool:
+        """Whether `item` can currently be selected — the base Qt
+        selectable flag, plus the active layer filter if any. Items with no
+        item_type tag always pass the filter: it only restricts categories
+        we actually tag (terrain/asset/zone/...), not everything else in
+        the scene (untagged decorations, handles, etc.)."""
+        if not (item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable):
+            return False
+        if self._allowed_types is None:
+            return True
+        data = item.data(0)
+        item_type = data.get("item_type") if isinstance(data, dict) else None
+        if item_type is None:
+            return True
+        return item_type in self._allowed_types
+
     # --- Box Selection ---
 
     def select_by_rect(self, rect: QRectF, add: bool = False):
@@ -105,10 +133,7 @@ class SelectionEngine(QObject):
 
         items = self._scene.items(rect)
         for item in items:
-            if (
-                item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
-                and item not in self._selected
-            ):
+            if self.is_selectable(item) and item not in self._selected:
                 item.setSelected(True)
                 self._selected.append(item)
 
@@ -125,10 +150,7 @@ class SelectionEngine(QObject):
         path = polygon.toList() if hasattr(polygon, "toList") else []
         items = self._scene.items(polygon)
         for item in items:
-            if (
-                item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
-                and item not in self._selected
-            ):
+            if self.is_selectable(item) and item not in self._selected:
                 item.setSelected(True)
                 self._selected.append(item)
 

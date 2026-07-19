@@ -1,20 +1,21 @@
-"""Brush Tool Panel — painel lateral completo estilo Inkarnate para edição de pincéis."""
+"""Brush Tool Panel — configuração de pincel (tamanho, material, transform).
+
+Asset browsing (category tabs + search + grid) lives in AssetBrowserPanel,
+shown alongside this one — see asset_browser.py for why they're split.
+"""
 
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
     QSizePolicy, QScrollArea, QWidget, QToolButton,
-    QCheckBox, QLineEdit, QGraphicsDropShadowEffect,
+    QCheckBox, QGraphicsDropShadowEffect,
 )
-from PySide6.QtCore import Qt, Signal, QRectF, QSize
-from PySide6.QtGui import (
-    QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush, QPixmap, QIcon,
-)
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPainter, QBrush, QPixmap, QColor
 
 from src.styles.tokens import Colors
 from src.layouts.panels.brush.slider import BrushSlider
-from src.layouts.panels.brush.flow_layout import FlowLayout
 from src.layouts.panel_manager import paint_glass_panel
 
 
@@ -27,85 +28,62 @@ _TEXT_SEC = Colors.TEXT_SECONDARY
 _TEXT_MUTED = Colors.TEXT_MUTED
 
 
-# ─── Material Thumbnail ─────────────────────────────────────────────────────
-
-class MaterialThumbnail(QToolButton):
-    """Clickable material thumbnail for the grid."""
-
-    favorited = Signal(str)
-
-    def __init__(self, asset_id: str = "", name: str = "", parent=None):
-        super().__init__(parent)
-        self.asset_id = asset_id
-        self._is_favorite = False
-        self.setFixedSize(52, 58)
-        self.setCheckable(True)
-        self.setToolTip(name)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        self.setIconSize(QSize(36, 36))
-        self.setText(name[:7] if len(name) > 7 else name)
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self._on_right_click)
-        self._update_style()
-
-    def set_favorite(self, fav: bool):
-        self._is_favorite = fav
-        if fav:
-            glow = QGraphicsDropShadowEffect(self)
-            glow.setBlurRadius(12)
-            glow.setOffset(0, 0)
-            glow.setColor(QColor(_ACCENT))
-            self.setGraphicsEffect(glow)
-        else:
-            self.setGraphicsEffect(None)
-        self._update_style()
-
-    def _update_style(self):
-        border = _ACCENT if self._is_favorite else _BORDER
-        self.setStyleSheet(f"""
-            QToolButton {{
-                border: 2px solid {border}; border-radius: 4px;
-                background: {_BG_SECTION}; padding: 2px;
-                font-size: 10px; color: {_TEXT_MUTED};
-            }}
-            QToolButton:hover {{ border-color: {_TEXT_SEC}; }}
-            QToolButton:checked {{
-                border-color: {_ACCENT}; background: {_ACCENT_DIM};
-            }}
-        """)
-
-    def _on_right_click(self, pos):
-        self.favorited.emit(self.asset_id)
-
-    def set_pixmap(self, pixmap: QPixmap):
-        scaled = pixmap.scaled(
-            QSize(36, 36),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.setIcon(QIcon(scaled))
-
-
 # ─── Texture Preview ────────────────────────────────────────────────────────
 
 class TexturePreviewWidget(QFrame):
-    """Large texture preview reflecting current brush settings."""
+    """Large texture preview reflecting current brush settings.
+
+    Click opens the Assets browser panel — this is the one entry point for
+    it now (selecting the Brush tool no longer opens it automatically).
+    """
+
+    clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(60)
-        self.setStyleSheet(f"""
-            QFrame {{
-                background: {_BG_SECTION};
-                border: 1px solid {_BORDER};
-                border-radius: 6px;
-            }}
-        """)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Clique para escolher um asset")
+        self._hovered = False
+        self._apply_frame_style()
         self._pixmap: QPixmap | None = None
         self._scale = 1.0
         self._rotation = 0.0
         self._opacity = 1.0
+
+    def _apply_frame_style(self):
+        border = _ACCENT if self._hovered else _BORDER
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {_BG_SECTION};
+                border: 1px solid {border};
+                border-radius: 6px;
+            }}
+        """)
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self._apply_frame_style()
+        # Only one widget, generously spaced from its siblings — safe to use
+        # a real glow here (unlike the tightly-packed asset grid, where the
+        # same effect bled onto neighboring thumbnails).
+        glow = QGraphicsDropShadowEffect(self)
+        glow.setBlurRadius(20)
+        glow.setOffset(0, 0)
+        glow.setColor(QColor(_ACCENT))
+        self.setGraphicsEffect(glow)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self._apply_frame_style()
+        self.setGraphicsEffect(None)
+        super().leaveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
 
     def set_texture(self, pixmap: QPixmap | None):
         self._pixmap = pixmap
@@ -156,14 +134,12 @@ def _separator():
 # ─── Main Panel ─────────────────────────────────────────────────────────────
 
 class BrushToolPanel(QFrame):
-    """Complete brush tool panel — Inkarnate-style."""
+    """Brush config panel — size/opacity/style/material/transform."""
 
     PANEL_WIDTH = 300
 
-    asset_selected = Signal(str)
-    favorite_toggled = Signal(str)
     mode_changed = Signal(str)
-    tab_changed = Signal(str)
+    assets_requested = Signal()  # texture preview clicked — open the Assets browser
     close_requested = Signal()
 
     def __init__(self, parent=None):
@@ -176,7 +152,7 @@ class BrushToolPanel(QFrame):
         # layout raiz do QFrame — tudo dentro dele recebe o fundo glass via paintEvent
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setSpacing(6)
 
         # ── parte superior com scroll (sliders) ──
         self._top_scroll = QScrollArea()
@@ -184,7 +160,7 @@ class BrushToolPanel(QFrame):
         self._top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._top_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._top_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._top_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._top_scroll.setStyleSheet(f"""
             QScrollArea {{ background: transparent; border: none; }}
             QScrollArea > QWidget > QWidget {{ background: transparent; }}
@@ -200,90 +176,17 @@ class BrushToolPanel(QFrame):
         self._top_scroll.setWidget(top_w)
 
         self._build_header()
+        self._build_terrain_indicator()
         self._layout.addWidget(_separator())
-        self._build_settings_section()
+        self._build_sliders_grid()
         self._layout.addWidget(_separator())
         self._build_material_section()
         self._layout.addWidget(_separator())
         self._build_transform_section()
+        self._layout.addStretch()
 
-        root.addWidget(self._top_scroll)
-        root.addWidget(_separator())
+        root.addWidget(self._top_scroll, 1)
 
-        # ── abas ──
-        self._tab_container = QWidget()
-        self._tab_container.setStyleSheet("background: transparent;")
-        self._tab_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._tab_flow = FlowLayout(self._tab_container, spacing=2)
-        self._tab_flow.setContentsMargins(10, 4, 10, 4)
-
-        self._tab_categories = ["terrain", "trees", "rocks", "mountains", "buildings", "effects", "misc"]
-        self._tab_labels = ["🌍 Terrain", "🌲 Trees", "🪨 Rocks", "⛰ Mountains", "🏠 Buildings", "✨ Effects", "📦 Misc", "★"]
-        self._tab_buttons: list[QToolButton] = []
-
-        for i, label in enumerate(self._tab_labels):
-            btn = QToolButton()
-            btn.setText(label)
-            btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(f"""
-                QToolButton {{
-                    background: transparent; color: {_TEXT_SEC};
-                    padding: 3px 6px; font-size: 9px; border: none;
-                    border-bottom: 2px solid transparent;
-                }}
-                QToolButton:checked {{
-                    color: {_ACCENT}; border-bottom-color: {_ACCENT};
-                }}
-                QToolButton:hover {{ color: {_TEXT}; }}
-            """)
-            btn.clicked.connect(lambda checked, idx=i: self._on_tab_clicked(idx))
-            self._tab_flow.addWidget(btn)
-            self._tab_buttons.append(btn)
-
-        if self._tab_buttons:
-            self._tab_buttons[0].setChecked(True)
-        root.addWidget(self._tab_container)
-
-        # ── busca ──
-        self._search = QLineEdit()
-        self._search.setPlaceholderText("🔍 Buscar material...")
-        self._search.setFixedHeight(26)
-        self._search.setContentsMargins(10, 0, 10, 0)
-        self._search.setStyleSheet(f"""
-            QLineEdit {{
-                background: {_BG_SECTION}; color: {_TEXT};
-                border: 1px solid {_BORDER}; border-radius: 4px;
-                padding: 2px 8px; font-size: 10px;
-                margin: 0 10px;
-            }}
-            QLineEdit:focus {{ border-color: {_ACCENT}; }}
-        """)
-        self._search.textChanged.connect(self._on_search)
-        root.addWidget(self._search)
-
-        # ── grid de assets ──
-        self._grid_scroll = QScrollArea()
-        self._grid_scroll.setWidgetResizable(True)
-        self._grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._grid_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._grid_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._grid_scroll.setStyleSheet(f"""
-            QScrollArea {{ background: transparent; border: none; }}
-            QScrollArea > QWidget > QWidget {{ background: transparent; }}
-            QScrollBar:vertical {{ width: 3px; background: transparent; }}
-            QScrollBar::handle:vertical {{ background: {_TEXT_MUTED}; border-radius: 1px; min-height: 16px; }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
-        """)
-        self._grid_container = QWidget()
-        self._grid_container.setStyleSheet("background: transparent;")
-        self._grid_layout = FlowLayout(self._grid_container, spacing=4)
-        self._grid_layout.setContentsMargins(4, 4, 4, 4)
-        self._grid_scroll.setWidget(self._grid_container)
-        root.addWidget(self._grid_scroll, 1)
-
-        self._asset_buttons: list[MaterialThumbnail] = []
         self._current_mode = "paint"
 
     def _build_header(self):
@@ -318,48 +221,96 @@ class BrushToolPanel(QFrame):
         header.addWidget(close_btn)
         self._layout.addLayout(header)
 
-    def _build_settings_section(self):
-        section = QVBoxLayout()
-        section.setContentsMargins(0, 4, 0, 4)
-        section.setSpacing(2)
+    def _build_terrain_indicator(self):
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 2)
+        row.setSpacing(4)
+
+        icon = QLabel("🗺")
+        icon.setStyleSheet("font-size: 10px; background: transparent; border: none;")
+        row.addWidget(icon)
+
+        self._terrain_label = QLabel("Nenhum terreno ativo")
+        self._terrain_label.setStyleSheet(f"""
+            color: {_TEXT_SEC}; font-size: 10px;
+            background: transparent; border: none;
+        """)
+        row.addWidget(self._terrain_label)
+        row.addStretch()
+
+        self._layout.addLayout(row)
+
+    def _build_sliders_grid(self):
+        # One column, not two — a 2-column grid in a 300px-wide panel doesn't
+        # leave enough room for the icon+label+value row of a BrushSlider,
+        # and since the panel's horizontal scrollbar is disabled, the excess
+        # width was silently clipped instead of scrolling into view. Each
+        # slider gets the full row instead.
+        col = QVBoxLayout()
+        col.setContentsMargins(0, 4, 0, 4)
+        col.setSpacing(2)
 
         self.size_slider = BrushSlider("Brush Size", "🖌", 1, 1000, 100, "")
         self.opacity_slider = BrushSlider("Opacity", "💧", 0, 100, 100, "%")
         self.softness_slider = BrushSlider("Softness", "◎", 0, 100, 50, "%")
+        self.scale_slider = BrushSlider("Texture Scale", "🔲", 10, 500, 100, "%")
+        self.rotation_slider = BrushSlider("Rotation", "↻", 0, 360, 0, "°")
+        self.density_slider = BrushSlider("Density", "▣", 1, 20, 3, "")
+        self.roughness_slider = BrushSlider("Roughness", "〰", 0, 100, 0, "%")
+        self.roughness_slider.setToolTip(
+            "Deixa a borda do pincel irregular. Sem efeito com Snap ativado — "
+            "o preenchimento de célula não tem borda pra deixar irregular."
+        )
+        self.smoothness_slider = BrushSlider("Smoothness", "🫧", 0, 100, 0, "%")
+        self.smoothness_slider.setToolTip(
+            "Transição suave (fade) ao trocar de asset/material no meio da pintura."
+        )
 
-        section.addWidget(self.size_slider)
-        section.addWidget(self.opacity_slider)
-        section.addWidget(self.softness_slider)
-        self._layout.addLayout(section)
+        sliders = [
+            self.size_slider, self.opacity_slider,
+            self.softness_slider, self.scale_slider,
+            self.rotation_slider, self.density_slider,
+            self.roughness_slider, self.smoothness_slider,
+        ]
+        for slider in sliders:
+            col.addWidget(slider)
+
+        self._layout.addLayout(col)
 
     def _build_material_section(self):
         section = QVBoxLayout()
         section.setContentsMargins(0, 4, 0, 4)
         section.setSpacing(4)
 
-        mat_row = QHBoxLayout()
-        mat_row.setSpacing(4)
-
-        self._material_label = QLabel("Green Grass")
+        # Material name gets its own row, elided — the 3 mode buttons below
+        # (109+99+109px unelided) were already wider than the whole 300px
+        # panel on their own; putting a name next to them made it worse. A
+        # long asset name now just truncates with "…" instead of pushing
+        # the buttons off the edge (panel's horizontal scrollbar is off, so
+        # overflow was silently invisible, not scrollable).
+        self._material_label = QLabel("")
         self._material_label.setStyleSheet(f"""
             color: {_TEXT}; font-size: 11px; font-weight: bold;
             background: transparent; border: none;
         """)
-        mat_row.addWidget(self._material_label)
-        mat_row.addStretch()
+        self._material_label.setMinimumWidth(0)
+        section.addWidget(self._material_label)
+
+        mat_row = QHBoxLayout()
+        mat_row.setSpacing(4)
 
         mode_style_active = f"""
             QToolButton {{
-                border: none; border-radius: 4px; font-size: 10px;
+                border: none; border-radius: 4px; font-size: 9px;
                 color: {_ACCENT}; background: {_ACCENT_DIM};
-                padding: 3px 8px;
+                padding: 3px 4px;
             }}
         """
         mode_style = f"""
             QToolButton {{
-                border: none; border-radius: 4px; font-size: 10px;
+                border: none; border-radius: 4px; font-size: 9px;
                 color: {_TEXT_SEC}; background: transparent;
-                padding: 3px 8px;
+                padding: 3px 4px;
             }}
             QToolButton:hover {{ background: #333; color: {_TEXT}; }}
         """
@@ -368,6 +319,7 @@ class BrushToolPanel(QFrame):
         self._paint_btn.setText("🖌 Paint")
         self._paint_btn.setStyleSheet(mode_style_active)
         self._paint_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._paint_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._paint_btn.clicked.connect(lambda: self._set_mode("paint"))
         mat_row.addWidget(self._paint_btn)
 
@@ -375,6 +327,7 @@ class BrushToolPanel(QFrame):
         self._mask_btn.setText("◑ Mask")
         self._mask_btn.setStyleSheet(mode_style)
         self._mask_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._mask_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._mask_btn.clicked.connect(lambda: self._set_mode("mask"))
         mat_row.addWidget(self._mask_btn)
 
@@ -382,12 +335,14 @@ class BrushToolPanel(QFrame):
         self._erase_btn.setText("⌫ Erase")
         self._erase_btn.setStyleSheet(mode_style)
         self._erase_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._erase_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._erase_btn.clicked.connect(lambda: self._set_mode("erase"))
         mat_row.addWidget(self._erase_btn)
 
         section.addLayout(mat_row)
 
         self.texture_preview = TexturePreviewWidget()
+        self.texture_preview.clicked.connect(self.assets_requested.emit)
         section.addWidget(self.texture_preview)
         self._layout.addLayout(section)
 
@@ -418,12 +373,6 @@ class BrushToolPanel(QFrame):
         section.setContentsMargins(0, 4, 0, 4)
         section.setSpacing(2)
 
-        self.scale_slider = BrushSlider("Texture Scale", "🔲", 10, 500, 100, "%")
-        self.rotation_slider = BrushSlider("Rotation", "↻", 0, 360, 0, "°")
-
-        section.addWidget(self.scale_slider)
-        section.addWidget(self.rotation_slider)
-
         self.random_rotation_check = QCheckBox("Random Rotation")
         self.random_rotation_check.setStyleSheet(f"""
             QCheckBox {{ color: {_TEXT_SEC}; font-size: 10px; background: transparent; border: none; }}
@@ -437,59 +386,24 @@ class BrushToolPanel(QFrame):
         """)
         self.random_rotation_check.setChecked(True)
         section.addWidget(self.random_rotation_check)
-
-        self.density_slider = BrushSlider("Density", "▣", 1, 20, 3, "")
-        section.addWidget(self.density_slider)
         self._layout.addLayout(section)
 
     # ─── Public API ──────────────────────────────────────────────────────
 
-    def set_assets(self, assets: list[dict]):
-        """Populate material grid. Each dict: {id, name, pixmap, favorite}."""
-        for btn in self._asset_buttons:
-            btn.deleteLater()
-        self._asset_buttons.clear()
-
-        for asset in assets:
-            btn = MaterialThumbnail(asset.get("id", ""), asset.get("name", ""))
-            if "pixmap" in asset and asset["pixmap"]:
-                btn.set_pixmap(asset["pixmap"])
-            if asset.get("favorite"):
-                btn.set_favorite(True)
-            btn.clicked.connect(lambda checked, a=asset: self._on_asset_clicked(a))
-            btn.favorited.connect(self.favorite_toggled.emit)
-            self._grid_layout.addWidget(btn)
-            self._asset_buttons.append(btn)
-
     def set_material_name(self, name: str):
-        self._material_label.setText(name)
+        # Elide instead of letting a long asset name push the panel wider
+        # than PANEL_WIDTH (the mode buttons row below is already tight).
+        available = self.PANEL_WIDTH - 20  # minus the panel's own left/right margins
+        metrics = self._material_label.fontMetrics()
+        elided = metrics.elidedText(name, Qt.TextElideMode.ElideRight, available)
+        self._material_label.setText(elided)
+        self._material_label.setToolTip(name)
+
+    def set_active_terrain_name(self, name: str | None):
+        self._terrain_label.setText(f"Pintando em: {name}" if name else "Nenhum terreno ativo")
 
     def set_texture_preview(self, pixmap: QPixmap | None):
         self.texture_preview.set_texture(pixmap)
-
-    def _on_search(self, text: str):
-        query = text.strip().lower()
-        for btn in self._asset_buttons:
-            btn.setVisible(not query or query in btn.toolTip().lower())
-        self._grid_container.adjustSize()
-        self._grid_layout.update()
-
-    def _on_asset_clicked(self, asset: dict):
-        for btn in self._asset_buttons:
-            if btn.asset_id != asset.get("id", ""):
-                btn.setChecked(False)
-        self._material_label.setText(asset.get("name", ""))
-        self.asset_selected.emit(asset.get("id", ""))
-
-    def _on_tab_clicked(self, index: int):
-        for i, btn in enumerate(self._tab_buttons):
-            btn.setChecked(i == index)
-        self._search.clear()
-        if index < len(self._tab_categories):
-            category = self._tab_categories[index]
-        else:
-            category = "__favorites__"
-        self.tab_changed.emit(category)
 
     def paintEvent(self, event):
         paint_glass_panel(self)

@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
 
 from src.styles.tokens import Colors, Typography
-from src.components.blockchain import Block, Pipeline, PIPELINE_THEMES
+from src.components.node_graph import Block, Pipeline, PIPELINE_THEMES
 
 
 class _ResizeHandle(QFrame):
@@ -49,7 +49,7 @@ class ProgressionBar(QFrame):
     """Painel blockchain — blocos arrastáveis, redimensionável por arraste."""
 
     size_changed = Signal()
-    MIN_HEIGHT = 80
+    MIN_HEIGHT = 6  # matches _ResizeHandle height — collapses to just the drag handle
     MAX_HEIGHT = 500
 
     def __init__(self, parent=None):

@@ -32,20 +32,20 @@ class FlowLayout(QLayout):
         return True
 
     def heightForWidth(self, width):
-        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+        margins = self.contentsMargins()
+        content_w = max(0, width - margins.left() - margins.right())
+        h = self._do_layout(QRect(0, 0, content_w, 0), test_only=True)
+        return h + margins.top() + margins.bottom()
 
     def setGeometry(self, rect):
         super().setGeometry(rect)
-        self._do_layout(rect)
+        self._do_layout(rect.marginsRemoved(self.contentsMargins()))
 
     def sizeHint(self):
-        w = self.geometry().width()
-        if not w and self.parent():
-            w = self.parent().width()
-        w = w or 280
+        w = self.geometry().width() or 280
         margins = self.contentsMargins()
-        w -= margins.left() + margins.right()
-        h = self._do_layout(QRect(0, 0, w, 0), test_only=True)
+        content_w = max(0, w - margins.left() - margins.right())
+        h = self._do_layout(QRect(0, 0, content_w, 0), test_only=True)
         return QSize(w, h + margins.top() + margins.bottom())
 
     def minimumSize(self):

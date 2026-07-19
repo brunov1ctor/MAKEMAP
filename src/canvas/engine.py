@@ -18,11 +18,14 @@ from src.engines.map.brush import BrushEngine
 from src.canvas.input_manager import InputManager
 from src.engines.core.selection import SelectionEngine
 from src.engines.core.transform import TransformEngine
+from src.canvas.selection_highlight import SelectionHighlight
 from src.engines.core.clipboard import ClipboardEngine
 from src.engines.core.history import HistoryEngine
 from src.engines.procedural import ProceduralEngine, GeneratorParams, GeneratorType
 from src.engines.audio import SoundEngine
-from PySide6.QtWidgets import QGraphicsPixmapItem
+from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsPathItem, QGraphicsSimpleTextItem
+from PySide6.QtGui import QPainterPath, QBrush, QPen, QColor, QPolygonF
+from src.canvas.item_utils import suppress_selection_decoration
 
 
 class CanvasEngine(QWidget):
@@ -33,6 +36,7 @@ class CanvasEngine(QWidget):
     tool_changed = Signal(str)
     selection_changed = Signal(list)  # list of selected IDs
     grid_toggled = Signal(bool)  # grid visible state
+    zone_region_finalized = Signal(QPolygonF, str)  # (polygon, category_key) — RegionMediator owns id/card creation
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -56,6 +60,7 @@ class CanvasEngine(QWidget):
 
         # Transform Engine
         self.transform = TransformEngine(self.viewport.scene(), self)
+        self.selection_highlight = SelectionHighlight(self.viewport.scene())
         self.selection.selection_changed.connect(self._on_selection_changed)
 
         # Clipboard Engine
@@ -70,6 +75,15 @@ class CanvasEngine(QWidget):
         # Asset engine (injected later via set_asset_engine)
         self._asset_engine = None
 
+        # Biome preset for the next finalized region — set via the toolbar's
+        # Região/Bioma dropdown ("" = plain Região, default generation).
+        self._region_preset: str = ""
+        # Zone type for the next finalized region — set via the Região
+        # panel's "+ Novo" per category ("" = not zone-painting). Mutually
+        # exclusive with _region_preset. The id→visual mapping is owned by
+        # RegionMediator (mirrors TerrainMediator._boundaries), not here.
+        self._zone_type: str = ""
+
         # Tools
         self.tool_manager = ToolManager(self.viewport, self)
         self._register_default_tools()
@@ -81,6 +95,7 @@ class CanvasEngine(QWidget):
         # Sound Engine
         self.sound_engine = SoundEngine(self)
         self._brush_tool.set_sound_engine(self.sound_engine)
+        self._brush_tool.set_snap_manager(self.snap)
         self.sound_engine.start()
 
         # Connect signals
@@ -134,17 +149,89 @@ class CanvasEngine(QWidget):
         self._asset_engine = asset_engine
         self._brush_tool.set_asset_engine(asset_engine)
 
+    def set_region_preset(self, preset_key: str):
+        """Biome preset (see engines/map/presets.py) to populate the next
+        Região polygon with — picked via the toolbar's Bioma submenu.
+        Empty string reverts to the plain default generator."""
+        self._region_preset = preset_key or ""
+
+    def set_zone_type(self, zone_key: str):
+        """Zone type (see engines/map/zones.py) to paint the next Região
+        polygon as — armed by the Região panel's "+ Novo" per category.
+        Empty string reverts to the plain default generator (or biome)."""
+        self._zone_type = zone_key or ""
+
+    def paint_zone(self, polygon: QPolygonF, zone_key: str, region_id: str,
+                    name: str, stars: int, color: QColor):
+        """Fills the finalized polygon with a flat translucent zone color —
+        no procedural objects, just an area tag (Residencial/Comercial/...)
+        with its name and a star-rating badge drawn on top, same idea as
+        Cities Skylines' zoning paint. Returns a ZoneVisual the caller
+        (RegionMediator) tracks by region_id — this method itself holds no
+        id→item bookkeeping."""
+        from src.engines.core.history import PlaceObjectCommand
+        from src.canvas.zone_visual import ZoneVisual, star_text
+
+        path = QPainterPath()
+        path.addPolygon(polygon)
+        path.closeSubpath()
+
+        item = QGraphicsPathItem(path)
+        item.setBrush(QBrush(color))
+        item.setPen(QPen(color.darker(150), 1.5))
+        # Above painted terrain (z=1) but below stamped/generated assets
+        # (z=10+) — a ground-level tint, not an object sitting on top.
+        item.setZValue(5)
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setData(0, {"item_type": "zone", "zone_type": zone_key, "region_id": region_id})
+        suppress_selection_decoration(item)
+
+        # Children of a QGraphicsItem paint after (on top of) it regardless
+        # of zValue, so no extra z-offset is needed for these to sit above
+        # the translucent fill.
+        name_item = QGraphicsSimpleTextItem(name, item)
+        font = name_item.font()
+        font.setBold(True)
+        font.setPointSize(10)
+        name_item.setFont(font)
+        name_item.setBrush(QBrush(QColor("#ffffff")))
+
+        stars_item = QGraphicsSimpleTextItem(star_text(stars), item)
+        stars_item.setBrush(QBrush(QColor(255, 210, 60)))
+
+        visual = ZoneVisual(item, name_item, stars_item)
+        visual.recenter(path.boundingRect().center())
+
+        self.viewport.scene().addItem(item)
+        if self.history:
+            self.history.push(PlaceObjectCommand(item))
+        return visual
+
     def _on_region_finalized(self, polygon):
         """Renderiza geração procedural dentro do polígono finalizado."""
+        if self._zone_type:
+            self.zone_region_finalized.emit(polygon, self._zone_type)
+            return
+
         if not self._asset_engine:
             return
 
+        if self._region_preset:
+            from src.engines.map.presets import PRESETS
+            preset = PRESETS.get(self._region_preset)
+            if preset:
+                from src.engines.map.generator import MapGenerator
+                from src.engines.procedural import GenerationResult
+                items = MapGenerator().generate_region(polygon, preset, seed=0)
+                self._render_generation_result(GenerationResult(items=items))
+                return
+
+        # Plain "Região" mode (no biome preset picked) — the original default.
         params = GeneratorParams(
             area=polygon.boundingRect(),
             polygon=polygon,
             seed=0,
         )
-        # Usa o gerador de floresta como padrão (configurável depois)
         result = self.procedural.generate(GeneratorType.FOREST, params)
         self._render_generation_result(result)
 
@@ -169,15 +256,32 @@ class CanvasEngine(QWidget):
             item.setZValue(10 + gen_item.z_offset)
             item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
             item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+            item.setData(0, {"item_type": "asset"})
+            suppress_selection_decoration(item)
             self.viewport.scene().addItem(item)
 
     def _on_selection_changed(self, ids: list):
-        """Show/hide transform handles based on selection."""
+        """Show/hide transform handles based on selection.
+
+        Terrain layer items span their entire raster canvas, not just the
+        painted area, so a bounding-box rectangle around one is misleading —
+        those get a mask-contour perimeter highlight instead of move/resize
+        handles.
+        """
         selected = self.viewport.scene().selectedItems()
-        if selected:
-            self.transform.show_handles(selected)
+        terrain_by_item = {layer.item: layer for layer in self._brush_tool._terrain_layers.values()}
+        terrain_selected = [terrain_by_item[it] for it in selected if it in terrain_by_item]
+        other_selected = [it for it in selected if it not in terrain_by_item]
+
+        if other_selected:
+            self.transform.show_handles(other_selected)
         else:
             self.transform.hide_handles()
+
+        if terrain_selected:
+            self.selection_highlight.show(terrain_selected)
+        else:
+            self.selection_highlight.hide()
 
     def _register_global_shortcuts(self):
         self.input_manager.register_global("G", self._toggle_grid)
@@ -195,14 +299,39 @@ class CanvasEngine(QWidget):
 
     def _update_grid(self):
         view_rect = self.viewport.mapToScene(self.viewport.viewport().rect()).boundingRect()
-        # Clip grid to map bounds if set
+        clip_path = None
+        # Clip grid to map bounds if set — bounded terrains' grid should
+        # conform to their exact boundary shape(s), not just a rectangle.
         if self._map_bounds:
             from PySide6.QtCore import QRectF
-            hw = self._map_bounds["width"] / 2
-            hh = self._map_bounds["height"] / 2
-            bounds = QRectF(-hw, -hh, self._map_bounds["width"], self._map_bounds["height"])
+            from PySide6.QtGui import QPainterPath
+            # Union across every bounded terrain currently shown — not just
+            # the selected one — so the grid covers all of them at once and
+            # actually grows as terrains are added, instead of staying
+            # clipped to whichever terrain happened to be selected last.
+            boundaries = [
+                b for b in self._brush_tool._all_boundaries
+                if b is not None and b.visible and b._item is not None
+            ]
+            if boundaries:
+                union_path = QPainterPath()
+                bounds = None
+                for b in boundaries:
+                    # Boundary can be anywhere in the scene (positioned at
+                    # view center when created, or dragged since) — use its
+                    # real scene rect, not one centered on the scene origin.
+                    scene_path = b._item.mapToScene(b._item.path())
+                    union_path = union_path.united(scene_path)
+                    rect = scene_path.boundingRect()
+                    bounds = rect if bounds is None else bounds.united(rect)
+                clip_path = union_path
+            else:
+                hw = self._map_bounds["width"] / 2
+                hh = self._map_bounds["height"] / 2
+                bounds = QRectF(-hw, -hh, self._map_bounds["width"], self._map_bounds["height"])
             view_rect = view_rect.intersected(bounds)
-        self.grid.update(view_rect)
+
+        self.grid.update(view_rect, self.viewport.zoom_level, clip_path)
 
     # --- Event routing ---
 
@@ -404,10 +533,18 @@ class CanvasEngine(QWidget):
 
         for item in visible_items:
             if isinstance(item, QGraphicsPixmapItem):
-                # data(0) = asset type key (e.g. "tree", "torch", "river")
-                key = item.data(0) or ""
+                # data(0) is a metadata dict on tagged items (item_type —
+                # see SelectionEngine/HistoryEngine's convention) but was
+                # historically documented as a plain sound-category string;
+                # nothing ever actually set it as a string, so handle both
+                # instead of assuming one and crashing on the other.
+                data0 = item.data(0)
+                if isinstance(data0, dict):
+                    key = data0.get("item_type", "")
+                else:
+                    key = data0 or ""
                 if key:
-                    object_keys.add(key.lower())
+                    object_keys.add(str(key).lower())
                 # data(1) = biome tag (e.g. "desert", "forest")
                 biome = item.data(1) or ""
                 if biome:

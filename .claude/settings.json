@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-Process | Where-Object { $_.ProcessName -match 'python' } | Select-Object Id, ProcessName, Path, StartTime, MainWindowTitle | Format-Table -AutoSize)",
+      "Bash(powershell -Command \"Get-Process -Name py,python* -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime,MainWindowTitle | Format-Table -AutoSize\")",
+      "Bash(tasklist //FI \"IMAGENAME eq python*\")",
+      "Bash(nohup py -3 main.py)",
+      "Bash(disown)",
+      "Bash(QT_QPA_PLATFORM=offscreen timeout 40 py -3 \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\d2bdff50-ff3c-47d7-93aa-d0e03ad65b2b\\\\scratchpad\\\\test_asset_style_feature.py\")",
+      "Bash(py -3 -m py_compile src/layouts/panels/brush/panel.py src/layouts/panels/brush/asset_browser.py src/layouts/mediator.py src/layouts/main_layout.py src/layouts/panels/toolbar.py)",
+      "Bash(py -3 -m py_compile src/layouts/panels/select_panel.py)",
+      "Bash(py -3 -m py_compile src/canvas/viewport.py)",
+      "Bash(QT_QPA_PLATFORM=offscreen py -3 -c ' *)"
+    ]
+  }
+}

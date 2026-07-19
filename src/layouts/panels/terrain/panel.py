@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
 
 from src.styles.tokens import Colors
-from src.layouts.panels.brush.slider import BrushSlider
+from src.layouts.panels.stepper import NumberStepper
 from src.layouts.panels.terrain.terrain_card import TerrainCard
 from src.layouts.panels.terrain.background import BackgroundSection
 from src.layouts.panel_manager import paint_glass_panel
@@ -23,6 +23,9 @@ class TerrainSettingsPanel(QFrame):
     """Side panel for map terrain/boundary configuration."""
 
     PANEL_WIDTH = 300
+    DEFAULT_SHAPE = "rectangle"
+    DEFAULT_WIDTH = 4096
+    DEFAULT_HEIGHT = 4096
 
     # Signals
     dimensions_changed = Signal(int, int)
@@ -146,15 +149,52 @@ class TerrainSettingsPanel(QFrame):
         bounds_layout.setContentsMargins(0, 0, 0, 0)
         bounds_layout.setSpacing(6)
 
+        dims_header = QHBoxLayout()
+        dims_header.setSpacing(6)
         dims_label = QLabel("Dimensões")
         dims_label.setStyleSheet(f"""
             color: {Colors.TEXT_SECONDARY}; font-size: 10px; font-weight: bold;
             background: transparent; border: none;
         """)
-        bounds_layout.addWidget(dims_label)
+        dims_header.addWidget(dims_label)
+        dims_header.addStretch()
 
-        self.width_slider = BrushSlider("Largura", "↔", 512, 16384, 4096, "px")
-        self.height_slider = BrushSlider("Altura", "↕", 512, 16384, 4096, "px")
+        # "Novo" replaces the old lone "+" — terrain creation (name + size +
+        # shape) now happens together here instead of split across sections.
+        new_btn = QToolButton()
+        new_btn.setText("+ Novo")
+        new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        new_btn.setStyleSheet(f"""
+            QToolButton {{
+                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;
+                font-size: 10px; font-weight: bold; padding: 3px 8px;
+                color: {Colors.ACCENT}; background: rgba(79,195,247,0.08);
+            }}
+            QToolButton:hover {{ background: rgba(79,195,247,0.2); }}
+        """)
+        new_btn.clicked.connect(self._on_add_terrain)
+        dims_header.addWidget(new_btn)
+        bounds_layout.addLayout(dims_header)
+
+        self._name_input = QLineEdit()
+        self._name_input.setPlaceholderText("Nome do terreno...")
+        self._name_input.setFixedHeight(26)
+        self._name_input.setStyleSheet(f"""
+            QLineEdit {{
+                background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 4px; color: {Colors.TEXT_PRIMARY}; font-size: 11px;
+                padding: 2px 6px;
+            }}
+            QLineEdit:focus {{ border-color: {Colors.ACCENT}; }}
+        """)
+        self._name_input.returnPressed.connect(self._on_add_terrain)
+        bounds_layout.addWidget(self._name_input)
+
+        # Meters, not pixels — 1 scene unit == 1 meter (see scale_bar.py) —
+        # and a stepper reads exact values better than dragging a slider
+        # across a 512-16384 range.
+        self.width_slider = NumberStepper("Largura", "↔", 16, 16384, self.DEFAULT_WIDTH, step=64, decimals=1, suffix="m")
+        self.height_slider = NumberStepper("Altura", "↕", 16, 16384, self.DEFAULT_HEIGHT, step=64, decimals=1, suffix="m")
         bounds_layout.addWidget(self.width_slider)
         bounds_layout.addWidget(self.height_slider)
         self.width_slider.value_changed.connect(self._on_dims_changed)
@@ -196,8 +236,8 @@ class TerrainSettingsPanel(QFrame):
 
         bounds_layout.addLayout(shape_row1)
         bounds_layout.addLayout(shape_row2)
-        self._shape_buttons["rectangle"].setChecked(True)
-        self._current_shape = "rectangle"
+        self._shape_buttons[self.DEFAULT_SHAPE].setChecked(True)
+        self._current_shape = self.DEFAULT_SHAPE
 
         layout.addWidget(self._bounds_widget)
         self._bounds_widget.hide()
@@ -222,37 +262,10 @@ class TerrainSettingsPanel(QFrame):
         """)
         crud_header.addWidget(crud_label)
         crud_header.addStretch()
-
-        add_btn = QToolButton()
-        add_btn.setText("+")
-        add_btn.setFixedSize(22, 22)
-        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        add_btn.setStyleSheet(f"""
-            QToolButton {{
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;
-                font-size: 14px; font-weight: bold;
-                color: {Colors.ACCENT}; background: rgba(79,195,247,0.08);
-            }}
-            QToolButton:hover {{ background: rgba(79,195,247,0.2); }}
-        """)
-        add_btn.clicked.connect(self._on_add_terrain)
-        crud_header.addWidget(add_btn)
         crud_layout.addLayout(crud_header)
 
-        self._name_input = QLineEdit()
-        self._name_input.setPlaceholderText("Nome do terreno...")
-        self._name_input.setFixedHeight(26)
-        self._name_input.setStyleSheet(f"""
-            QLineEdit {{
-                background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 4px; color: {Colors.TEXT_PRIMARY}; font-size: 11px;
-                padding: 2px 6px;
-            }}
-            QLineEdit:focus {{ border-color: {Colors.ACCENT}; }}
-        """)
-        self._name_input.returnPressed.connect(self._on_add_terrain)
-        crud_layout.addWidget(self._name_input)
-
+        # Creation (name + "Novo") now lives up in Dimensões — this section
+        # is just the resulting list.
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -366,9 +379,15 @@ class TerrainSettingsPanel(QFrame):
         self._color_idx += 1
         self._add_card(terrain_id, name, color)
         self._name_input.clear()
+        # A new terrain must not silently inherit whatever shape/size was
+        # last customized for the previously selected terrain — reset
+        # before terrain_added fires, since on_added reads these widgets.
+        self._reset_to_defaults()
         self.terrain_added.emit(terrain_id, name)
-        if not self._selected_id:
-            self._on_card_selected(terrain_id)
+        # The new terrain becomes the live-edit target — otherwise the
+        # previously-selected terrain stays selected and subsequent
+        # shape/dimension tweaks (meant for the new one) mutate it instead.
+        self._on_card_selected(terrain_id)
 
     def _add_card(self, terrain_id: str, name: str, color: QColor):
         card = TerrainCard(terrain_id, name, color)
@@ -444,19 +463,42 @@ class TerrainSettingsPanel(QFrame):
         h = int(self.height_slider.value)
         if self._current_shape in ("square", "circle"):
             sender = self.sender()
-            if sender == self.width_slider._slider:
-                self.height_slider.set_value(w)
+            if sender is self.width_slider:
+                self.height_slider.set_value(w, emit=False)
                 h = w
             else:
-                self.width_slider.set_value(h)
+                self.width_slider.set_value(h, emit=False)
                 w = h
         self.dimensions_changed.emit(w, h)
+
+    def _reset_to_defaults(self):
+        """Restores shape/dimension controls to defaults for a newly
+        created terrain, so it doesn't silently inherit whatever the
+        previously selected/edited terrain left in these widgets."""
+        self._current_shape = self.DEFAULT_SHAPE
+        btn = self._shape_buttons.get(self.DEFAULT_SHAPE)
+        if btn:
+            btn.setChecked(True)
+        self.width_slider.set_value(self.DEFAULT_WIDTH, emit=False)
+        self.height_slider.set_value(self.DEFAULT_HEIGHT, emit=False)
+
+    def sync_from_boundary(self, shape: str, width: int, height: int):
+        """Reflects an existing terrain's stored shape/dimensions in the
+        controls when it's (re)selected, without emitting shape_changed /
+        dimensions_changed — those would re-apply the (unchanged) values to
+        the boundary we just read them from."""
+        self._current_shape = shape
+        btn = self._shape_buttons.get(shape)
+        if btn:
+            btn.setChecked(True)
+        self.width_slider.set_value(width, emit=False)
+        self.height_slider.set_value(height, emit=False)
 
     def _on_shape_selected(self, shape: str):
         self._current_shape = shape
         if shape in ("square", "circle"):
             val = int(self.width_slider.value)
-            self.height_slider.set_value(val)
+            self.height_slider.set_value(val, emit=False)
         self.shape_changed.emit(shape)
 
     # ─── Properties ───

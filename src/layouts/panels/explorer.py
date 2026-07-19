@@ -3,13 +3,16 @@
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton,
     QLineEdit, QTreeWidget, QTreeWidgetItem, QWidget, QScrollArea,
-    QSizePolicy,
+    QSizePolicy, QMenu,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QPoint
 
 from src.styles.tokens import Colors, Metrics, Typography
 from src.components.collapsible_panel import CollapsiblePanel
-from src.layouts.panels.brush_panel import FlowLayout
+from src.layouts.panels.brush.flow_layout import FlowLayout
+from src.engines.map.presets import PRESETS
+
+_PRESET_ICON = {"forest": "🌲", "mountain": "🏔", "village": "🏰", "desert": "🏜"}
 
 
 # ─── Filter Chip ───────────────────────────────────────────────────────────
@@ -195,6 +198,7 @@ class ExplorerPanel(CollapsiblePanel):
     """2. Explorer — toolbar + busca + árvore + contador."""
 
     region_selected = Signal(str)
+    region_template_chosen = Signal(str)  # biome preset key (see engines/map/presets.py)
 
     def __init__(self, parent=None):
         super().__init__(title="Explorer", icon="🌍", parent=parent, radius=12)
@@ -268,13 +272,16 @@ class ExplorerPanel(CollapsiblePanel):
         self._populate_placeholder()
         content_layout.addWidget(self.tree, 1)
 
-        # Botão Nova Região
-        add_btn = QToolButton()
-        add_btn.setText("+ Nova Região")
-        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        add_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        add_btn.setFixedHeight(32)
-        add_btn.setStyleSheet(f"""
+        # Botão Nova Região — abre um menu pra escolher o template/preset de
+        # bioma (mesma lista usada pelo modo Bioma da toolbar do canvas) e
+        # insere um item de árvore com aquele template, sem tocar nos itens
+        # de exemplo já existentes.
+        self.add_region_btn = QToolButton()
+        self.add_region_btn.setText("+ Nova Região")
+        self.add_region_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_region_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.add_region_btn.setFixedHeight(32)
+        self.add_region_btn.setStyleSheet(f"""
             QToolButton {{
                 color: {Colors.ACCENT}; font-size: {Typography.SIZE_XS}px;
                 font-weight: {Typography.WEIGHT_BOLD};
@@ -283,7 +290,8 @@ class ExplorerPanel(CollapsiblePanel):
             }}
             QToolButton:hover {{ background: {Colors.ACCENT_GLOW}; border-style: solid; }}
         """)
-        content_layout.addWidget(add_btn)
+        self.add_region_btn.clicked.connect(self._show_new_region_menu)
+        content_layout.addWidget(self.add_region_btn)
 
         body_layout.addWidget(content, 1)
         self.content_layout.addWidget(body)
@@ -292,6 +300,41 @@ class ExplorerPanel(CollapsiblePanel):
         self.toolbar.btn_expand.clicked.connect(self.tree.expandAll)
         self.toolbar.btn_collapse.clicked.connect(self.tree.collapseAll)
         self._update_counter()
+
+    def _show_new_region_menu(self):
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER}; padding: 4px;
+            }}
+            QMenu::item {{ padding: 4px 20px 4px 8px; border-radius: 3px; font-size: {Typography.SIZE_XS}px; }}
+            QMenu::item:selected {{ background: {Colors.ACCENT_DIM}; }}
+        """)
+        for key, preset in PRESETS.items():
+            icon = _PRESET_ICON.get(key, "📍")
+            act = menu.addAction(f"{icon} {preset.name}")
+            act.triggered.connect(lambda checked=False, k=key: self._add_region_from_preset(k))
+        menu.exec(self.add_region_btn.mapToGlobal(QPoint(0, self.add_region_btn.height())))
+
+    def _add_region_from_preset(self, preset_key: str):
+        """Adds a tree item for `preset_key`, without touching the existing
+        placeholder Reino/Região examples."""
+        preset = PRESETS.get(preset_key)
+        if not preset:
+            return
+        if self.tree.topLevelItemCount() == 0:
+            kingdom = QTreeWidgetItem(self.tree)
+            kingdom.setExpanded(True)
+            self.tree.setItemWidget(kingdom, 0, self._make_item_widget(kingdom, "👑 Minhas Regiões", is_parent=True, level=0))
+        else:
+            kingdom = self.tree.topLevelItem(self.tree.topLevelItemCount() - 1)
+
+        icon = _PRESET_ICON.get(preset_key, "📍")
+        child = QTreeWidgetItem(kingdom)
+        self.tree.setItemWidget(child, 0, self._make_item_widget(child, f"{icon} {preset.name}", level=1))
+        self._update_counter()
+        self.region_template_chosen.emit(preset_key)
 
     def _delete_item(self, item: QTreeWidgetItem):
         parent = item.parent()

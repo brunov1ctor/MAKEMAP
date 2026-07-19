@@ -2,14 +2,151 @@
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QPropertyAnimation, QEasingCurve, QUrl
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QPropertyAnimation, QEasingCurve, QTimer, QElapsedTimer
 from PySide6.QtGui import (
     QWheelEvent, QMouseEvent, QKeyEvent, QPainter, QColor, QTransform, QPixmap, QImage,
+    QLinearGradient,
 )
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink, QVideoFrame
 
 from src.styles.tokens import Colors, Navigation
+
+
+def _build_faded_pixmap(pixmap: QPixmap, fade_frac: float = 0.15) -> QPixmap:
+    """A copy of `pixmap` with its left/right edges fading to transparent —
+    used for tile_mode="fade", so overlapping tile copies blend instead of
+    meeting at a hard seam."""
+    result = QPixmap(pixmap.size())
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.drawPixmap(0, 0, pixmap)
+    gradient = QLinearGradient(0, 0, pixmap.width(), 0)
+    gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
+    gradient.setColorAt(min(0.5, fade_frac), QColor(0, 0, 0, 255))
+    gradient.setColorAt(max(0.5, 1.0 - fade_frac), QColor(0, 0, 0, 255))
+    gradient.setColorAt(1.0, QColor(0, 0, 0, 0))
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+    painter.fillRect(result.rect(), gradient)
+    painter.end()
+    return result
+
+
+def _apply_tint(pixmap: QPixmap, params: dict) -> QPixmap:
+    strength = max(0.0, min(1.0, float(params.get("strength", 0.3))))
+    if strength <= 0:
+        return pixmap
+    result = QPixmap(pixmap)
+    painter = QPainter(result)
+    # SourceAtop only paints where the destination is already opaque, so a
+    # transparent-background layer image stays transparent instead of the
+    # tint filling in its whole bounding rect.
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceAtop)
+    tint = QColor(params.get("color", "#4FC3F7"))
+    tint.setAlphaF(strength)
+    painter.fillRect(result.rect(), tint)
+    painter.end()
+    return result
+
+
+def _apply_blur(pixmap: QPixmap, params: dict) -> QPixmap:
+    """Cheap approximate blur (downscale + smooth upscale) — good enough for
+    a background layer and far cheaper than a real convolution per frame."""
+    radius = max(0.0, float(params.get("radius", 4.0)))
+    if radius < 1.0:
+        return pixmap
+    factor = max(1, int(radius))
+    w, h = pixmap.width(), pixmap.height()
+    small = pixmap.scaled(
+        max(1, w // factor), max(1, h // factor),
+        Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation,
+    )
+    return small.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+
+def _apply_chromatic(pixmap: QPixmap, params: dict) -> QPixmap:
+    """Fakes chromatic aberration by ghosting two offset copies with additive
+    blending under the sharp original — not a true per-channel split, but
+    visually close and far cheaper."""
+    offset = float(params.get("offset_px", 2.0))
+    if offset <= 0:
+        return pixmap
+    result = QPixmap(pixmap.size())
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
+    painter.setOpacity(0.5)
+    painter.drawPixmap(QPointF(-offset, 0), pixmap)
+    painter.drawPixmap(QPointF(offset, 0), pixmap)
+    painter.setOpacity(1.0)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+    painter.drawPixmap(0, 0, pixmap)
+    painter.end()
+    return result
+
+
+# "wave" isn't here — it's time-animated (needs `t`), so it's re-applied
+# every frame in _draw_waved_pixmap instead of being pre-baked once like
+# these three.
+_STATIC_EFFECT_RENDERERS = {
+    "tint": _apply_tint,
+    "blur": _apply_blur,
+    "chromatic": _apply_chromatic,
+}
+
+
+def _draw_waved_pixmap(painter: QPainter, dest_rect: QRectF, pixmap: QPixmap, t: float, params: dict):
+    """Slices `pixmap` into horizontal strips and offsets each sideways by a
+    sine wave — a cheap way to fake water/heat-haze distortion without a
+    real per-pixel shader."""
+    amplitude = float(params.get("amplitude", 6.0))
+    frequency = float(params.get("frequency", 0.05))
+    speed = float(params.get("speed", 1.0))
+    if amplitude <= 0 or pixmap.height() <= 0:
+        painter.drawPixmap(dest_rect.toRect(), pixmap)
+        return
+    sy = dest_rect.height() / pixmap.height()
+    src_strip_h = max(1, int(pixmap.height() / 60))  # ~60 strips top to bottom
+    dest_y = dest_rect.top()
+    src_y = 0
+    while src_y < pixmap.height():
+        h = min(src_strip_h, pixmap.height() - src_y)
+        dx = amplitude * math.sin(src_y * frequency + t * speed)
+        dest_h = h * sy
+        painter.drawPixmap(
+            QRectF(dest_rect.left() + dx, dest_y, dest_rect.width(), dest_h),
+            pixmap, QRectF(0, src_y, pixmap.width(), h),
+        )
+        dest_y += dest_h
+        src_y += h
+
+
+class _ParallaxRenderLayer:
+    """Cached render data for one parallax layer — the mirrored/faded tile
+    variants, and any static (tint/blur/chromatic) effects, are built once
+    here (when the preset is applied), not per frame, since they're the
+    same until the layer's image/tile_mode/effects change again. "wave" is
+    the one effect kept separate (see wave_params) since it animates and
+    has to be re-applied every frame."""
+
+    def __init__(self, layer, pixmap: QPixmap):
+        self.layer = layer
+        processed = pixmap
+        for effect in layer.effects:
+            if not effect.enabled or effect.kind == "wave":
+                continue
+            renderer = _STATIC_EFFECT_RENDERERS.get(effect.kind)
+            if renderer:
+                processed = renderer(processed, effect.params)
+        self.pixmap = processed
+        self.mirrored = processed.transformed(QTransform().scale(-1, 1)) if layer.tile_mode == "mirror" else None
+        self.faded = _build_faded_pixmap(processed) if layer.tile_mode == "fade" else None
+        # Only the first enabled "wave" effect is applied — stacking two
+        # wave distortions isn't worth the extra complexity for a
+        # background effect.
+        wave_effect = next((e for e in layer.effects if e.enabled and e.kind == "wave"), None)
+        self.wave_params = wave_effect.params if wave_effect else None
 
 
 class Viewport(QGraphicsView):
@@ -53,14 +190,21 @@ class Viewport(QGraphicsView):
         self._space_held = False
         self._bg_color: QColor | None = None
         self._bg_pixmap: QPixmap | None = None
-        self._bg_video_player: QMediaPlayer | None = None
-        self._bg_video_sink: QVideoSink | None = None
+        # _ParallaxRenderLayer list, back-to-front order — see
+        # set_parallax_layers(). Empty = no parallax, fall back to
+        # _bg_pixmap/_bg_color as before.
+        self._parallax_pixmaps: list[_ParallaxRenderLayer] = []
+        # Only ticks while at least one active layer needs continuous
+        # redraws (orbit motion or any pulse) — plain pan-driven scroll
+        # layers never need this, so the common case costs nothing.
+        self._parallax_clock = QElapsedTimer()
+        self._parallax_timer: QTimer | None = None
 
     # --- Background ---
 
     def set_background(self, color: QColor | None, pixmap: QPixmap | None):
         """Set a solid color or scaled image as the viewport background."""
-        self._stop_video_bg()
+        self._parallax_pixmaps = []
         self._bg_color = color
         self._bg_pixmap = pixmap
         if color and not pixmap:
@@ -72,41 +216,135 @@ class Viewport(QGraphicsView):
             self.setBackgroundBrush(Qt.BrushStyle.NoBrush)
         self.viewport().update()
 
-    def set_video_background(self, path: str):
-        """Set an MP4/WebM/MOV as animated background."""
-        self._stop_video_bg()
+    def set_parallax_layers(self, layers: list) -> None:
+        """Parallax background — several image layers scrolling at their
+        own speed as the camera pans, for a sense of depth. `layers` is a
+        list of ParallaxLayer (src.engines.map.parallax); speed_x/speed_y 0
+        keeps a layer fixed to the screen on that axis (skybox-like), 1
+        scrolls with the scene at the same rate as a normal static
+        background image, and negative values drift the opposite way."""
         self._bg_color = None
         self._bg_pixmap = None
         self.setBackgroundBrush(Qt.BrushStyle.NoBrush)
+        ordered = sorted(layers, key=lambda l: l.order)
+        self._parallax_pixmaps = [
+            _ParallaxRenderLayer(layer, QPixmap(layer.image_path)) for layer in ordered
+        ]
 
-        self._bg_video_sink = QVideoSink(self)
-        self._bg_video_sink.videoFrameChanged.connect(self._on_video_frame)
+        needs_clock = any(
+            l.motion_mode == "orbit" or l.opacity_pulse or l.scale_pulse or l.rotation_pulse
+            or any(e.enabled and e.kind == "wave" for e in l.effects)
+            for l in layers
+        )
+        if needs_clock:
+            if self._parallax_timer is None:
+                self._parallax_timer = QTimer(self)
+                self._parallax_timer.timeout.connect(self.viewport().update)
+            self._parallax_clock.restart()
+            self._parallax_timer.start(33)  # ~30fps
+        elif self._parallax_timer is not None:
+            self._parallax_timer.stop()
 
-        self._bg_video_player = QMediaPlayer(self)
-        audio = QAudioOutput(self)
-        audio.setVolume(0.0)
-        self._bg_video_player.setAudioOutput(audio)
-        self._bg_video_player.setVideoSink(self._bg_video_sink)
-        self._bg_video_player.setSource(QUrl.fromLocalFile(path))
-        self._bg_video_player.setLoops(QMediaPlayer.Loops.Infinite)
-        self._bg_video_player.play()
+        self.viewport().update()
 
-    def _on_video_frame(self, frame: QVideoFrame):
-        """Capture video frame and use as background pixmap."""
-        image = frame.toImage()
-        if not image.isNull():
-            self._bg_pixmap = QPixmap.fromImage(image)
-            self.viewport().update()
+    def clear_parallax(self):
+        self._parallax_pixmaps = []
+        if self._parallax_timer is not None:
+            self._parallax_timer.stop()
+        self.viewport().update()
 
-    def _stop_video_bg(self):
-        """Stop video background playback."""
-        if self._bg_video_player:
-            self._bg_video_player.stop()
-            self._bg_video_player = None
-        self._bg_video_sink = None
+    def _parallax_time(self) -> float:
+        return self._parallax_clock.elapsed() / 1000.0 if self._parallax_clock.isValid() else 0.0
+
+    def _draw_parallax_layer(self, painter: QPainter, view_rect: QRectF,
+                              tile_w: float, tile_h: float, render_layer: "_ParallaxRenderLayer", t: float):
+        layer = render_layer.layer
+        if render_layer.pixmap.isNull():
+            return
+
+        opacity = layer.opacity
+        if layer.opacity_pulse and layer.opacity_period > 0:
+            phase = (t / layer.opacity_period) * 2 * math.pi + layer.phase_offset
+            mix = (math.sin(phase) + 1) / 2
+            # opacity_min/max are a fraction OF the layer's base opacity, not
+            # an absolute replacement — so lowering "Opac." still darkens the
+            # layer even while the pulse is running, instead of the pulse
+            # silently overriding it.
+            pulse_factor = layer.opacity_min + (layer.opacity_max - layer.opacity_min) * mix
+            opacity = layer.opacity * pulse_factor
+
+        scale = 1.0
+        if layer.scale_pulse and layer.scale_period > 0:
+            phase = (t / layer.scale_period) * 2 * math.pi + layer.phase_offset
+            mix = (math.sin(phase) + 1) / 2
+            scale = (layer.scale_min + (layer.scale_max - layer.scale_min) * mix) / 100.0
+
+        rotation = 0.0
+        if layer.rotation_pulse and layer.rotation_period > 0:
+            phase = (t / layer.rotation_period) * 2 * math.pi + layer.phase_offset
+            rotation = layer.rotation_amplitude * math.sin(phase)
+
+        painter.save()
+        painter.setOpacity(max(0.0, min(1.0, opacity)))
+        cx, cy = view_rect.center().x(), view_rect.center().y()
+
+        def _blit(rect: QRectF, pixmap: QPixmap):
+            if render_layer.wave_params is not None:
+                _draw_waved_pixmap(painter, rect, pixmap, t, render_layer.wave_params)
+            else:
+                painter.drawPixmap(rect.toRect(), pixmap)
+
+        if layer.motion_mode == "orbit":
+            period = max(0.1, layer.orbit_period)
+            phase = (t / period) * 2 * math.pi + layer.phase_offset
+            ox = layer.orbit_radius * math.cos(phase)
+            oy = layer.orbit_radius * math.sin(phase) * 0.6  # slightly flattened, reads as elliptical drift
+            painter.translate(cx + ox, cy + oy)
+            painter.rotate(rotation)
+            painter.scale(scale, scale)
+            painter.translate(-tile_w / 2, -tile_h / 2)
+            _blit(QRectF(0, 0, tile_w, tile_h), render_layer.pixmap)
+        else:
+            # Scale/rotation apply to the whole tiled composition as one
+            # group — per-tile transforms would introduce their own seams.
+            painter.translate(cx, cy)
+            painter.rotate(rotation)
+            painter.scale(scale, scale)
+            painter.translate(-cx, -cy)
+
+            # Python's % always returns a result in [0, tile) for a
+            # positive divisor, even when the offset itself is negative
+            # (negative speed) — exactly the wrap-around we want.
+            offset_x = (view_rect.left() * layer.speed_x) % tile_w
+            offset_y = (view_rect.top() * layer.speed_y) % tile_h
+            x0 = view_rect.left() - offset_x
+            y0 = view_rect.top() - offset_y
+
+            if layer.tile_mode == "fade" and render_layer.faded is not None:
+                step = tile_w * 0.85  # slight overlap so the faded edges blend
+                for dx in (0.0, step):
+                    for dy in (0, tile_h):
+                        _blit(QRectF(x0 + dx, y0 + dy, tile_w, tile_h), render_layer.faded)
+            else:
+                for col, dx in enumerate((0, tile_w)):
+                    tile_pixmap = render_layer.pixmap
+                    if layer.tile_mode == "mirror" and col % 2 == 1 and render_layer.mirrored is not None:
+                        tile_pixmap = render_layer.mirrored
+                    for dy in (0, tile_h):
+                        _blit(QRectF(x0 + dx, y0 + dy, tile_w, tile_h), tile_pixmap)
+
+        painter.restore()
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
-        if self._bg_pixmap:
+        if self._parallax_pixmaps:
+            view_rect = self.mapToScene(self.viewport().rect()).boundingRect()
+            tile_w, tile_h = view_rect.width(), view_rect.height()
+            if tile_w > 0 and tile_h > 0:
+                t = self._parallax_time()
+                for render_layer in self._parallax_pixmaps:
+                    self._draw_parallax_layer(painter, view_rect, tile_w, tile_h, render_layer, t)
+                painter.setOpacity(1.0)
+        elif self._bg_pixmap:
             # Draw the pixmap scaled to fill the visible viewport area
             view_rect = self.mapToScene(self.viewport().rect()).boundingRect()
             painter.drawPixmap(view_rect.toRect(), self._bg_pixmap)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QPointF, QRectF, QRect
@@ -17,6 +18,8 @@ from PySide6.QtWidgets import (
 
 from src.canvas.tools.base import BaseTool
 from src.engines.map.terrain_layer import TerrainLayer, TerrainBrushParams
+from src.engines.core.history import PaintStrokeCommand, PlaceObjectCommand, CompositeCommand
+from src.canvas.item_utils import suppress_selection_decoration
 
 if TYPE_CHECKING:
     from src.canvas.viewport import Viewport
@@ -39,6 +42,7 @@ class BrushTool(BaseTool):
     cursor = Qt.CursorShape.CrossCursor
     TERRAIN_SPACING_RATIO = 0.08  # fraction of brush size between stamps
     INITIAL_LAYER_SIZE = 2048     # starting layer dimensions
+    MAX_FADE_SECONDS = 3.0        # smoothness=1.0 fade-in duration, real seconds
 
     def __init__(self, viewport: Viewport, brush_engine: BrushEngine,
                  asset_engine: AssetEngine = None, history_engine: HistoryEngine = None):
@@ -48,6 +52,7 @@ class BrushTool(BaseTool):
         self._history = history_engine
         self._minimap = None
         self._sound_engine = None
+        self._snap_manager = None
         self._cursor_item: QGraphicsEllipseItem | None = None
         self._stroke_items: list = []
 
@@ -57,19 +62,33 @@ class BrushTool(BaseTool):
         self._active_asset_id: str = ""
         self._is_terrain_mode = False
 
-        # Undo state
-        self._undo_rect: QRect | None = None
-        self._undo_snapshot = None
+        # Undo state — asset_id -> pre-stroke layer snapshot, for layers
+        # touched (painted or erased-into) during the current stroke.
+        self._stroke_snapshots: dict[str, dict] = {}
 
         # Stroke interpolation for terrain
         self._last_terrain_pos: QPointF | None = None
+        self._last_filled_cell: tuple[float, float] | None = None  # cell-fill mode (Snap on)
 
         # Brush params (synced from panel)
         self.softness = 0.5
+        self.roughness = 0.0    # 0=perfect circle edge, 1=jagged — no effect when Snap cell-fills
+        self.smoothness = 0.0   # 0=instant swap, 1=long fade-in when the painted asset changes
         self.texture_scale = 1.0
         self.texture_rotation = 0.0
         self.erase_mode = False
         self.mask_mode = False
+
+        # Smoothness cross-fade state — reset whenever a *new* stroke starts
+        # painting a different asset than the previous stroke did, so
+        # re-painting the same material back-to-back never re-fades. Ramps
+        # over real elapsed time (not stamp count): terrain stamps land
+        # every ~8% of brush size while dragging, so a handful of *stamps*
+        # can fly by in a fraction of a second — time keeps the fade
+        # perceptible no matter how fast the stroke is dragged.
+        self._last_stroke_asset_id: str = ""
+        self._fade_start_time: float | None = None
+        self._fade_duration = 0.0
 
         # Map bounds (None = infinite)
         self._bounds_width: int | None = None
@@ -78,6 +97,9 @@ class BrushTool(BaseTool):
 
         # Active boundary item (selected terrain panel)
         self._active_boundary: object | None = None  # MapBoundary
+        # All bounded terrains currently shown — used by the grid overlay to
+        # clip across every terrain at once, not just the active one.
+        self._all_boundaries: list = []
 
     @property
     def size(self) -> float:
@@ -107,6 +129,11 @@ class BrushTool(BaseTool):
         """Inject SoundEngine for brush audio feedback."""
         self._sound_engine = sound_engine
 
+    def set_snap_manager(self, snap_manager):
+        """Inject SnapManager — when enabled, terrain painting fills whole
+        grid cells (see GridManager.cell_polygon) instead of a soft stamp."""
+        self._snap_manager = snap_manager
+
     def set_map_bounds(self, width: int | None, height: int | None, shape: str | None):
         """Set map painting bounds. None = infinite."""
         self._bounds_width = width
@@ -116,6 +143,13 @@ class BrushTool(BaseTool):
     def set_active_boundary(self, boundary):
         """Set the active boundary (selected terrain panel). None = no constraint."""
         self._active_boundary = boundary
+
+    def set_all_boundaries(self, boundaries: list):
+        """All currently shown bounded terrains — kept separate from
+        _active_boundary (which still targets painting/edits at the
+        selected terrain only) so the grid overlay can clip across all of
+        them at once."""
+        self._all_boundaries = list(boundaries)
 
     def _is_within_bounds(self, scene_pos: QPointF) -> bool:
         """Check if a scene position is within the active boundary."""
@@ -193,27 +227,65 @@ class BrushTool(BaseTool):
                 self._engine.stamp_placed.disconnect(self._on_object_stamp)
             except (RuntimeError, TypeError):
                 pass
+            if self._history:
+                self._history.end_group()
 
     # ─── Terrain Stroke ──────────────────────────────────────────────
 
     def _begin_terrain_stroke(self, pos: QPointF):
+        self._stroke_snapshots = {}
         layer = self._get_or_create_terrain_layer(self._active_asset_id)
         self._active_terrain_layer = layer
         self._last_terrain_pos = pos
+        self._last_filled_cell: tuple[float, float] | None = None
+        self._snapshot_layer(self._active_asset_id, layer)
+
+        # Smoothness: only ramp opacity in when this stroke's asset is
+        # actually different from the last stroke's — repainting the same
+        # material across separate strokes shouldn't keep re-fading.
+        if self.smoothness > 0 and self._active_asset_id != self._last_stroke_asset_id:
+            self._fade_start_time = time.monotonic()
+            self._fade_duration = self.smoothness * self.MAX_FADE_SECONDS
+        else:
+            self._fade_start_time = None
+        self._last_stroke_asset_id = self._active_asset_id
 
         # Notify sound engine
         if self._sound_engine:
             self._sound_engine.on_brush_stroke_start(self._active_asset_id)
 
-        # Paint first point — convert scene pos to layer-local coords
         params = self._terrain_params()
-        local = self._scene_to_layer(pos, layer)
-        layer.paint_at(local, params)
-        layer.update_live()
+        if self._paint_terrain_at(pos, layer, params):
+            layer.update_live()
+            if not params.erase:
+                self._erase_other_layers(pos, params)
 
-        # Erase same area from other terrain layers
-        if not params.erase:
-            self._erase_other_layers(pos, params)
+    def _snapshot_layer(self, asset_id: str, layer: TerrainLayer):
+        """Capture a layer's pre-stroke state once, for undo."""
+        if self._history and asset_id not in self._stroke_snapshots:
+            self._stroke_snapshots[asset_id] = layer.capture_state()
+
+    def _paint_terrain_at(self, scene_pos: QPointF, layer: TerrainLayer, params: TerrainBrushParams) -> bool:
+        """Paint at scene_pos — a soft circular stamp, or (Snap on) a flood
+        fill of the grid cell scene_pos falls in. Returns whether a paint
+        actually happened (cell-fill mode skips repeat fills of the same
+        cell so dragging across it doesn't keep re-painting it)."""
+        if self._snap_manager and self._snap_manager.enabled:
+            grid = self._snap_manager.grid
+            cell = grid.cell_polygon(scene_pos.x(), scene_pos.y()) if grid else None
+            if cell is not None:
+                center = cell.boundingRect().center()
+                key = (round(center.x(), 3), round(center.y(), 3))
+                if key == self._last_filled_cell:
+                    return False
+                self._last_filled_cell = key
+                local_poly = layer.item.mapFromScene(cell)
+                layer.paint_cell(local_poly, params)
+                return True
+
+        local = self._scene_to_layer(scene_pos, layer)
+        layer.paint_at(local, params)
+        return True
 
     def _continue_terrain_stroke(self, pos: QPointF):
         if not self._last_terrain_pos:
@@ -227,6 +299,17 @@ class BrushTool(BaseTool):
 
         layer = self._active_terrain_layer
         params = self._terrain_params()
+
+        if self._snap_manager and self._snap_manager.enabled:
+            # Cell-fill mode: check the cell under the cursor every move
+            # instead of interpolating circular stamps along the path —
+            # _paint_terrain_at already no-ops if it's the same cell as last time.
+            if self._paint_terrain_at(pos, layer, params):
+                layer.update_live()
+                if not params.erase:
+                    self._erase_other_layers(pos, params)
+            self._last_terrain_pos = pos
+            return
 
         dx = pos.x() - self._last_terrain_pos.x()
         dy = pos.y() - self._last_terrain_pos.y()
@@ -271,6 +354,7 @@ class BrushTool(BaseTool):
         for asset_id, layer in self._terrain_layers.items():
             if asset_id == self._active_asset_id:
                 continue
+            self._snapshot_layer(asset_id, layer)
             local = self._scene_to_layer(scene_pos, layer)
             layer.paint_at(local, erase_params)
             layer.update_live()
@@ -282,8 +366,26 @@ class BrushTool(BaseTool):
         for asset_id, layer in self._terrain_layers.items():
             if asset_id != self._active_asset_id:
                 layer.finish_stroke()
+
+        self._push_stroke_history()
+
         self._active_terrain_layer = None
         self._last_terrain_pos = None
+
+    def _push_stroke_history(self):
+        if not self._history or not self._stroke_snapshots:
+            self._stroke_snapshots = {}
+            return
+        commands = []
+        for asset_id, before_state in self._stroke_snapshots.items():
+            layer = self._terrain_layers.get(asset_id)
+            if layer:
+                commands.append(PaintStrokeCommand(layer, before_state, layer.capture_state()))
+        self._stroke_snapshots = {}
+        if len(commands) == 1:
+            self._history.push(commands[0])
+        elif commands:
+            self._history.push(CompositeCommand(commands, "Pintura de terreno"))
 
         # Notify sound engine stroke ended
         if self._sound_engine:
@@ -305,10 +407,18 @@ class BrushTool(BaseTool):
             return asset_id
 
     def _terrain_params(self) -> TerrainBrushParams:
+        opacity = self._engine.config.opacity
+        if self._fade_start_time is not None and self._fade_duration > 0:
+            elapsed = time.monotonic() - self._fade_start_time
+            if elapsed < self._fade_duration:
+                opacity *= max(0.05, elapsed / self._fade_duration)
+            else:
+                self._fade_start_time = None
         return TerrainBrushParams(
             size=self.size,
-            opacity=self._engine.config.opacity,
+            opacity=opacity,
             softness=self.softness,
+            roughness=self.roughness,
             texture_scale=self.texture_scale,
             texture_rotation=self.texture_rotation,
             erase=self.erase_mode,
@@ -358,6 +468,8 @@ class BrushTool(BaseTool):
         self._stroke_items.clear()
         self._engine.stamp_placed.connect(self._on_object_stamp)
         self._engine.begin_stroke(pos)
+        if self._history:
+            self._history.begin_group("Pintura de objetos")
 
     def _on_object_stamp(self, stamp):
         """Render object stamp as individual QGraphicsPixmapItem."""
@@ -397,7 +509,12 @@ class BrushTool(BaseTool):
         item.setZValue(10)
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
         item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+        item.setData(0, {"item_type": "asset"})
+        suppress_selection_decoration(item)
         self._stroke_items.append(item)
+
+        if self._history:
+            self._history.push(PlaceObjectCommand(item))
 
     # ─── Cursor ─────────────────────────────────────────────────────
 
@@ -489,6 +606,7 @@ class RegionTool(BaseTool):
         item.setZValue(5)
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
         item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+        suppress_selection_decoration(item)
         self.viewport.scene().addItem(item)
         for cb in self._finalize_callbacks:
             cb(polygon)
@@ -561,6 +679,7 @@ class RoadTool(BaseTool):
         item.setPen(QPen(self._color, self._width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         item.setZValue(8)
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        suppress_selection_decoration(item)
         self.viewport.scene().addItem(item)
         self._points.clear()
 
@@ -654,6 +773,7 @@ class RiverTool(BaseTool):
         item.setPen(QPen(self._color, self._width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         item.setZValue(7)
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        suppress_selection_decoration(item)
         self.viewport.scene().addItem(item)
         self._points.clear()
 

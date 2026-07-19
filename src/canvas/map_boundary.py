@@ -205,14 +205,21 @@ class MapBoundary:
     BORDER_WIDTH = 3.0
     BORDER_COLOR_BASE = QColor(79, 195, 247)
 
+    # Keep numerically identical to TerrainSettingsPanel.DEFAULT_* —
+    # not cross-imported to avoid coupling canvas/ to layouts/.
+    DEFAULT_SHAPE = "rectangle"
+    DEFAULT_WIDTH = 4096
+    DEFAULT_HEIGHT = 4096
+
     def __init__(self, scene: QGraphicsScene, color: QColor = None):
         self._scene = scene
         self._item: MovableBoundaryItem | None = None
         self._visible = False
-        self._shape = "rectangle"
-        self._width = 4096
-        self._height = 4096
+        self._shape = self.DEFAULT_SHAPE
+        self._width = self.DEFAULT_WIDTH
+        self._height = self.DEFAULT_HEIGHT
         self._color = color or self.BORDER_COLOR_BASE
+        self._preview = False
 
         # Pulse animation state
         self._alpha = self.PULSE_MIN_ALPHA
@@ -224,6 +231,18 @@ class MapBoundary:
     @property
     def visible(self) -> bool:
         return self._visible
+
+    @property
+    def shape(self) -> str:
+        return self._shape
+
+    @property
+    def width(self) -> int:
+        return self._width
+
+    @property
+    def height(self) -> int:
+        return self._height
 
     @property
     def position(self) -> QPointF:
@@ -240,11 +259,25 @@ class MapBoundary:
         self._height = height
         self._shape = shape
         self._visible = True
+        self._preview = False
         self._rebuild()
         self._timer.start()
 
+    def show_preview(self, width: int, height: int, shape: str = "rectangle"):
+        """Lightweight draft outline for a terrain that hasn't been
+        created yet (no terrain_id/card) — static dashed line, no pulse,
+        so it visibly reads as "not real yet" rather than a confirmed
+        terrain."""
+        self._width = width
+        self._height = height
+        self._shape = shape
+        self._visible = True
+        self._preview = True
+        self._rebuild()
+
     def hide(self):
         self._visible = False
+        self._preview = False
         self._timer.stop()
         if self._item and self._item.scene():
             self._scene.removeItem(self._item)
@@ -317,6 +350,13 @@ class MapBoundary:
 
     def _update_pen(self):
         if not self._item:
+            return
+        if self._preview:
+            color = QColor(self._color)
+            color.setAlpha(140)
+            pen = QPen(color, 2.0, Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            self._item.setPen(pen)
             return
         color = QColor(self._color)
         color.setAlpha(int(self._alpha))

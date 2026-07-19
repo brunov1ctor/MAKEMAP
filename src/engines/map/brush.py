@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING
@@ -46,6 +47,14 @@ class BrushConfig:
     random_rotation: bool = True
     random_scale: bool = True
     random_color_variation: float = 0.0  # 0-1
+    # Stamped images have no soft edge to jitter (unlike terrain's radial-
+    # gradient mask), so roughness here means extra placement irregularity —
+    # widens rotation/scale jitter on top of each entry's own min/max range.
+    roughness: float = 0.0  # 0-1
+    # When the picked asset differs from the previous stamp's, ramp opacity
+    # in over a few stamps instead of popping in at full opacity — a smooth
+    # visual hand-off between different shapes mid-stroke.
+    smoothness: float = 0.0  # 0-1
     assets: list[BrushAssetEntry] = field(default_factory=list)
 
 
@@ -66,6 +75,10 @@ class BrushEngine(QObject):
     stamp_placed = Signal(object)  # BrushStamp
     stroke_finished = Signal(list)  # list[BrushStamp]
 
+    # Smoothness=1.0 fade-in duration, in real seconds — long enough to
+    # actually be seen regardless of stroke speed/density (see _generate_stamps).
+    MAX_FADE_SECONDS = 3.0
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = BrushConfig()
@@ -75,6 +88,13 @@ class BrushEngine(QObject):
         self._last_pos: QPointF | None = None
         self._current_stroke: list[BrushStamp] = []
         self._distance_acc = 0.0
+        # Smoothness cross-fade: per-asset wall-clock time.monotonic() of
+        # when that asset was last picked with a *different* asset
+        # immediately before it — reset whenever a stroke ends, so every new
+        # stroke starts each asset's ramp fresh (an asset that was already
+        # "warmed up" earlier in the same stroke doesn't need to fade in again).
+        self._last_stamp_asset_id: str = ""
+        self._fade_start: dict[str, float] = {}
 
     # --- Configuration ---
 
@@ -119,6 +139,8 @@ class BrushEngine(QObject):
         self._last_pos = pos
         self._current_stroke.clear()
         self._distance_acc = 0.0
+        self._last_stamp_asset_id = ""
+        self._fade_start = {}
         self.stroke_started.emit()
 
         # Place initial stamp
@@ -214,8 +236,41 @@ class BrushEngine(QObject):
             else:
                 rotation = 0.0
 
+            # Roughness: extra placement irregularity on top of whatever
+            # random_rotation/random_scale already produced — no soft edge
+            # to jitter on a stamped image, so this is the closest analog.
+            # Needs to actually read as "rough" at a glance (Incarnate-style),
+            # not a barely-there wobble — rotation, scale, AND position all
+            # get pushed hard at roughness=1.
+            if self.config.roughness > 0:
+                rotation += random.uniform(-1, 1) * self.config.roughness * 45.0
+                scale *= 1.0 + random.uniform(-1, 1) * self.config.roughness * 0.35
+                jitter_radius = self.config.roughness * self.config.size * 0.3
+                pos = QPointF(
+                    pos.x() + random.uniform(-1, 1) * jitter_radius,
+                    pos.y() + random.uniform(-1, 1) * jitter_radius,
+                )
+
             # Opacity
             opacity = self.config.opacity * self.config.flow
+
+            # Smoothness: when this stamp's asset differs from the previous
+            # stamp's, ramp its opacity in over real elapsed time (not stamp
+            # count) — at high density/fast drag speed, 8 *stamps* can pass
+            # in well under a tenth of a second, so a stamp-count ramp was
+            # effectively invisible. Time keeps the fade perceptible
+            # regardless of how fast/dense the stroke is.
+            if self.config.smoothness > 0:
+                now = time.monotonic()
+                if asset_id != self._last_stamp_asset_id:
+                    self._fade_start[asset_id] = now
+                duration = self.config.smoothness * self.MAX_FADE_SECONDS
+                start = self._fade_start.get(asset_id)
+                if start is not None and duration > 0:
+                    elapsed = now - start
+                    if elapsed < duration:
+                        opacity *= max(0.05, elapsed / duration)
+            self._last_stamp_asset_id = asset_id
 
             stamps.append(BrushStamp(
                 position=pos,

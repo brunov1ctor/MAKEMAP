@@ -113,6 +113,41 @@ class DeleteItemCommand(Command):
         self.scene.addItem(self.item)
 
 
+class PaintStrokeCommand(Command):
+    """Undo/redo a single terrain paint stroke via whole-layer snapshots."""
+
+    def __init__(self, layer, before_state: dict, after_state: dict):
+        self.layer = layer
+        self.before_state = before_state
+        self.after_state = after_state
+        self.description = "Pintura de terreno"
+
+    def redo(self):
+        self.layer.restore_state(self.after_state)
+
+    def undo(self):
+        self.layer.restore_state(self.before_state)
+
+
+class PlaceObjectCommand(Command):
+    """Undo/redo placing a single brush-stamped object via visibility toggle.
+
+    Stamped items may be parented to a boundary item rather than added
+    directly to the scene, so toggling visibility is used instead of
+    add/removeItem (which assumes a scene-level item).
+    """
+
+    def __init__(self, item: QGraphicsItem):
+        self.item = item
+        self.description = "Colocar objeto"
+
+    def redo(self):
+        self.item.setVisible(True)
+
+    def undo(self):
+        self.item.setVisible(False)
+
+
 class ChangePropertyCommand(Command):
     """Change a property on an item's data dict."""
 

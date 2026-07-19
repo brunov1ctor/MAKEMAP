@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import shutil
-import sqlite3
 from pathlib import Path
 from typing import ClassVar
 
@@ -56,12 +55,25 @@ class SoundRegistry:
         cls._refresh_group(file_hash)
 
     @classmethod
+    def unregister_all(cls, col: SoundColumn):
+        """Remove a column from every hash group — used when its widget is destroyed."""
+        for file_hash, cols in list(cls._hash_to_cols.items()):
+            if col in cols:
+                cols.discard(col)
+                cls._refresh_group(file_hash)
+
+    @classmethod
     def _refresh_group(cls, file_hash: str):
         cols = {c for c in cls._hash_to_cols.get(file_hash, set()) if c._sound_hash == file_hash}
-        cls._hash_to_cols[file_hash] = cols
         shared = len(cols) > 1
+        alive = set()
         for c in cols:
-            c._set_shared_style(shared)
+            try:
+                c._set_shared_style(shared)
+                alive.add(c)
+            except RuntimeError:
+                pass  # underlying widget already destroyed — drop the stale entry
+        cls._hash_to_cols[file_hash] = alive
 
     @classmethod
     def propagate_rename(cls, file_hash: str, new_display: str, source: SoundColumn):
@@ -127,19 +139,18 @@ class SoundColumn(QWidget):
         self._output: QAudioOutput | None = None
         self.setStyleSheet("background: transparent; border: none;")
         self.setAcceptDrops(True)
+        self.destroyed.connect(lambda: SoundRegistry.unregister_all(self))
 
         # carrega do banco
         saved_volume = 70
         display_name = ""
         try:
-            from src.engines.assets.library import LIBRARY_DB
-            db = sqlite3.connect(str(LIBRARY_DB))
-            db.row_factory = sqlite3.Row
+            from src.engines.assets.library import get_shared_db
+            db = get_shared_db()
             row = db.execute(
                 "SELECT path, volume, display_name FROM asset_sounds WHERE asset_id=? AND prefix=?",
                 (asset_id, prefix)
             ).fetchone()
-            db.close()
             if row:
                 self._sound_path = row["path"] if Path(row["path"]).exists() else ""
                 saved_volume = int(row["volume"] * 100)
@@ -273,8 +284,8 @@ class SoundColumn(QWidget):
 
     def _save_to_db(self, path: str, volume: float, display_name: str):
         try:
-            from src.engines.assets.library import LIBRARY_DB
-            db = sqlite3.connect(str(LIBRARY_DB))
+            from src.engines.assets.library import get_shared_db
+            db = get_shared_db()
             db.execute(
                 """INSERT INTO asset_sounds (asset_id, prefix, path, volume, display_name)
                    VALUES (?, ?, ?, ?, ?)
@@ -283,7 +294,6 @@ class SoundColumn(QWidget):
                 (self._asset_id, self._prefix, path, volume, display_name)
             )
             db.commit()
-            db.close()
         except Exception:
             pass
 
@@ -326,14 +336,13 @@ class SoundColumn(QWidget):
             self._drop_idle()
             self._set_shared_style(False)
             try:
-                from src.engines.assets.library import LIBRARY_DB
-                db = sqlite3.connect(str(LIBRARY_DB))
+                from src.engines.assets.library import get_shared_db
+                db = get_shared_db()
                 db.execute(
                     "DELETE FROM asset_sounds WHERE asset_id=? AND prefix=?",
                     (self._asset_id, self._prefix)
                 )
                 db.commit()
-                db.close()
             except Exception:
                 pass
 

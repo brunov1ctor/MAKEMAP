@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, QPointF, QRectF, QRect
 from PySide6.QtGui import (
     QImage, QPixmap, QPainter, QColor, QBrush, QTransform,
-    QRadialGradient, QPen,
+    QRadialGradient, QPen, QPolygonF, QPainterPath,
 )
-from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsPixmapItem, QGraphicsScene
+
+from src.canvas.item_utils import suppress_selection_decoration
 
 
 @dataclass
@@ -19,10 +22,41 @@ class TerrainBrushParams:
     size: float = 100.0
     opacity: float = 1.0
     softness: float = 0.5  # 0=hard edge, 1=fully soft
+    roughness: float = 0.0  # 0=perfect circle, 1=jagged edge — only affects paint_at, not paint_cell
     texture_scale: float = 1.0
     texture_rotation: float = 0.0
     erase: bool = False
     mask_only: bool = False  # paint mask without showing texture
+
+
+# ±65% radius swing at roughness=1 — needs to read as a clearly jagged/torn
+# edge at a glance, not a barely-there wobble. Shared by _jagged_circle_path
+# (the actual drawn shape) and paint_at's gradient radius below, so the
+# gradient's outer stop reaches at least as far as the jaggedest bulge —
+# otherwise bulges beyond the original radius would fall past the
+# gradient's last color stop and render fully transparent, invisible.
+_ROUGHNESS_JITTER = 0.65
+
+
+def _jagged_circle_path(center: QPointF, radius: float, roughness: float) -> QPainterPath:
+    """A closed path approximating a circle but with the radius perturbed
+    per angular segment — used instead of a perfect drawEllipse() when
+    roughness > 0, only in the freehand soft-stamp path (paint_at). Snap's
+    cell-fill (paint_cell) has no circular edge to begin with, so roughness
+    naturally has no effect there."""
+    segments = 20
+    path = QPainterPath()
+    for i in range(segments):
+        angle = (i / segments) * 2 * math.pi
+        r = radius * (1.0 + roughness * random.uniform(-_ROUGHNESS_JITTER, _ROUGHNESS_JITTER))
+        x = center.x() + r * math.cos(angle)
+        y = center.y() + r * math.sin(angle)
+        if i == 0:
+            path.moveTo(x, y)
+        else:
+            path.lineTo(x, y)
+    path.closeSubpath()
+    return path
 
 
 class TerrainLayer:
@@ -67,6 +101,9 @@ class TerrainLayer:
         self._item = QGraphicsPixmapItem(parent_item)
         self._item.setZValue(1)
         self._item.setPos(0, 0)
+        self._item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self._item.setData(0, {"item_type": "terrain"})
+        suppress_selection_decoration(self._item)
         if not parent_item:
             self._scene.addItem(self._item)
 
@@ -144,7 +181,12 @@ class TerrainLayer:
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
         center = QPointF(cx, cy)
-        gradient = QRadialGradient(center, r)
+        # When roughness bulges the drawn shape past r, the gradient's own
+        # radius has to reach at least as far, or those bulges would fall
+        # beyond its last color stop and paint fully transparent — making
+        # the jaggedness invisible instead of visible.
+        gradient_r = r * (1.0 + params.roughness * _ROUGHNESS_JITTER) if params.roughness > 0 else r
+        gradient = QRadialGradient(center, gradient_r)
         alpha = int(255 * params.opacity)
         hardness = 1.0 - params.softness
 
@@ -158,7 +200,10 @@ class TerrainLayer:
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(gradient))
-        painter.drawEllipse(center, r, r)
+        if params.roughness > 0:
+            painter.drawPath(_jagged_circle_path(center, r, params.roughness))
+        else:
+            painter.drawEllipse(center, r, r)
         painter.end()
 
         if params.mask_only:
@@ -171,6 +216,56 @@ class TerrainLayer:
         h = min(self._height - y, size + 1)
         stamp_rect = QRect(x, y, w, h)
 
+        if self._stroke_dirty is None:
+            self._stroke_dirty = stamp_rect
+        else:
+            self._stroke_dirty = self._stroke_dirty.united(stamp_rect)
+
+    def paint_cell(self, polygon: QPolygonF, params: TerrainBrushParams):
+        """Flood-fill an entire grid cell — used instead of paint_at() when
+        Snap is on: rather than a soft circular stamp, the whole cell you
+        clicked in (its exact outline, whatever the grid shape) becomes one
+        solid patch, like a tile-based terrain painter."""
+        bounds = polygon.boundingRect()
+        if bounds.isEmpty():
+            return
+        r = max(bounds.width(), bounds.height()) / 2
+        cx, cy = bounds.center().x(), bounds.center().y()
+
+        # Expand layer if painting outside current bounds (same as paint_at)
+        if cx - r < 0 or cy - r < 0 or cx + r > self._width or cy + r > self._height:
+            old_pos = self._item.pos()
+            self._expand_to_fit(cx, cy, r)
+            new_pos = self._item.pos()
+            shift_x = old_pos.x() - new_pos.x()
+            shift_y = old_pos.y() - new_pos.y()
+            polygon = polygon.translated(shift_x, shift_y)
+            bounds = polygon.boundingRect()
+            if self._stroke_dirty is not None:
+                self._stroke_dirty.translate(int(shift_x), int(shift_y))
+
+        target = self._stencil if params.mask_only else self._mask
+
+        painter = QPainter(target)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if params.erase:
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
+        else:
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
+        alpha = int(255 * params.opacity)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(255, 255, 255, alpha)))
+        path = QPainterPath()
+        path.addPolygon(polygon)
+        path.closeSubpath()
+        painter.drawPath(path)
+        painter.end()
+
+        if params.mask_only:
+            self._has_stencil = True
+
+        stamp_rect = bounds.toAlignedRect().intersected(QRect(0, 0, self._width, self._height))
         if self._stroke_dirty is None:
             self._stroke_dirty = stamp_rect
         else:
@@ -328,19 +423,27 @@ class TerrainLayer:
 
     # ─── Undo ────────────────────────────────────────────────────────────
 
-    def save_mask_region(self, rect: QRect) -> QImage:
-        return self._mask.copy(rect)
+    def capture_state(self) -> dict:
+        """Snapshot full layer state (mask + stencil + bounds) for undo/redo."""
+        return {
+            "mask": self._mask.copy(),
+            "stencil": self._stencil.copy(),
+            "has_stencil": self._has_stencil,
+            "width": self._width,
+            "height": self._height,
+            "pos": self._item.pos(),
+        }
 
-    def restore_mask_region(self, rect: QRect, saved: QImage):
-        painter = QPainter(self._mask)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
-        painter.drawImage(rect.topLeft(), saved)
-        painter.end()
-        self._recomposite_rect(rect)
-        self._item.setPixmap(QPixmap.fromImage(self._result))
-
-    def get_stroke_rect(self) -> QRect | None:
-        return self._stroke_dirty
+    def restore_state(self, state: dict):
+        """Restore a previously captured state (undoes/redoes a whole stroke)."""
+        self._mask = state["mask"].copy()
+        self._stencil = state["stencil"].copy()
+        self._has_stencil = state["has_stencil"]
+        self._width = state["width"]
+        self._height = state["height"]
+        self._item.setPos(state["pos"])
+        self._result = QImage(self._width, self._height, QImage.Format.Format_ARGB32_Premultiplied)
+        self._recomposite_full()
 
     # ─── Cleanup ─────────────────────────────────────────────────────────
 

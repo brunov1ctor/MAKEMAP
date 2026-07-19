@@ -4,15 +4,18 @@ import warnings
 warnings.filterwarnings("ignore", message=".*Failed to disconnect.*", category=RuntimeWarning)
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QSizePolicy, QLabel
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QColor, QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panels.top_bar import TopBar
 from src.layouts.panels.toolbar import CanvasToolbar
-from src.layouts.panels.brush_panel import BrushToolPanel
+from src.layouts.panels.brush.panel import BrushToolPanel
+from src.layouts.panels.brush.asset_browser import AssetBrowserPanel
 from src.layouts.panels.grid_panel import GridSettingsPanel
-from src.layouts.panels.terrain_panel import TerrainSettingsPanel
+from src.layouts.panels.terrain.panel import TerrainSettingsPanel
+from src.layouts.panels.region.panel import RegionSettingsPanel
+from src.layouts.panels.select_panel import SelectToolPanel
 from src.layouts.panels.explorer import ExplorerPanel, FilterPanel
 from src.layouts.panels.canvas_area import CanvasArea
 from src.layouts.panels.inspector import InspectorPanel, QuestPanel, LayersPanel
@@ -22,8 +25,9 @@ from src.layouts.panels.logs_panel import QtLogHandler, open_logs_dialog
 from src.canvas.overlays import Compass, MiniMap
 from src.canvas.map_boundary import MapBoundary
 from src.engines.integrator import EngineIntegrator
-from src.layouts.mediator import BrushMediator, TerrainMediator, GridMediator
+from src.layouts.mediators import BrushMediator, TerrainMediator, GridMediator, ToolbarMediator, RegionMediator
 from src.layouts.panel_manager import PanelManager
+from src.layouts.floating_coordinator import FloatingCoordinator
 
 
 class MainLayout(QWidget):
@@ -46,13 +50,28 @@ class MainLayout(QWidget):
         self.top_bar = TopBar(self)
 
         self.canvas_toolbar = CanvasToolbar(self)
-        self.canvas_toolbar.tool_selected.connect(self.canvas.engine.tool_manager.activate)
-        self.canvas_toolbar.tool_selected.connect(self._on_tool_selected)
-        self.canvas_toolbar.action_triggered.connect(self._on_toolbar_action)
 
         self.brush_panel = BrushToolPanel(self)
         self.brush_panel.hide()
-        self.brush_panel.close_requested.connect(lambda: (self._panel_mgr.hide("Brush"), self._reposition()))
+        self.brush_panel.close_requested.connect(self._close_brush_panels)
+        self.brush_panel.assets_requested.connect(self._toggle_asset_browser)
+
+        self.select_panel = SelectToolPanel(self)
+        self.select_panel.hide()
+        self.select_panel.close_requested.connect(self._close_select_panel)
+        self.select_panel.layers_changed.connect(self.canvas.engine.selection.set_layer_filter)
+
+        # Asset browser (category tabs + search + grid), positioned right
+        # next to Brush. Opens only via the texture preview click — NOT
+        # automatically with the Brush tool, since most brush tweaks don't
+        # need it open. Closing Brush closes it too. Kept out of
+        # PanelManager's exclusivity model on purpose: Brush+AssetBrowser can
+        # be visible *simultaneously*, the opposite of what "exclusive" means
+        # there (only Grid/Terrain/Brush stay mutually exclusive with
+        # each other).
+        self.asset_browser_panel = AssetBrowserPanel(self)
+        self.asset_browser_panel.hide()
+        self.asset_browser_panel.close_requested.connect(self._close_brush_panels)
 
         self.grid_panel = GridSettingsPanel(self)
         self.grid_panel.hide()
@@ -62,16 +81,24 @@ class MainLayout(QWidget):
         self.terrain_panel.hide()
         self.terrain_panel.close_requested.connect(self._close_terrain_panel)
 
+        self.region_panel = RegionSettingsPanel(self)
+        self.region_panel.hide()
+        self.region_panel.close_requested.connect(self._close_region_panel)
+
         # ═══ Mediators ═══
         self._brush_med = BrushMediator(self)
         self._terrain_med = TerrainMediator(self)
         self._grid_med = GridMediator(self)
+        self._region_med = RegionMediator(self)
+        self._toolbar_med = ToolbarMediator(self)
+        self._toolbar_med.connect()
 
         # ═══ Panel Manager ═══
         self._panel_mgr = PanelManager(self)
         self._panel_mgr.register(
-            "Brush", self.brush_panel, fill_height=True,
+            "Brush", self.brush_panel,
             on_show=lambda: self._brush_med.connect_panel(),
+            on_hide=self._on_brush_panel_hidden,
         )
         self._panel_mgr.register(
             "Grid", self.grid_panel,
@@ -79,6 +106,12 @@ class MainLayout(QWidget):
         )
         self._panel_mgr.register(
             "Terrain", self.terrain_panel,
+        )
+        self._panel_mgr.register(
+            "Region", self.region_panel,
+        )
+        self._panel_mgr.register(
+            "Select", self.select_panel,
         )
 
         # Terrain panel signals → mediator
@@ -95,6 +128,15 @@ class MainLayout(QWidget):
         # Map boundary overlays reference
         self._terrain_boundaries = self._terrain_med.boundaries
 
+        # Região panel signals → mediator
+        self.region_panel.region_add_requested.connect(self._region_med.on_add_requested)
+        self.region_panel.region_renamed.connect(self._region_med.on_renamed)
+        self.region_panel.region_removed.connect(self._region_med.on_removed)
+        self.region_panel.region_selected.connect(self._region_med.on_selected)
+        self.region_panel.region_locate_requested.connect(self._region_med.on_locate)
+        self.region_panel.region_stars_changed.connect(self._region_med.on_stars_changed)
+        self.region_panel.content_changed.connect(self._reposition)
+
         # Explorer (esquerda)
         self._left_container = QWidget(self)
         self._left_container.setAttribute(Qt.WA_TranslucentBackground)
@@ -106,6 +148,7 @@ class MainLayout(QWidget):
         self.filters_panel = FilterPanel()
         left_lay.addWidget(self.left_panel, 1)
         left_lay.addWidget(self.filters_panel, 0)
+        left_lay.addStretch()
         self.left_panel.collapsed_changed.connect(
             lambda collapsed: left_lay.setStretchFactor(self.left_panel, 0 if collapsed else 1)
         )
@@ -142,6 +185,28 @@ class MainLayout(QWidget):
         self.minimap = MiniMap(self)
         self.minimap.set_viewport(self.canvas.engine.viewport)
         self.canvas.engine._brush_tool.set_minimap(self.minimap)
+
+        # ═══ Floating Coordinator ═══
+        # Shared obstacle-avoidance registry for every panel that can move or
+        # be shown/hidden independently — see floating_coordinator.py. Any
+        # future flyout/sub-panel (e.g. something a toolbar button opens)
+        # registers here too instead of hand-rolling its own obstacle list.
+        self.floating = FloatingCoordinator(self)
+        self.floating.register("toolbar", self.canvas_toolbar, movable=True)
+        self.floating.register("minimap", self.minimap, movable=True)
+        self.floating.register("compass", self.compass)
+        self.floating.register("top_bar", self.top_bar)
+        self.floating.register("explorer", self._left_container)
+        self.floating.register("inspector", self._right_scroll)
+        self.floating.register("progression", self.progression)
+        self.floating.register("status_bar", self.status_bar)
+        self.floating.register("brush_panel", self.brush_panel)
+        self.floating.register("asset_browser_panel", self.asset_browser_panel)
+        self.floating.register("grid_panel", self.grid_panel)
+        self.floating.register("terrain_panel", self.terrain_panel)
+        self.floating.register("region_panel", self.region_panel)
+        self.floating.register("select_panel", self.select_panel)
+        self.minimap.moved.connect(lambda: self.floating.push_clear("minimap"))
 
         # ═══ Conexões ═══
         self.canvas.engine.cursor_moved.connect(
@@ -203,25 +268,42 @@ class MainLayout(QWidget):
         self.top_bar.setGeometry(0, 0, w, top_h)
         self._left_container.setGeometry(0, body_top, self.LEFT_W, body_h)
         self._right_scroll.setGeometry(w - self.RIGHT_W, body_top, self.RIGHT_W, body_h)
-        tb_w = min(self.canvas_toolbar.sizeHint().width(), center_w)
-        tb_x = center_x + (center_w - tb_w) // 2
-        self.canvas_toolbar.setGeometry(tb_x, body_top, tb_w, toolbar_h)
+        self._toolbar_med.layout(w, h, center_x, center_w, body_top, body_h)
 
-        panel_x = center_x + 4
-        panel_y = body_top + toolbar_h + 4
-        panel_max_h = body_h - toolbar_h - prog_h - 8
-        self._panel_mgr.layout(panel_x, panel_y, self.brush_panel.PANEL_WIDTH, panel_max_h)
+        # Brush/Grid/Terrain panels normally sit right below the toolbar's
+        # default top-docked slot — but the toolbar is now draggable, so
+        # carve the panel area around wherever it actually is instead of
+        # assuming that fixed slot.
+        avail = QRect(center_x + 4, body_top + 4, max(0, center_w - 8), max(0, body_h - prog_h - 8))
+        avail = self._toolbar_med.carve_panel_area(avail)
+        self._panel_mgr.layout(avail.x(), avail.y(), avail.width(), avail.height())
+
+        # Asset browser rides next to Brush (not through PanelManager — see
+        # the comment where it's created) whenever both are visible.
+        if self.brush_panel.isVisible() and self.asset_browser_panel.isVisible():
+            bp_rect = self.brush_panel.geometry()
+            ab_x = bp_rect.right() + 8
+            ab_w = min(self.asset_browser_panel.PANEL_WIDTH, max(0, avail.right() - ab_x))
+            self.asset_browser_panel.setGeometry(ab_x, bp_rect.y(), ab_w, bp_rect.height())
+            self.asset_browser_panel.raise_()
 
         self.progression.setGeometry(center_x, body_bottom - prog_h, center_w, prog_h)
         self.status_bar.setGeometry(0, h - status_h, w, status_h)
 
         ov_top = body_top + toolbar_h
         ov_h = max(0, body_h - toolbar_h - prog_h)
+
         self.compass.move(center_x + center_w - self.compass.width() - 16, ov_top + 8)
-        self.minimap.move(
-            center_x + center_w - self.minimap.width() - 16,
-            ov_top + ov_h - self.minimap.height() - 8,
-        )
+        if self.minimap.has_custom_position():
+            # User dragged it — keep their spot, just clamp to stay reachable on resize.
+            mx = min(max(self.minimap.x(), center_x), max(center_x, center_x + center_w - self.minimap.width()))
+            my = min(max(self.minimap.y(), ov_top), max(ov_top, ov_top + ov_h - self.minimap.height()))
+            self.minimap.move(mx, my)
+        else:
+            self.minimap.move(
+                center_x + center_w - self.minimap.width() - 16,
+                ov_top + ov_h - self.minimap.height() - 8,
+            )
         self.minimap.raise_()
         self.compass.raise_()
 
@@ -241,24 +323,55 @@ class MainLayout(QWidget):
 
     # ─── Tool Selection ───
 
+    def _on_brush_panel_hidden(self):
+        """Fires whenever the Brush panel is hidden for ANY reason — explicit
+        toggle, switching to another tool, or PanelManager's exclusivity
+        closing it to open Grid/Terrain — so its sub-panel (Assets) never
+        stays orphaned on screen with nothing to anchor next to."""
+        self.asset_browser_panel.hide()
+        self._reposition()
+
     def _on_tool_selected(self, tool_name: str):
         if tool_name == "Brush":
             self._panel_mgr.show("Brush")
         else:
             self._panel_mgr.hide("Brush")
+            self.asset_browser_panel.hide()
+        if tool_name == "Selecionar":
+            self._panel_mgr.show("Select")
+        else:
+            self._panel_mgr.hide("Select")
+        self._reposition()
+
+    def _close_select_panel(self):
+        self._panel_mgr.hide("Select")
+        self._reposition()
+
+    def _toggle_asset_browser(self):
+        """Texture preview clicked — open/close the Assets browser next to Brush."""
+        if not self.brush_panel.isVisible():
+            return
+        if self.asset_browser_panel.isVisible():
+            self.asset_browser_panel.hide()
+        else:
+            self.asset_browser_panel.show()
+        self._reposition()
+
+    def _close_brush_panels(self):
+        self._panel_mgr.hide("Brush")
+        self.asset_browser_panel.hide()
         self._reposition()
 
     # ─── Toolbar Actions ───
 
     def _on_toolbar_action(self, name: str):
-        if name in ("Grid", "Terreno"):
+        if name in ("Grid", "Terreno", "Regiões"):
             self.canvas.engine.tool_manager.activate("Selecionar")
-            self.brush_panel.hide()
 
         actions = {
             "Grid": self._toggle_grid_panel,
             "Terreno": self._toggle_terrain_panel,
-            "Snap": self.canvas.engine.snap.toggle,
+            "Regiões": self._toggle_region_panel,
             "Undo": self.canvas.engine.history.undo,
             "Redo": self.canvas.engine.history.redo,
         }
@@ -269,24 +382,18 @@ class MainLayout(QWidget):
     # ─── Grid Panel ───
 
     def _toggle_grid_panel(self):
-        self.canvas.engine._toggle_grid()
-        if self.canvas.engine.grid.visible:
-            self._panel_mgr.show("Grid")
-        else:
-            self._panel_mgr.hide("Grid")
+        self._panel_mgr.toggle("Grid")
         self._reposition()
 
     def _close_grid_panel(self):
-        self.canvas.engine._toggle_grid()
         self._panel_mgr.hide("Grid")
         self._reposition()
 
     def _on_grid_toggled(self, visible: bool):
-        if visible:
-            self._panel_mgr.show("Grid")
-        else:
-            self._panel_mgr.hide("Grid")
-        self._reposition()
+        # Fired by the 'G' shortcut — grid visibility itself is controlled by the
+        # panel's shape dropdown ("Nenhum" = off), not by opening/closing the panel.
+        if self._panel_mgr.is_visible("Grid"):
+            self._grid_med.sync_shape_combo()
 
     # ─── Terrain Panel ───
 
@@ -303,6 +410,37 @@ class MainLayout(QWidget):
         self._panel_mgr.hide("Terrain")
         self.canvas_toolbar.uncheck_action("Terreno")
         self._reposition()
+
+    # ─── Região Panel ───
+
+    def _toggle_region_panel(self):
+        self._panel_mgr.toggle("Region")
+        self._reposition()
+
+    def _close_region_panel(self):
+        self._panel_mgr.hide("Region")
+        self.canvas_toolbar.uncheck_action("Regiões")
+        self._reposition()
+
+    # ─── View Dropdown (show/hide UI chrome) ───
+
+    def _on_view_toggled(self, key: str, visible: bool):
+        widget = {
+            "top_bar": self.top_bar,
+            "explorer": self._left_container,
+            "inspector": self._right_scroll,
+            "progression": self.progression,
+            "status_bar": self.status_bar,
+            "minimap": self.minimap,
+            "compass": self.compass,
+        }.get(key)
+        if widget:
+            widget.setVisible(visible)
+            if visible:
+                # Any movable panel could be parked where this one just
+                # reappeared — not just the toolbar.
+                self._toolbar_med.resolve_collision()
+                self.floating.push_clear("minimap")
 
     # ─── Compass ───
 
@@ -322,9 +460,9 @@ class MainLayout(QWidget):
 
     def _canvas_widgets(self) -> list[QWidget]:
         return [
-            self.canvas_toolbar, self.brush_panel,
-            self.grid_panel, self.terrain_panel, self._left_container,
-            self._right_scroll, self.progression, self.compass, self.minimap,
+            self.canvas_toolbar, self.brush_panel, self.asset_browser_panel,
+            self.grid_panel, self.terrain_panel, self.region_panel, self.select_panel,
+            self._left_container, self._right_scroll, self.progression, self.compass, self.minimap,
         ]
 
     def _on_menu_view(self, menu_name: str):
@@ -407,7 +545,8 @@ class MainLayout(QWidget):
         self.top_bar.set_active_menu("Mapa")
 
         for w in self._canvas_widgets():
-            if w in (self.brush_panel, self.grid_panel, self.terrain_panel):
+            if w in (self.brush_panel, self.asset_browser_panel, self.grid_panel,
+                     self.terrain_panel, self.region_panel, self.select_panel):
                 continue
             w.show()
         self._reposition()

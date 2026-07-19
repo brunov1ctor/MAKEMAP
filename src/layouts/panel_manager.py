@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from PySide6.QtWidgets import QWidget, QScrollArea
-from PySide6.QtCore import QRect, QRectF
+from PySide6.QtCore import QRect, QRectF, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
 
 
@@ -96,7 +96,10 @@ class PanelManager:
         entry.widget.show()
         entry.widget.raise_()
         if entry.on_show:
-            entry.on_show()
+            # Deferred: the caller repositions the panel (final geometry) right after
+            # show() returns. Populating content synchronously here would run against
+            # the panel's stale/default size, which some scroll areas never recover from.
+            QTimer.singleShot(0, entry.on_show)
 
     def hide(self, name: str):
         entry = self._panels.get(name)

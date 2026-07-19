@@ -185,7 +185,7 @@ class ConfigPanel(MenuPanel):
         super().__init__("Config", "⚙", parent)
         self.content_layout.setContentsMargins(0, 8, 0, 8)
         self.content_layout.setSpacing(0)
-        from src.layouts.panels.asset_manager import AssetSoundManager
+        from src.layouts.panels.assets.panel import AssetSoundManager
         manager = AssetSoundManager()
         self.content_layout.addWidget(manager)
 

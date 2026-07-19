@@ -20,9 +20,16 @@ class SnapManager:
 
     def __init__(self, grid: GridManager):
         self._grid = grid
-        self.enabled = True
+        # Off by default — snap's meaning is tied to the grid shape (it fills
+        # whichever cell you click, in that shape), so picking a shape with
+        # nothing snapped on yet is the least surprising starting point.
+        self.enabled = False
         self.mode = SnapMode.GRID
         self.threshold = 8.0  # pixels
+
+    @property
+    def grid(self) -> GridManager:
+        return self._grid
 
     def snap(self, pos: QPointF) -> QPointF:
         """Snap a position based on current mode."""

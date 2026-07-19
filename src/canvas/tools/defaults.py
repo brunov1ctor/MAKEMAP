@@ -94,7 +94,7 @@ class SelectTool(BaseTool):
             else:
                 # Click selection
                 item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
-                if item and (item.flags() & item.GraphicsItemFlag.ItemIsSelectable):
+                if item and self._selection.is_selectable(item):
                     if add:
                         self._selection.toggle(item)
                     else:

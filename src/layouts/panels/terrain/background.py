@@ -8,8 +8,8 @@ from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton,
     QWidget, QScrollArea, QLineEdit, QGridLayout, QTabBar, QSizePolicy,
 )
-from PySide6.QtCore import Qt, Signal, QSize, QUrl, QTimer, QFileSystemWatcher
-from PySide6.QtGui import QColor, QPixmap, QMovie
+from PySide6.QtCore import Qt, Signal, QSize, QFileSystemWatcher
+from PySide6.QtGui import QColor, QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panels.terrain.color_picker import HueBar, SatValSquare, ColorSlider
@@ -53,7 +53,7 @@ class BackgroundSection(QFrame):
         for key, icon_text, tooltip in [
             ("color", "🎨", "Cor fixa"),
             ("image", "🖼", "Imagem estática"),
-            ("gif", "🎞", "Animado (GIF/MP4)"),
+            ("parallax", "🌄", "Parallax (camadas)"),
         ]:
             btn = QToolButton()
             btn.setText(icon_text)
@@ -241,16 +241,29 @@ class BackgroundSection(QFrame):
 
         self._bg_file_widget.hide()
         self._bg_asset_buttons: list[QFrame] = []
-        self._video_thumb_cache: dict[str, QPixmap] = {}
         layout.addWidget(self._bg_file_widget)
+
+        # Parallax preset picker — lists presets managed in the Config
+        # panel (AssetSoundManager's Parallax group), not raw files.
+        self._bg_parallax_widget = QFrame()
+        self._bg_parallax_widget.setStyleSheet("background: transparent; border: none;")
+        parallax_lay = QVBoxLayout(self._bg_parallax_widget)
+        parallax_lay.setContentsMargins(0, 4, 0, 4)
+        parallax_lay.setSpacing(4)
+        self._bg_parallax_list_layout = parallax_lay
+        self._bg_parallax_hint = QLabel("Nenhum preset — crie um no painel Config")
+        self._bg_parallax_hint.setWordWrap(True)
+        self._bg_parallax_hint.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
+        parallax_lay.addWidget(self._bg_parallax_hint)
+        self._bg_parallax_widget.hide()
+        layout.addWidget(self._bg_parallax_widget)
 
         # Watcher
         self._bg_watcher = QFileSystemWatcher(self)
         for cat in self._bg_categories:
-            for sub in ("images", "gifs"):
-                sub_path = os.path.join(self._bg_dir, cat, sub)
-                os.makedirs(sub_path, exist_ok=True)
-                self._bg_watcher.addPath(sub_path)
+            sub_path = os.path.join(self._bg_dir, cat, "images")
+            os.makedirs(sub_path, exist_ok=True)
+            self._bg_watcher.addPath(sub_path)
         self._bg_watcher.directoryChanged.connect(self._on_bg_dir_changed)
         self._bg_current_category = self._bg_categories[0]
 
@@ -281,19 +294,24 @@ class BackgroundSection(QFrame):
             self._bg_active = ""
             self._bg_color_widget.hide()
             self._bg_file_widget.hide()
+            self._bg_parallax_widget.hide()
             self.background_changed.emit("none", "")
         else:
             for k, b in self._bg_buttons.items():
                 b.setChecked(k == key)
             self._bg_active = key
+            self._bg_color_widget.hide()
+            self._bg_file_widget.hide()
+            self._bg_parallax_widget.hide()
             if key == "color":
                 self._bg_color_widget.show()
-                self._bg_file_widget.hide()
-            elif key in ("image", "gif"):
-                self._bg_color_widget.hide()
+            elif key == "image":
                 self._bg_file_widget.show()
                 current_idx = self._bg_tabs.currentIndex()
                 self._load_bg_assets(self._bg_categories[current_idx])
+            elif key == "parallax":
+                self._bg_parallax_widget.show()
+                self._load_parallax_presets()
         self.content_changed.emit()
 
     # ─── Color logic ───
@@ -403,9 +421,6 @@ class BackgroundSection(QFrame):
 
     def _load_bg_assets(self, category: str):
         for w in self._bg_asset_buttons:
-            for child in w.findChildren(QLabel):
-                if hasattr(child, '_movie_ref') and child._movie_ref:
-                    child._movie_ref.stop()
             w.deleteLater()
         self._bg_asset_buttons.clear()
 
@@ -414,19 +429,14 @@ class BackgroundSection(QFrame):
             os.makedirs(cat_dir, exist_ok=True)
             return
 
-        if self._bg_active == "gif":
-            scan_dir = os.path.join(cat_dir, "gifs")
-            extensions = (".gif", ".mp4", ".webm", ".mov")
-        else:
-            scan_dir = os.path.join(cat_dir, "images")
-            extensions = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
+        scan_dir = os.path.join(cat_dir, "images")
+        extensions = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
 
         os.makedirs(scan_dir, exist_ok=True)
         files = sorted(f for f in os.listdir(scan_dir) if f.lower().endswith(extensions))
 
         for fname in files:
             fpath = os.path.join(scan_dir, fname)
-            ext = os.path.splitext(fname)[1].lower()
 
             item_widget = QFrame()
             item_widget.setFixedSize(56, 62)
@@ -442,29 +452,17 @@ class BackgroundSection(QFrame):
             item_lay.setContentsMargins(2, 2, 2, 2)
             item_lay.setSpacing(1)
 
-            if ext == ".gif":
-                gif_label = QLabel()
-                gif_label.setFixedSize(36, 36)
-                gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                gif_label.setStyleSheet("background: transparent; border: none;")
-                movie = QMovie(fpath)
-                movie.setScaledSize(QSize(36, 36))
-                gif_label.setMovie(movie)
-                movie.start()
-                item_lay.addWidget(gif_label, 0, Qt.AlignmentFlag.AlignCenter)
-                gif_label._movie_ref = movie
+            thumb_label = QLabel()
+            thumb_label.setFixedSize(36, 36)
+            thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            thumb_label.setStyleSheet("background: transparent; border: none;")
+            pix = self._get_thumbnail(fpath)
+            if pix and not pix.isNull():
+                thumb_label.setPixmap(pix)
             else:
-                thumb_label = QLabel()
-                thumb_label.setFixedSize(36, 36)
-                thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                thumb_label.setStyleSheet("background: transparent; border: none;")
-                pix = self._get_thumbnail(fpath, ext)
-                if pix and not pix.isNull():
-                    thumb_label.setPixmap(pix)
-                else:
-                    thumb_label.setText("🎬")
-                    thumb_label.setStyleSheet("font-size: 18px; background: transparent; border: none;")
-                item_lay.addWidget(thumb_label, 0, Qt.AlignmentFlag.AlignCenter)
+                thumb_label.setText("🖼")
+                thumb_label.setStyleSheet("font-size: 18px; background: transparent; border: none;")
+            item_lay.addWidget(thumb_label, 0, Qt.AlignmentFlag.AlignCenter)
 
             name_lbl = QLabel(fname[:8])
             name_lbl.setFixedHeight(12)
@@ -478,45 +476,43 @@ class BackgroundSection(QFrame):
             self._bg_grid_layout.addWidget(item_widget)
             self._bg_asset_buttons.append(item_widget)
 
-    def _get_thumbnail(self, fpath: str, ext: str) -> QPixmap | None:
-        if ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
-            pix = QPixmap(fpath)
-            if not pix.isNull():
-                return pix.scaled(QSize(36, 36), Qt.AspectRatioMode.KeepAspectRatio,
-                                  Qt.TransformationMode.SmoothTransformation)
-        elif ext in (".mp4", ".webm", ".mov"):
-            if fpath in self._video_thumb_cache:
-                return self._video_thumb_cache[fpath]
-            self._capture_video_thumb(fpath)
+    def _get_thumbnail(self, fpath: str) -> QPixmap | None:
+        pix = QPixmap(fpath)
+        if not pix.isNull():
+            return pix.scaled(QSize(36, 36), Qt.AspectRatioMode.KeepAspectRatio,
+                              Qt.TransformationMode.SmoothTransformation)
         return None
 
-    def _capture_video_thumb(self, video_path: str):
-        from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink
+    # ─── Parallax preset picker ───
 
-        sink = QVideoSink(self)
-        player = QMediaPlayer(self)
-        audio = QAudioOutput(self)
-        audio.setVolume(0.0)
-        player.setAudioOutput(audio)
-        player.setVideoSink(sink)
+    def _load_parallax_presets(self):
+        while self._bg_parallax_list_layout.count() > 1:  # keep the hint label
+            item = self._bg_parallax_list_layout.takeAt(1)
+            if item.widget():
+                item.widget().deleteLater()
 
-        def on_frame(frame):
-            img = frame.toImage()
-            if not img.isNull():
-                pix = QPixmap.fromImage(img).scaled(
-                    QSize(36, 36), Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation)
-                self._video_thumb_cache[video_path] = pix
-                player.stop()
-                QTimer.singleShot(50, lambda: self._load_bg_assets(self._bg_current_category))
-            try:
-                sink.videoFrameChanged.disconnect(on_frame)
-            except (RuntimeError, TypeError):
-                pass
+        from src.engines.map.parallax import get_parallax_library
+        presets = get_parallax_library().list_presets()
+        self._bg_parallax_hint.setVisible(not presets)
 
-        sink.videoFrameChanged.connect(on_frame)
-        player.setSource(QUrl.fromLocalFile(video_path))
-        player.play()
+        for preset in presets:
+            btn = QToolButton()
+            btn.setText(f"🌄 {preset.name}  ({len(preset.layers)} camadas)")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QToolButton {{
+                    border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;
+                    background: rgba(255,255,255,0.04); color: {Colors.TEXT_PRIMARY};
+                    font-size: 10px; padding: 4px 8px; text-align: left;
+                }}
+                QToolButton:hover {{ background: {Colors.PANEL_HOVER}; border-color: {Colors.ACCENT}; }}
+            """)
+            btn.clicked.connect(lambda checked=False, key=preset.key: self._on_parallax_preset_clicked(key))
+            self._bg_parallax_list_layout.addWidget(btn)
+
+    def _on_parallax_preset_clicked(self, preset_key: str):
+        self.background_changed.emit("parallax", preset_key)
+        self.close_requested.emit()
 
     def _on_bg_item_clicked(self, path: str, widget: QFrame):
         for w in self._bg_asset_buttons:

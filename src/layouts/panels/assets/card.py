@@ -5,12 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import ClassVar
 
+import shiboken6
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QFrame, QSizePolicy, QToolButton, QLineEdit, QGraphicsOpacityEffect,
 )
 from PySide6.QtCore import Qt, Signal, QSize, QPoint, QVariantAnimation, QEasingCurve
-from PySide6.QtGui import QPixmap, QImage, QCursor, QPainter, QColor, QRadialGradient
+from PySide6.QtGui import QPixmap, QImage, QImageReader, QCursor, QPainter, QColor, QRadialGradient
 
 from src.styles.tokens import Colors
 from src.layouts.panels.assets.widgets import MiniSlider, SoundColumn, DropZone
@@ -25,6 +26,21 @@ _GLOW_COLOR = QColor(79, 195, 247)  # ACCENT #4FC3F7
 _SEL_BG = "rgba(79, 195, 247, 0.15)"
 _SEL_BORDER = "rgba(79, 195, 247, 0.8)"
 
+_thumb_gen = None
+
+
+def _get_thumbnail_generator():
+    """Process-wide ThumbnailGenerator over the same on-disk cache AssetLibrary
+    already maintains (128px PNGs, keyed by asset id) — avoids re-decoding full
+    source images (esp. large backgrounds) every time this panel opens.
+    """
+    global _thumb_gen
+    if _thumb_gen is None:
+        from src.engines.assets.thumbnail import ThumbnailGenerator
+        from src.engines.assets.library import LIBRARY_DIR
+        _thumb_gen = ThumbnailGenerator(LIBRARY_DIR / "thumbnails")
+    return _thumb_gen
+
 
 class CardSelectionManager:
     """Singleton que coordena seleção de cards entre todas as categorias."""
@@ -37,8 +53,19 @@ class CardSelectionManager:
             cls._instance = cls()
         return cls._instance
 
+    def _prune(self):
+        """Drop cards whose underlying C++ object is already gone.
+
+        Nothing removes a card from `_selected` when it's destroyed (category
+        repopulate, delete button, drag-drop move to another category, ...) —
+        this singleton outlives any single card, so a stale reference here
+        would otherwise crash the next select()/clear() that touches it.
+        """
+        self._selected = [c for c in self._selected if shiboken6.isValid(c)]
+
     def select(self, card: AssetRowCard, modifiers: Qt.KeyboardModifier,
                all_cards: list[AssetRowCard]):
+        self._prune()
         ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
         shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
 
@@ -68,12 +95,14 @@ class CardSelectionManager:
             card._set_selected(True)
 
     def clear(self):
+        self._prune()
         for c in self._selected:
             c._set_selected(False)
         self._selected.clear()
 
     @property
     def selected(self) -> list[AssetRowCard]:
+        self._prune()
         return list(self._selected)
 
 
@@ -157,13 +186,30 @@ class AssetRowCard(QFrame):
         col1.setContentsMargins(0, 0, 0, 0)
         col1.setSpacing(8)
 
+        asset_id = self._get_asset_id(file_path)
+
         self._thumb = QLabel()
         self._thumb.setFixedSize(64, 64)
         self._thumb.setStyleSheet("background: rgba(0,0,0,0.3); border-radius: 6px; border: none;")
-        pix = QPixmap(str(file_path))
+        reader = QImageReader(str(file_path))
+        src_size = reader.size()  # header-only read, used for metadata below either way
+
+        pix = _get_thumbnail_generator().get_pixmap(asset_id)
+        if pix is not None and not pix.isNull():
+            # Cache hit — just downscale the already-small 128px cached PNG.
+            pix = pix.scaled(QSize(64, 64), Qt.AspectRatioMode.KeepAspectRatio,
+                              Qt.TransformationMode.SmoothTransformation)
+        else:
+            # Not cached (e.g. backgrounds, which don't go through AssetLibrary's
+            # sync/thumbnail pipeline) — decode directly at thumbnail resolution
+            # instead of full-res QPixmap + scaled().
+            if src_size.isValid():
+                reader.setScaledSize(src_size.scaled(QSize(64, 64), Qt.AspectRatioMode.KeepAspectRatio))
+            thumb_image = reader.read()
+            pix = QPixmap.fromImage(thumb_image) if not thumb_image.isNull() else QPixmap()
+
         if not pix.isNull():
-            self._thumb.setPixmap(pix.scaled(QSize(64, 64), Qt.AspectRatioMode.KeepAspectRatio,
-                                       Qt.TransformationMode.SmoothTransformation))
+            self._thumb.setPixmap(pix)
             self._thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col1.addWidget(self._thumb, 0)
 
@@ -211,11 +257,7 @@ class AssetRowCard(QFrame):
         info.addLayout(name_row)
 
         size_kb = file_path.stat().st_size / 1024
-        try:
-            img = QImage(str(file_path))
-            dims = f"{img.width()}x{img.height()}" if not img.isNull() else ""
-        except Exception:
-            dims = ""
+        dims = f"{src_size.width()}x{src_size.height()}" if src_size.isValid() else ""
         meta_text = f"{size_kb:.0f} KB"
         if dims:
             meta_text += f" \u2022 {dims}"
@@ -232,8 +274,6 @@ class AssetRowCard(QFrame):
 
         col1.addLayout(info, 1)
         row.addLayout(col1, 1)
-
-        asset_id = self._get_asset_id(file_path)
 
         # ═══ 1/3: Brush Sound ═══
         col2 = QHBoxLayout()
@@ -272,14 +312,11 @@ class AssetRowCard(QFrame):
     def _get_asset_id(file_path: Path) -> str:
         """Retorna o UUID do asset no banco, ou o stem como fallback."""
         try:
-            import sqlite3
-            from src.engines.assets.library import LIBRARY_DB
-            db = sqlite3.connect(str(LIBRARY_DB))
-            db.row_factory = sqlite3.Row
+            from src.engines.assets.library import get_shared_db
+            db = get_shared_db()
             row = db.execute(
                 "SELECT id FROM assets WHERE source_path=?", (str(file_path),)
             ).fetchone()
-            db.close()
             if row:
                 return row["id"]
         except Exception:
@@ -614,20 +651,6 @@ class CategorySection(QWidget):
         col1_hdr.addWidget(self._count_lbl)
         col1_hdr.addStretch()
 
-        self._del_cat_btn = QToolButton()
-        self._del_cat_btn.setText("🗑")
-        self._del_cat_btn.setFixedSize(18, 18)
-        self._del_cat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._del_cat_btn.setToolTip("Deletar categoria")
-        self._del_cat_btn.setStyleSheet(
-            f"QToolButton {{ background: transparent; border: none; font-size: 11px; "
-            f"color: {Colors.TEXT_MUTED}; padding: 0; }}"
-            f"QToolButton:hover {{ color: {Colors.ERROR}; }}"
-        )
-        self._del_cat_btn.clicked.connect(self._on_delete_category)
-        self._del_cat_btn.hide()
-        col1_hdr.addWidget(self._del_cat_btn)
-
         h_lay.addLayout(col1_hdr, 1)
 
         self._brush_hdr = QLabel("🖌 Brush")
@@ -647,6 +670,20 @@ class CategorySection(QWidget):
         self._ambient_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._ambient_hdr.hide()
         h_lay.addWidget(self._ambient_hdr, 1)
+
+        self._del_cat_btn = QToolButton()
+        self._del_cat_btn.setText("🗑")
+        self._del_cat_btn.setFixedSize(18, 18)
+        self._del_cat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._del_cat_btn.setToolTip("Deletar categoria")
+        self._del_cat_btn.setStyleSheet(
+            f"QToolButton {{ background: transparent; border: none; font-size: 11px; "
+            f"color: {Colors.TEXT_MUTED}; padding: 0; }}"
+            f"QToolButton:hover {{ color: {Colors.ERROR}; }}"
+        )
+        self._del_cat_btn.clicked.connect(self._on_delete_category)
+        self._del_cat_btn.hide()
+        h_lay.addWidget(self._del_cat_btn, 0)
 
         main.addWidget(self._header)
 
@@ -722,15 +759,13 @@ class CategorySection(QWidget):
 
         new_category = self._folder.name
         try:
-            import sqlite3
-            from src.engines.assets.library import LIBRARY_DB
-            db = sqlite3.connect(str(LIBRARY_DB))
+            from src.engines.assets.library import get_shared_db
+            db = get_shared_db()
             db.execute(
                 "UPDATE assets SET source_path=?, category=? WHERE source_path=?",
                 (str(dest_path), new_category, str(src_path))
             )
             db.commit()
-            db.close()
         except Exception:
             pass
 
@@ -844,13 +879,11 @@ class CategorySection(QWidget):
             if isinstance(w, AssetRowCard):
                 ordered.append(str(w._path))
         try:
-            import sqlite3
-            from src.engines.assets.library import LIBRARY_DB
-            db = sqlite3.connect(str(LIBRARY_DB))
+            from src.engines.assets.library import get_shared_db
+            db = get_shared_db()
             for idx, path in enumerate(ordered):
                 db.execute("UPDATE assets SET sort_order = ? WHERE source_path = ?", (idx, path))
             db.commit()
-            db.close()
         except Exception:
             pass
 
@@ -869,14 +902,12 @@ class CategorySection(QWidget):
         # Load order from DB
         ordered_files: list[Path] = []
         try:
-            import sqlite3
-            from src.engines.assets.library import LIBRARY_DB
-            db = sqlite3.connect(str(LIBRARY_DB))
+            from src.engines.assets.library import get_shared_db
+            db = get_shared_db()
             rows = db.execute(
                 "SELECT source_path FROM assets WHERE source_path LIKE ? ORDER BY sort_order, name",
                 (str(self._folder) + "%",)
             ).fetchall()
-            db.close()
             for row in rows:
                 p = Path(row[0])
                 if p in all_files:

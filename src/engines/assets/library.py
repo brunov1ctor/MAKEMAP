@@ -8,18 +8,27 @@ Structure:
         ├── thumbnails/          ← generated thumbnails
         ├── backgrounds/         ← fundos do canvas
         ├── sounds/              ← sistema de áudio 4 camadas
-        └── assets/              ← assets do mapa
-            ├── terrain/         ← grass, sand, water, snow, lava
-            ├── trees/           ← árvores, arbustos, vegetação
-            ├── mountains/       ← montanhas, colinas
-            ├── rocks/           ← pedras, rochas
-            ├── buildings/       ← casas, torres, castelos, ruínas
-            ├── effects/         ← nuvens, neblina, partículas
-            └── misc/            ← outros
+        └── assets/              ← assets do mapa, por estilo então categoria
+            ├── realistic/
+            ├── cartoon/
+            ├── pixel/
+            ├── inkarnate/
+            ├── medieval/
+            ├── lowpoly/
+            ├── dark/
+            ├── anime/
+            └── scifi/
+                ├── terrain/         ← grass, sand, water, snow, lava
+                ├── trees/           ← árvores, arbustos, vegetação
+                ├── mountains/       ← montanhas, colinas
+                ├── rocks/           ← pedras, rochas
+                ├── buildings/       ← casas, torres, castelos, ruínas
+                ├── effects/         ← nuvens, neblina, partículas
+                └── misc/            ← outros
 
 Usage:
-    Drop any PNG/WEBP/JPG into the correct subfolder inside assets/.
-    The library auto-detects and registers it.
+    Drop any PNG/WEBP/JPG into the correct <style>/<category> subfolder
+    inside assets/. The library auto-detects and registers it.
 """
 
 from __future__ import annotations
@@ -46,6 +55,23 @@ LIBRARY_DB = LIBRARY_DIR / "library.sqlite"
 
 SUPPORTED_FORMATS = {".png", ".webp", ".svg", ".jpg", ".jpeg"}
 
+_shared_db: sqlite3.Connection | None = None
+
+
+def get_shared_db() -> sqlite3.Connection:
+    """Process-wide lazily-opened connection to the library DB.
+
+    Widgets that need occasional metadata reads/writes (asset cards, sound
+    columns) should use this instead of opening a fresh sqlite3.connect()
+    per call — opening hundreds of short-lived connections just to build a
+    panel listing a few dozen assets was the dominant cost when profiled.
+    """
+    global _shared_db
+    if _shared_db is None:
+        _shared_db = sqlite3.connect(str(LIBRARY_DB))
+        _shared_db.row_factory = sqlite3.Row
+    return _shared_db
+
 CATEGORY_FOLDERS = [
     "terrain",
     "trees",
@@ -56,6 +82,43 @@ CATEGORY_FOLDERS = [
     "misc",
 ]
 
+# Visual "art style" of an asset pack — the top level of assets/, above
+# category. New styles just need adding here (and to STYLE_LABELS if the UI
+# wants a friendlier name than the folder name itself).
+STYLE_FOLDERS = [
+    "realistic",
+    "cartoon",
+    "pixel",
+    "inkarnate",
+    "medieval",
+    "lowpoly",
+    "dark",
+    "anime",
+    "scifi",
+]
+DEFAULT_STYLE = "realistic"
+
+
+def list_styles() -> list[str]:
+    """Styles that currently exist on disk under library/assets/ — this is
+    the source of truth for UI style tabs. STYLE_FOLDERS is NOT force-unioned
+    in here: once a style's folder is deleted, it must actually disappear
+    from the list, not just have its content cleared (deleting a style has
+    to mean the same thing whether it's one of the 9 shipped defaults or a
+    custom one). Shipped styles that still exist keep their familiar order;
+    any custom ones are appended alphabetically after them. Falls back to
+    [DEFAULT_STYLE] if nothing exists yet, so there's always at least one
+    selectable option — its folder is created lazily the first time it's
+    actually rendered (see CategorySection), not proactively here."""
+    if not ASSETS_DIR.exists():
+        return [DEFAULT_STYLE]
+    existing = {p.name for p in ASSETS_DIR.iterdir() if p.is_dir()}
+    if not existing:
+        return [DEFAULT_STYLE]
+    ordered = [s for s in STYLE_FOLDERS if s in existing]
+    custom = sorted(existing - set(STYLE_FOLDERS))
+    return ordered + custom
+
 
 @dataclass
 class LibraryAsset:
@@ -63,6 +126,7 @@ class LibraryAsset:
     id: str
     name: str
     category: str = ""
+    style: str = ""
     source_path: str = ""
     width: int = 0
     height: int = 0
@@ -73,7 +137,7 @@ class LibraryAsset:
 class AssetLibrary(QObject):
     """Global asset library — independent of projects.
 
-    Assets live in ~/.makemap/library/<category>/
+    Assets live in library/assets/<style>/<category>/
     Drop files there and they get auto-registered.
     """
 
@@ -86,11 +150,19 @@ class AssetLibrary(QObject):
         # Ensure directory structure
         LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
         ASSETS_DIR.mkdir(exist_ok=True)
-        for folder in CATEGORY_FOLDERS:
-            (ASSETS_DIR / folder).mkdir(exist_ok=True)
 
         # Database
         self._db = self._init_db()
+
+        # One-time move of assets registered before the style dimension
+        # existed (library/assets/<category>/* -> .../realistic/<category>/*)
+        self._migrate_legacy_layout()
+
+        # Deliberately NOT pre-creating every style/category folder here —
+        # the Asset Manager can delete an empty style, and eagerly recreating
+        # all of them on every launch would silently undo that. Folders get
+        # made on demand instead: CategorySection creates its own when
+        # browsed, sync() below already skips ones that don't exist.
 
         # Thumbnails & cache
         self._thumb_dir = LIBRARY_DIR / "thumbnails"
@@ -135,6 +207,8 @@ class AssetLibrary(QObject):
             db.execute("ALTER TABLE assets ADD COLUMN favorite INTEGER DEFAULT 0")
         if "sort_order" not in cols:
             db.execute("ALTER TABLE assets ADD COLUMN sort_order INTEGER DEFAULT 0")
+        if "style" not in cols:
+            db.execute("ALTER TABLE assets ADD COLUMN style TEXT DEFAULT ''")
         db.execute("""
             CREATE TABLE IF NOT EXISTS asset_sounds (
                 id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,10 +223,54 @@ class AssetLibrary(QObject):
         db.commit()
         return db
 
+    def _migrate_legacy_layout(self):
+        """Move assets registered before the style dimension existed.
+
+        The original layout was library/assets/<category>/*, with no style
+        subfolder. Anything found sitting directly in a category folder
+        predates styles entirely and is what was actually dropped in during
+        initial setup — treat it as DEFAULT_STYLE and move it under
+        library/assets/<DEFAULT_STYLE>/<category>/, updating the matching DB
+        rows' source_path and style in the same pass so nothing gets
+        orphaned or re-registered as a duplicate.
+        """
+        moved_any = False
+        for category in CATEGORY_FOLDERS:
+            old_folder = ASSETS_DIR / category
+            if not old_folder.is_dir():
+                continue
+            legacy_files = [f for f in old_folder.iterdir() if f.is_file()]
+            if not legacy_files:
+                continue
+
+            new_folder = ASSETS_DIR / DEFAULT_STYLE / category
+            new_folder.mkdir(parents=True, exist_ok=True)
+            for f in legacy_files:
+                dest = new_folder / f.name
+                if dest.exists():
+                    dest = new_folder / f"{f.stem}_migrated{f.suffix}"
+                old_path = str(f)
+                f.rename(dest)
+                self._db.execute(
+                    "UPDATE assets SET source_path = ?, style = ? WHERE source_path = ?",
+                    (str(dest), DEFAULT_STYLE, old_path),
+                )
+                moved_any = True
+
+        if moved_any:
+            self._db.commit()
+            logger.info(
+                "Library: layout antigo sem estilo migrado para style='%s'", DEFAULT_STYLE
+            )
+
     # ─── Watcher ─────────────────────────────────────────────────────────
 
     def _start_watching(self):
-        dirs = [str(ASSETS_DIR / f) for f in CATEGORY_FOLDERS]
+        dirs = [
+            str(ASSETS_DIR / style / category)
+            for style in STYLE_FOLDERS
+            for category in CATEGORY_FOLDERS
+        ]
         self._watcher.addPaths(dirs)
         self._watcher.directoryChanged.connect(lambda _: self._timer.start())
 
@@ -164,7 +282,7 @@ class AssetLibrary(QObject):
     # ─── Sync ────────────────────────────────────────────────────────────
 
     def sync(self):
-        """Scan all category folders and register new files / fix missing thumbnails."""
+        """Scan all style/category folders and register new files / fix missing thumbnails."""
         registered = self._get_registered_paths()
 
         # Detect orphan paths (file was renamed/moved/deleted)
@@ -182,20 +300,21 @@ class AssetLibrary(QObject):
         # Re-fetch after cleanup
         registered = self._get_registered_paths()
 
-        for folder_name in CATEGORY_FOLDERS:
-            folder = ASSETS_DIR / folder_name
-            if not folder.exists():
-                continue
-
-            for file in folder.iterdir():
-                if not file.is_file():
-                    continue
-                if file.suffix.lower() not in SUPPORTED_FORMATS:
-                    continue
-                if str(file) in registered:
+        for style in STYLE_FOLDERS:
+            for category in CATEGORY_FOLDERS:
+                folder = ASSETS_DIR / style / category
+                if not folder.exists():
                     continue
 
-                self._register(file, category=folder_name)
+                for file in folder.iterdir():
+                    if not file.is_file():
+                        continue
+                    if file.suffix.lower() not in SUPPORTED_FORMATS:
+                        continue
+                    if str(file) in registered:
+                        continue
+
+                    self._register(file, category=category, style=style)
 
         # Ensure all registered assets have thumbnails
         self._ensure_thumbnails()
@@ -225,7 +344,7 @@ class AssetLibrary(QObject):
                     thumb_file.unlink()
                     logger.info("Library: thumbnail órfão removido %s", thumb_file.name)
 
-    def _register(self, file: Path, category: str):
+    def _register(self, file: Path, category: str, style: str):
         """Register a single file into the library."""
         import hashlib
 
@@ -243,8 +362,8 @@ class AssetLibrary(QObject):
         if existing:
             if existing["source_path"] != str(file) or existing["name"] != file.stem:
                 self._db.execute(
-                    "UPDATE assets SET source_path = ?, name = ?, category = ? WHERE id = ?",
-                    (str(file), file.stem, category, existing["id"]),
+                    "UPDATE assets SET source_path = ?, name = ?, category = ?, style = ? WHERE id = ?",
+                    (str(file), file.stem, category, style, existing["id"]),
                 )
                 self._db.commit()
                 logger.info("Library: renomeado %s → %s", existing["name"], file.stem)
@@ -266,14 +385,14 @@ class AssetLibrary(QObject):
 
         # Insert into database
         self._db.execute(
-            """INSERT INTO assets (id, name, category, source_path, width, height, hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (asset_id, file.stem, category, str(file), width, height, file_hash),
+            """INSERT INTO assets (id, name, category, style, source_path, width, height, hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (asset_id, file.stem, category, style, str(file), width, height, file_hash),
         )
         self._db.commit()
 
         self.asset_added.emit(file.stem)
-        logger.info("Library: registrado %s [%s] (%s)", file.stem, category, asset_id[:8])
+        logger.info("Library: registrado %s [%s/%s] (%s)", file.stem, style, category, asset_id[:8])
 
     # ─── Retrieve ────────────────────────────────────────────────────────
 
@@ -327,6 +446,12 @@ class AssetLibrary(QObject):
         ).fetchone()
         return row["id"] if row else None
 
+    def get_name_by_id(self, asset_id: str) -> str | None:
+        row = self._db.execute(
+            "SELECT name FROM assets WHERE id = ?", (asset_id,)
+        ).fetchone()
+        return row["name"] if row else None
+
     def get_thumbnail(self, asset_id: str, size: str = "medium") -> QPixmap | None:
         return self.thumbnails.get_pixmap(asset_id, size)
 
@@ -336,10 +461,16 @@ class AssetLibrary(QObject):
         rows = self._db.execute("SELECT * FROM assets ORDER BY category, name").fetchall()
         return [self._row_to_asset(r) for r in rows]
 
-    def list_by_category(self, category: str) -> list[LibraryAsset]:
-        rows = self._db.execute(
-            "SELECT * FROM assets WHERE category = ? ORDER BY sort_order, name", (category,)
-        ).fetchall()
+    def list_by_category(self, category: str, style: str | None = None) -> list[LibraryAsset]:
+        if style:
+            rows = self._db.execute(
+                "SELECT * FROM assets WHERE category = ? AND style = ? ORDER BY sort_order, name",
+                (category, style),
+            ).fetchall()
+        else:
+            rows = self._db.execute(
+                "SELECT * FROM assets WHERE category = ? ORDER BY sort_order, name", (category,)
+            ).fetchall()
         return [self._row_to_asset(r) for r in rows]
 
     def set_sort_order(self, ordered_paths: list[str]):
@@ -394,8 +525,13 @@ class AssetLibrary(QObject):
         row = self._db.execute("SELECT favorite FROM assets WHERE id = ?", (asset_id,)).fetchone()
         return bool(row["favorite"]) if row else False
 
-    def list_favorites(self) -> list[LibraryAsset]:
-        rows = self._db.execute("SELECT * FROM assets WHERE favorite = 1 ORDER BY name").fetchall()
+    def list_favorites(self, style: str | None = None) -> list[LibraryAsset]:
+        if style:
+            rows = self._db.execute(
+                "SELECT * FROM assets WHERE favorite = 1 AND style = ? ORDER BY name", (style,)
+            ).fetchall()
+        else:
+            rows = self._db.execute("SELECT * FROM assets WHERE favorite = 1 ORDER BY name").fetchall()
         return [self._row_to_asset(r) for r in rows]
 
     # ─── Sounds ──────────────────────────────────────────────────────────
@@ -438,6 +574,7 @@ class AssetLibrary(QObject):
             id=row["id"],
             name=row["name"],
             category=row["category"],
+            style=row["style"] if "style" in row.keys() else "",
             source_path=row["source_path"],
             width=row["width"],
             height=row["height"],
