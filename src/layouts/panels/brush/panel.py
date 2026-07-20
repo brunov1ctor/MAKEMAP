@@ -9,7 +9,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
     QSizePolicy, QScrollArea, QWidget, QToolButton,
-    QCheckBox, QGraphicsDropShadowEffect,
+    QCheckBox, QGraphicsDropShadowEffect, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QBrush, QPixmap, QColor
@@ -139,6 +139,7 @@ class BrushToolPanel(QFrame):
     PANEL_WIDTH = 300
 
     mode_changed = Signal(str)
+    terrain_changed = Signal(str)  # terrain_id ("" = Mapa Infinito) — "Pintando em" dropdown
     assets_requested = Signal()  # texture preview clicked — open the Assets browser
     close_requested = Signal()
 
@@ -222,6 +223,10 @@ class BrushToolPanel(QFrame):
         self._layout.addLayout(header)
 
     def _build_terrain_indicator(self):
+        """"Pintando em" — a real dropdown (not just a label reflecting
+        whatever's selected over in the Terrain panel), same as Região's
+        own, so you can pick which terrain to paint into (or "Mapa
+        Infinito") directly from here."""
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 2)
         row.setSpacing(4)
@@ -230,15 +235,45 @@ class BrushToolPanel(QFrame):
         icon.setStyleSheet("font-size: 10px; background: transparent; border: none;")
         row.addWidget(icon)
 
-        self._terrain_label = QLabel("Nenhum terreno ativo")
-        self._terrain_label.setStyleSheet(f"""
-            color: {_TEXT_SEC}; font-size: 10px;
-            background: transparent; border: none;
+        label = QLabel("Pintando em")
+        label.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 10px; background: transparent; border: none;")
+        row.addWidget(label)
+
+        self._terrain_combo = QComboBox()
+        self._terrain_combo.addItem("🌍 Mapa Infinito", "")
+        self._terrain_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._terrain_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: rgba(255,255,255,0.04); color: {_TEXT_SEC};
+                border: 1px solid {_BORDER}; border-radius: 4px;
+                padding: 3px 8px; font-size: 10px;
+            }}
+            QComboBox::drop-down {{ border: none; width: 14px; }}
+            QComboBox QAbstractItemView {{
+                background: {Colors.BG_ELEVATED}; color: {_TEXT};
+                border: 1px solid {Colors.BORDER}; selection-background-color: {_ACCENT_DIM};
+            }}
         """)
-        row.addWidget(self._terrain_label)
-        row.addStretch()
+        self._terrain_combo.currentIndexChanged.connect(
+            lambda i: self.terrain_changed.emit(self._terrain_combo.itemData(i))
+        )
+        row.addWidget(self._terrain_combo, 1)
 
         self._layout.addLayout(row)
+
+    def set_terrain_options(self, options: list[tuple[str, str]]):
+        """Rebuild the "Pintando em" dropdown. `options` is a list of
+        (terrain_id, name) for every currently-existing terrain — "Mapa
+        Infinito" (id "") is always prepended automatically."""
+        current = self._terrain_combo.itemData(self._terrain_combo.currentIndex())
+        self._terrain_combo.blockSignals(True)
+        self._terrain_combo.clear()
+        self._terrain_combo.addItem("🌍 Mapa Infinito", "")
+        for terrain_id, name in options:
+            self._terrain_combo.addItem(f"🗺 {name}", terrain_id)
+        idx = self._terrain_combo.findData(current)
+        self._terrain_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._terrain_combo.blockSignals(False)
 
     def _build_sliders_grid(self):
         # One column, not two — a 2-column grid in a 300px-wide panel doesn't
@@ -250,7 +285,7 @@ class BrushToolPanel(QFrame):
         col.setContentsMargins(0, 4, 0, 4)
         col.setSpacing(2)
 
-        self.size_slider = BrushSlider("Brush Size", "🖌", 1, 1000, 100, "")
+        self.size_slider = BrushSlider("Brush Size", "🖌", 1, 1000, 100, "m")
         self.opacity_slider = BrushSlider("Opacity", "💧", 0, 100, 100, "%")
         self.softness_slider = BrushSlider("Softness", "◎", 0, 100, 50, "%")
         self.scale_slider = BrushSlider("Texture Scale", "🔲", 10, 500, 100, "%")
@@ -399,8 +434,6 @@ class BrushToolPanel(QFrame):
         self._material_label.setText(elided)
         self._material_label.setToolTip(name)
 
-    def set_active_terrain_name(self, name: str | None):
-        self._terrain_label.setText(f"Pintando em: {name}" if name else "Nenhum terreno ativo")
 
     def set_texture_preview(self, pixmap: QPixmap | None):
         self.texture_preview.set_texture(pixmap)

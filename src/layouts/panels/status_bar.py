@@ -223,7 +223,7 @@ class StatusBar(QFrame):
         layout.addWidget(self._sep())
 
         # Active tool
-        self.tool_label = QLabel("🔧 Selecionar")
+        self.tool_label = QLabel("🔧 Pan")
         self.tool_label.setStyleSheet(stat_style)
         layout.addWidget(self.tool_label)
 

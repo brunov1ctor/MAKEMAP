@@ -786,3 +786,137 @@ class RiverTool(BaseTool):
     def key_press(self, event):
         if event.key() == Qt.Key.Key_Escape:
             self._clear_preview()
+
+
+# ─── Region Brush Tool (Região panel — paint/edit a colored área) ─────────
+
+class RegionBrushTool(BaseTool):
+    """Circular brush that paints (or erases) into a target RegionLayer.
+
+    Distinct from RegionTool above — that one is the toolbar's click-point
+    polygon tool used for Estrada/Rio/Bioma. This one is armed exclusively
+    by the Região panel (Nova Região / clicking a card) via `set_target`,
+    and reuses TerrainLayer's soft-stamp + snap-to-cell-fill painting
+    (see RegionLayer) instead of a boolean polygon path — same mechanism
+    the terrain Brush already uses for radius/softness/opacity/erase.
+    """
+
+    name = "RegiãoPincel"
+    cursor = Qt.CursorShape.CrossCursor
+
+    def __init__(self, viewport: Viewport, history_engine=None):
+        super().__init__(viewport)
+        self._history = history_engine
+        self._snap_manager = None
+        self._target = None  # RegionLayer | None
+        self._active_boundary = None  # MapBoundary | None — constrains painting, like BrushTool
+        self._mode = "add"  # "add" | "remove"
+        self.radius = 50.0
+        self.softness = 0.5
+        self.opacity = 0.5
+        self._painting = False
+        self._stroke_button: Qt.MouseButton | None = None
+        self._before_state: dict | None = None
+        self._last_filled_cell: tuple[float, float] | None = None
+        self._stroke_finished_callbacks: list = []
+
+    def on_stroke_finished(self, callback):
+        """Registra callback() chamado ao soltar o botão após pintar."""
+        self._stroke_finished_callbacks.append(callback)
+
+    def set_snap_manager(self, snap_manager):
+        self._snap_manager = snap_manager
+
+    def set_target(self, layer):
+        """RegionLayer to paint into, or None to disarm painting."""
+        self._target = layer
+
+    @property
+    def target(self):
+        return self._target
+
+    def set_active_boundary(self, boundary):
+        """MapBoundary to constrain painting to, or None for an infinite
+        map — mirrors BrushTool's own `_active_boundary`/`_is_within_bounds`,
+        so a Região painted "on" a bounded terrain can't spill past it."""
+        self._active_boundary = boundary
+
+    def _is_within_bounds(self, scene_pos: QPointF) -> bool:
+        if self._active_boundary is None or self._active_boundary._item is None:
+            return True
+        item = self._active_boundary._item
+        local_pos = item.mapFromScene(scene_pos)
+        return item.path().contains(local_pos)
+
+    def set_mode(self, mode: str):
+        self._mode = mode
+
+    def set_params(self, radius: float | None = None, softness: float | None = None,
+                    opacity: float | None = None):
+        if radius is not None:
+            self.radius = max(1.0, radius)
+        if softness is not None:
+            self.softness = max(0.0, min(1.0, softness))
+        if opacity is not None:
+            self.opacity = max(0.0, min(1.0, opacity))
+
+    def _params(self, erase: bool) -> TerrainBrushParams:
+        return TerrainBrushParams(
+            size=self.radius * 2, opacity=self.opacity, softness=self.softness, erase=erase,
+        )
+
+    def _paint(self, scene_pos: QPointF, erase: bool):
+        if self._target is None:
+            return
+        if not self._is_within_bounds(scene_pos):
+            return
+        params = self._params(erase)
+        if self._snap_manager and self._snap_manager.enabled:
+            grid = self._snap_manager.grid
+            cell = grid.cell_polygon(scene_pos.x(), scene_pos.y()) if grid else None
+            if cell is not None:
+                center = cell.boundingRect().center()
+                key = (round(center.x(), 3), round(center.y(), 3))
+                if key == self._last_filled_cell:
+                    return
+                self._last_filled_cell = key
+                local_poly = self._target.item.mapFromScene(cell)
+                self._target.paint_cell(local_poly, params)
+                self._target.update_live()
+                return
+        local = self._target.scene_to_local(scene_pos)
+        self._target.paint_at(local, params)
+        self._target.update_live()
+
+    def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
+        # Left = paint (add), Right = erase — no on-screen mode toggle
+        # anymore, so the mouse button itself picks the mode per stroke.
+        if event.button() not in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+            return
+        if self._target is None:
+            return
+        self._painting = True
+        self._stroke_button = event.button()
+        self._last_filled_cell = None
+        if self._history:
+            self._before_state = self._target.capture_state()
+        self._paint(scene_pos, erase=(self._stroke_button == Qt.MouseButton.RightButton))
+
+    def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
+        if self._painting:
+            self._paint(scene_pos, erase=(self._stroke_button == Qt.MouseButton.RightButton))
+
+    def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
+        if event.button() != self._stroke_button or not self._painting:
+            return
+        self._painting = False
+        self._stroke_button = None
+        if self._target is not None:
+            self._target.finish_stroke()
+            if self._history and self._before_state is not None:
+                from src.engines.core.history import PaintStrokeCommand
+                after_state = self._target.capture_state()
+                self._history.push(PaintStrokeCommand(self._target, self._before_state, after_state))
+        self._before_state = None
+        for cb in self._stroke_finished_callbacks:
+            cb()

@@ -16,6 +16,7 @@ from src.styles.tokens import Colors
 from src.layouts.panels.stepper import NumberStepper
 from src.layouts.panels.terrain.terrain_card import TerrainCard
 from src.layouts.panels.terrain.background import BackgroundSection
+from src.layouts.panels.collapsible_section import CollapsibleSection
 from src.layouts.panel_manager import paint_glass_panel
 
 
@@ -77,6 +78,7 @@ class TerrainSettingsPanel(QFrame):
 
         container = QWidget()
         container.setStyleSheet("background: transparent;")
+        self._container = container
         layout = QVBoxLayout(container)
         layout.setContentsMargins(10, 6, 10, 8)
         layout.setSpacing(6)
@@ -138,16 +140,10 @@ class TerrainSettingsPanel(QFrame):
         self._infinite_widget.mousePressEvent = self._on_inf_click
         layout.addWidget(self._infinite_widget)
 
-        self._sep1 = self._sep()
-        layout.addWidget(self._sep1)
-        self._sep1.hide()
-
-        # ─── Dimensions + Shape (hidden when infinite) ───
-        self._bounds_widget = QWidget()
-        self._bounds_widget.setStyleSheet("background: transparent; border: none;")
-        bounds_layout = QVBoxLayout(self._bounds_widget)
-        bounds_layout.setContentsMargins(0, 0, 0, 0)
-        bounds_layout.setSpacing(6)
+        # ─── Dimensions + Shape section (hidden when infinite) ───
+        self._bounds_section = CollapsibleSection("Dimensões e Forma", expanded=True)
+        self._bounds_section.content_changed.connect(self.content_changed.emit)
+        bounds_layout = self._bounds_section.content_layout
 
         dims_header = QHBoxLayout()
         dims_header.setSpacing(6)
@@ -239,30 +235,13 @@ class TerrainSettingsPanel(QFrame):
         self._shape_buttons[self.DEFAULT_SHAPE].setChecked(True)
         self._current_shape = self.DEFAULT_SHAPE
 
-        layout.addWidget(self._bounds_widget)
-        self._bounds_widget.hide()
+        layout.addWidget(self._bounds_section)
+        self._bounds_section.hide()
 
-        self._sep2 = self._sep()
-        layout.addWidget(self._sep2)
-        self._sep2.hide()
-
-        # ─── Terrain CRUD ───
-        self._crud_widget = QWidget()
-        self._crud_widget.setStyleSheet("background: transparent; border: none;")
-        crud_layout = QVBoxLayout(self._crud_widget)
-        crud_layout.setContentsMargins(0, 0, 0, 0)
-        crud_layout.setSpacing(6)
-
-        crud_header = QHBoxLayout()
-        crud_header.setSpacing(6)
-        crud_label = QLabel("Terrenos")
-        crud_label.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY}; font-size: 10px; font-weight: bold;
-            background: transparent; border: none;
-        """)
-        crud_header.addWidget(crud_label)
-        crud_header.addStretch()
-        crud_layout.addLayout(crud_header)
+        # ─── Terrenos (CRUD list) section ───
+        self._crud_section = CollapsibleSection("Terrenos", expanded=True)
+        self._crud_section.content_changed.connect(self.content_changed.emit)
+        crud_layout = self._crud_section.content_layout
 
         # Creation (name + "Novo") now lives up in Dimensões — this section
         # is just the resulting list.
@@ -290,20 +269,20 @@ class TerrainSettingsPanel(QFrame):
         self._scroll.setWidget(self._list_widget)
         crud_layout.addWidget(self._scroll)
 
-        layout.addWidget(self._crud_widget)
-        self._crud_widget.hide()
+        layout.addWidget(self._crud_section)
+        self._crud_section.hide()
 
-        self._sep3 = self._sep()
-        layout.addWidget(self._sep3)
-        self._sep3.hide()
-
-        # ─── Background Section ───
+        # ─── Plano de Fundo section ───
         bg_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "..", "..", "..", "..", "library", "backgrounds")
-        self._bg_section = BackgroundSection(bg_dir)
-        self._bg_section.background_changed.connect(self.background_changed.emit)
-        self._bg_section.close_requested.connect(self.close_requested.emit)
+        self._bg_section_inner = BackgroundSection(bg_dir)
+        self._bg_section_inner.background_changed.connect(self.background_changed.emit)
+        self._bg_section_inner.close_requested.connect(self.close_requested.emit)
+        self._bg_section_inner.content_changed.connect(self.content_changed.emit)
+
+        self._bg_section = CollapsibleSection("Plano de Fundo")
         self._bg_section.content_changed.connect(self.content_changed.emit)
+        self._bg_section.content_layout.addWidget(self._bg_section_inner)
         layout.addWidget(self._bg_section)
 
         layout.addStretch()
@@ -314,6 +293,28 @@ class TerrainSettingsPanel(QFrame):
         self._cards: dict[str, TerrainCard] = {}
         self._selected_id: str = ""
         self._color_idx = 0
+
+    def content_height(self) -> int:
+        """Natural height of the panel's actual content.
+
+        A QScrollArea's own sizeHint() doesn't grow with its scrolled
+        content (it reports a nominal size regardless of how many terrain
+        cards are inside), so measuring `self._container` alone silently
+        ignores the card list growing/shrinking — same reason
+        PanelManager's generic _content_height() has to reach into
+        `scroll.widget()` instead of the QScrollArea itself. Here, on top
+        of that, this panel nests scroll areas two levels deep (whole-panel
+        → terrain-card-list), so it needs its own explicit correction: measure
+        the list's actual inner widget and swap it in for whatever nominal
+        size the scroll area itself contributed.
+        """
+        self._container.adjustSize()
+        height = self._container.sizeHint().height()
+        if self._crud_section.isVisible() and self._crud_section._expanded:
+            self._list_widget.adjustSize()
+            list_h = self._list_widget.sizeHint().height()
+            height += max(0, list_h - self._scroll.sizeHint().height())
+        return height + 20
 
     # ─── Helpers ───
 
@@ -397,6 +398,8 @@ class TerrainSettingsPanel(QFrame):
         card.renamed.connect(self._on_card_renamed)
         self._list_layout.insertWidget(self._list_layout.count() - 1, card)
         self._cards[terrain_id] = card
+        self._update_crud_visibility()
+        self.content_changed.emit()
 
     def _on_card_selected(self, terrain_id: str):
         self._selected_id = terrain_id
@@ -414,6 +417,8 @@ class TerrainSettingsPanel(QFrame):
             if self._cards:
                 next_id = next(iter(self._cards))
                 self._on_card_selected(next_id)
+        self._update_crud_visibility()
+        self.content_changed.emit()
         self.terrain_removed.emit(terrain_id)
 
     def _on_card_toggled(self, terrain_id: str, visible: bool):
@@ -451,12 +456,16 @@ class TerrainSettingsPanel(QFrame):
 
     def _on_infinite_toggled(self, checked: bool):
         show = not checked
-        self._bounds_widget.setVisible(show)
-        self._crud_widget.setVisible(show)
-        self._sep1.setVisible(show)
-        self._sep2.setVisible(show)
-        self._sep3.setVisible(show)
+        self._bounds_section.setVisible(show)
+        self._update_crud_visibility()
+        self.content_changed.emit()
         self.infinite_toggled.emit(checked)
+
+    def _update_crud_visibility(self):
+        """"Terrenos" only makes sense when bounded (not infinite) AND at
+        least one terrain already exists — an empty list here is just dead
+        space, not a useful CRUD section."""
+        self._crud_section.setVisible(not self._inf_checked and bool(self._cards))
 
     def _on_dims_changed(self, _value):
         w = int(self.width_slider.value)

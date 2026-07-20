@@ -148,6 +148,13 @@ class CanvasItemRepository(BaseRepository):
         return [dict(r) for r in self.db.fetchall(sql, (map_id,))]
 
 
+class ZoneRepository(BaseRepository):
+    TABLE = "painted_zones"
+
+    def get_by_map(self, map_id: str) -> list[dict]:
+        return self.get_all(map_id=map_id)
+
+
 class AssetRepository(BaseRepository):
     TABLE = "assets"
 

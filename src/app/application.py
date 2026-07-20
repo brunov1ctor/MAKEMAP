@@ -238,6 +238,9 @@ class MainWindow(QMainWindow):
         self.asset_engine.set_uow(self.uow)
         self.asset_engine._project_path = self.project.path
 
+        # Connect project DB to painted regions (loads any saved zones)
+        self.layout_widget._region_med.set_uow(self.uow)
+
         self.setWindowTitle(f"{APP_NAME} \u2014 {self.project.meta.name}")
         self.layout_widget.top_bar.set_project_name(self.project.meta.name)
         self.layout_widget.status_bar.save_label.setText("Salvo")

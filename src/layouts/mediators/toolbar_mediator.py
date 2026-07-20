@@ -42,7 +42,6 @@ class ToolbarMediator:
         tb.tool_selected.connect(self._l._on_tool_selected)
         tb.action_triggered.connect(self._l._on_toolbar_action)
         tb.view_toggled.connect(self._l._on_view_toggled)
-        tb.region_preset_selected.connect(self._l.canvas.engine.set_region_preset)
         tb.dragged.connect(self.on_dragged)
         tb.orientation_changed.connect(lambda _: self.on_orientation_changed())
 

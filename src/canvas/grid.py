@@ -63,6 +63,7 @@ class GridManager:
     def __init__(self, scene):
         self._scene = scene
         self._group: QGraphicsItemGroup | None = None
+        self._measure_group: QGraphicsItemGroup | None = None
 
         # Config — 1 scene unit == 1 meter (see scale_bar.py), so subdivisions
         # finer than whole meters aren't meaningful; max_subdivisions() below
@@ -93,13 +94,20 @@ class GridManager:
     def _clamped_subdivisions(self) -> int:
         return max(1, min(int(self.subdivisions), self.max_subdivisions()))
 
-    def update(self, view_rect: QRectF, zoom: float = 1.0, clip_path: QPainterPath | None = None):
+    def update(
+        self, view_rect: QRectF, zoom: float = 1.0,
+        clip_path: QPainterPath | None = None, full_view_rect: QRectF | None = None,
+    ):
         """Redraw grid for the visible area.
 
         `zoom` (screen px per scene unit) is only used by the Square shape, to
         space out coordinate labels and keep their on-screen text size constant.
         `clip_path` (scene coordinates), when given, conforms the grid to a
         bounded terrain's exact boundary shape instead of a rectangle.
+        `view_rect` may already be narrowed to a bounded terrain's extent —
+        `full_view_rect` (defaults to `view_rect` itself) is the actual
+        on-screen viewport, used for the measurement ruler so it keeps
+        growing with the pan instead of stopping at the terrain's edge.
         """
         self._clear()
         # `visible` gates the shape lines only (it's driven by the shape
@@ -126,10 +134,17 @@ class GridManager:
             elif self.shape == GridShape.ISOMETRIC:
                 self._draw_isometric(view_rect)
 
-        if self.show_measurements:
-            self._draw_cartesian_overlay(view_rect, zoom)
-
         self._scene.addItem(self._group)
+
+        if self.show_measurements:
+            # Own, unclipped group — measurements are a coordinate ruler for
+            # the whole (effectively infinite) map, not just whatever shape
+            # a bounded terrain's grid conforms to, so they must keep
+            # growing with the pan regardless of `clip_path`.
+            self._measure_group = QGraphicsItemGroup()
+            self._measure_group.setZValue(-999)
+            self._draw_cartesian_overlay(full_view_rect if full_view_rect is not None else view_rect, zoom)
+            self._scene.addItem(self._measure_group)
 
     # ─── Cartesian overlay (x=0/y=0 axis + meter labels) ──────────────────
     # Independent of shape — toggled on its own via show_measurements, so it
@@ -143,12 +158,12 @@ class GridManager:
         if view_rect.left() <= 0 <= view_rect.right():
             line = QGraphicsLineItem(QLineF(0, view_rect.top(), 0, view_rect.bottom()))
             line.setPen(pen_axis)
-            self._group.addToGroup(line)
+            self._measure_group.addToGroup(line)
 
         if view_rect.top() <= 0 <= view_rect.bottom():
             line = QGraphicsLineItem(QLineF(view_rect.left(), 0, view_rect.right(), 0))
             line.setPen(pen_axis)
-            self._group.addToGroup(line)
+            self._measure_group.addToGroup(line)
 
         self._draw_square_labels(view_rect, zoom)
 
@@ -180,64 +195,85 @@ class GridManager:
             self._group.addToGroup(line)
             y += sub_size
 
-    def _nice_step(self, zoom: float) -> float:
-        """Smallest 'nice' meter step (1/2/5 × 10^n) with on-screen spacing >= LABEL_MIN_SPACING_PX.
-
-        Independent of cell_size — this is a ruler-style tick progression
-        (1m, 2m, 5m, 10m, 20m, 50m, 100m, ...) that keeps labels readable
-        regardless of how the grid's own cell size is configured.
-        """
-        if zoom <= 0:
-            return 1.0
-        min_meters = self.LABEL_MIN_SPACING_PX / zoom
-        if min_meters < 1:
-            return 1.0
-        exponent = math.floor(math.log10(min_meters))
-        base = 10 ** exponent
-        for mult in (1, 2, 5):
-            val = mult * base
-            if val >= min_meters:
-                return val
-        return base * 10
+    # Minimum on-screen gap a tier of labels needs before it's skipped —
+    # majors get the full spacing, subdivisions (denser, so more crowded)
+    # get a smaller floor since they're dimmer and less likely to collide
+    # meaningfully.
+    SUBDIVISION_LABEL_MIN_SPACING_PX = 28
 
     def _draw_square_labels(self, view_rect: QRectF, zoom: float):
         if zoom <= 0:
             return
-        step = self._nice_step(zoom)
-        if step <= 0:
+        major_step = self.cell_size
+        if major_step <= 0:
             return
+        sub_step = major_step / self._clamped_subdivisions()
+
         inv_scale = 1.0 / zoom
         pad = 3 * inv_scale
-        font = QFont("Segoe UI", 8)
+        font_major = QFont("Segoe UI", 8)
+        font_minor = QFont("Segoe UI", 7)
 
-        def _label(text: str, sx: float, sy: float):
+        def _label(text: str, sx: float, sy: float, brush: QColor, font: QFont):
             item = QGraphicsSimpleTextItem(text)
             item.setFont(font)
-            item.setBrush(QColor(255, 255, 255, 160))
+            item.setBrush(brush)
             item.setScale(inv_scale)
             item.setZValue(2)
             item.setPos(sx, sy)
-            self._group.addToGroup(item)
+            self._measure_group.addToGroup(item)
 
         # Labels ride the actual x=0 / y=0 axis lines, clamped to stay on
         # screen when the origin itself is scrolled out of view.
         axis_y = max(view_rect.top(), min(0.0, view_rect.bottom())) + pad
         axis_x = max(view_rect.left(), min(0.0, view_rect.right())) + pad
 
-        x = math.floor(view_rect.left() / step) * step
-        while x <= view_rect.right():
-            if abs(x) > 0.01:  # origin labeled once, at the axis crossing below
-                _label(format_distance(x), x + pad, axis_y)
-            x += step
+        # Same tone the grid lines use for major/minor — ties the ruler's
+        # emphasis and the Opacity slider together, same as the grid itself.
+        major_brush = QColor(self.color_major)
+        major_brush.setAlpha(min(255, self.color_major.alpha() + 80))
+        minor_brush = QColor(self.color_minor)
+        minor_brush.setAlpha(min(255, self.color_minor.alpha() + 60))
 
-        y = math.floor(view_rect.top() / step) * step
-        while y <= view_rect.bottom():
-            if abs(y) > 0.01:
-                _label(format_distance(y), axis_x, y + pad)
-            y += step
+        show_major = major_step * zoom >= self.LABEL_MIN_SPACING_PX
+        # No point drawing subdivision ticks that coincide with a major one,
+        # nor drawing them at all when there's only one subdivision (cell
+        # size itself would be relabeled as "sub").
+        show_minor = (
+            self._clamped_subdivisions() > 1
+            and sub_step * zoom >= self.SUBDIVISION_LABEL_MIN_SPACING_PX
+        )
+
+        def _is_major(v: float) -> bool:
+            return abs(v % major_step) < 0.01 or abs(v % major_step - major_step) < 0.01
+
+        if show_major or show_minor:
+            step = sub_step if show_minor else major_step
+            x = math.floor(view_rect.left() / step) * step
+            while x <= view_rect.right():
+                if abs(x) > 0.01:  # origin labeled once, at the axis crossing below
+                    major = _is_major(x)
+                    if major and show_major:
+                        _label(format_distance(x), x + pad, axis_y, major_brush, font_major)
+                    elif not major and show_minor:
+                        _label(format_distance(x, decimals=1), x + pad, axis_y, minor_brush, font_minor)
+                x += step
+
+            y = math.floor(view_rect.top() / step) * step
+            while y <= view_rect.bottom():
+                if abs(y) > 0.01:
+                    major = _is_major(y)
+                    # Scene Y grows downward — flip the displayed label so it
+                    # reads growing upward (north-positive), while the tick's
+                    # actual on-screen position stays at the real scene y.
+                    if major and show_major:
+                        _label(format_distance(-y), axis_x, y + pad, major_brush, font_major)
+                    elif not major and show_minor:
+                        _label(format_distance(-y, decimals=1), axis_x, y + pad, minor_brush, font_minor)
+                y += step
 
         if view_rect.contains(QPointF(0, 0)):
-            _label("0", axis_x, axis_y)
+            _label("0", axis_x, axis_y, major_brush, font_major)
 
     # ─── Hexagon (flat-top honeycomb) ─────────────────────────────────
 
@@ -384,6 +420,9 @@ class GridManager:
         if self._group:
             self._scene.removeItem(self._group)
             self._group = None
+        if self._measure_group:
+            self._scene.removeItem(self._measure_group)
+            self._measure_group = None
 
     def snap(self, x: float, y: float) -> tuple[float, float]:
         """Snap coordinates to nearest grid intersection."""

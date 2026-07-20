@@ -31,18 +31,9 @@ class BackgroundSection(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-
-        # Header
-        bg_header = QHBoxLayout()
-        bg_header.setSpacing(6)
-        bg_label = QLabel("Plano de Fundo")
-        bg_label.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY}; font-size: 10px; font-weight: bold;
-            background: transparent; border: none;
-        """)
-        bg_header.addWidget(bg_label)
-        bg_header.addStretch()
-        layout.addLayout(bg_header)
+        # No own "Plano de Fundo" header row — TerrainSettingsPanel now
+        # wraps this whole widget in a CollapsibleSection titled that,
+        # so a second inner label here would just duplicate it.
 
         # Toggle buttons
         bg_row = QHBoxLayout()
@@ -305,6 +296,11 @@ class BackgroundSection(QFrame):
             self._bg_parallax_widget.hide()
             if key == "color":
                 self._bg_color_widget.show()
+                # Re-activating "Cor fixa" after it was toggled off (which
+                # clears the background to "none") must restore the last
+                # picked color immediately, not wait for the user to touch
+                # a slider/swatch again.
+                self.background_changed.emit("color", self._bg_selected_color)
             elif key == "image":
                 self._bg_file_widget.show()
                 current_idx = self._bg_tabs.currentIndex()

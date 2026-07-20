@@ -12,7 +12,8 @@ from src.canvas.snap import SnapManager
 from src.canvas.pan_controller import KeyboardPanController, PAN_KEYS
 from src.canvas.tools.base import ToolManager
 from src.canvas.tools.defaults import SelectTool, PanTool
-from src.canvas.tools.brush_tool import BrushTool, RegionTool, RoadTool, RiverTool
+from src.canvas.tools.brush_tool import BrushTool, RegionTool, RoadTool, RiverTool, RegionBrushTool
+from src.engines.map.region_layer import RegionLayer
 from src.canvas.map_boundary import MovableBoundaryItem
 from src.engines.map.brush import BrushEngine
 from src.canvas.input_manager import InputManager
@@ -104,6 +105,12 @@ class CanvasEngine(QWidget):
         self.viewport.cursor_moved.connect(self.cursor_moved.emit)
         self.viewport.view_changed.connect(self._on_view_changed)
         self.viewport.view_changed.connect(self._update_sound_context)
+        # Pan (PanTool drag, space/middle-drag, keyboard pan) all move the
+        # scrollbars directly instead of going through view_changed — hook
+        # the scrollbars themselves so the grid/measurement overlay keeps
+        # following the viewport during every kind of pan, not just zoom.
+        self.viewport.horizontalScrollBar().valueChanged.connect(self._on_view_changed)
+        self.viewport.verticalScrollBar().valueChanged.connect(self._on_view_changed)
         self.tool_manager.tool_changed.connect(self.tool_changed.emit)
 
         # Override viewport events to route through tools
@@ -113,8 +120,9 @@ class CanvasEngine(QWidget):
         self.viewport.keyPressEvent = self._on_key_press
         self.viewport.keyReleaseEvent = self._on_key_release
 
-        # Activate default tool
-        self.tool_manager.activate("Selecionar")
+        # Activate default tool — Pan, so the map is movable right away
+        # without first having to toggle Selecionar off (see CanvasToolbar).
+        self.tool_manager.activate("Pan")
 
         # Grid starts hidden — user activates via toolbar or 'G' key
         self.grid.visible = False
@@ -144,6 +152,12 @@ class CanvasEngine(QWidget):
         self.tool_manager.register(RoadTool(self.viewport))
         self.tool_manager.register(RiverTool(self.viewport))
 
+        # Região panel's paint brush (distinct from RegionTool's click-polygon,
+        # used by the toolbar's Bioma/Estrada/Rio dropdown)
+        self._region_brush_tool = RegionBrushTool(self.viewport, history_engine=self.history)
+        self._region_brush_tool.set_snap_manager(self.snap)
+        self.tool_manager.register(self._region_brush_tool)
+
     def set_asset_engine(self, asset_engine):
         """Injeta o AssetEngine após o projeto ser carregado."""
         self._asset_engine = asset_engine
@@ -160,6 +174,11 @@ class CanvasEngine(QWidget):
         polygon as — armed by the Região panel's "+ Novo" per category.
         Empty string reverts to the plain default generator (or biome)."""
         self._zone_type = zone_key or ""
+
+    def create_region_layer(self, color: QColor) -> RegionLayer:
+        """A blank, paintable Região layer — brush-painted colored area
+        managed by RegionMediator/RegionBrushTool. See region_layer.py."""
+        return RegionLayer(self.viewport.scene(), color)
 
     def paint_zone(self, polygon: QPolygonF, zone_key: str, region_id: str,
                     name: str, stars: int, color: QColor):
@@ -294,11 +313,12 @@ class CanvasEngine(QWidget):
         self.grid_toggled.emit(self.grid.visible)
 
     def _on_view_changed(self):
-        if self.grid.visible:
+        if self.grid.visible or self.grid.show_measurements:
             self._update_grid()
 
     def _update_grid(self):
-        view_rect = self.viewport.mapToScene(self.viewport.viewport().rect()).boundingRect()
+        full_view_rect = self.viewport.mapToScene(self.viewport.viewport().rect()).boundingRect()
+        view_rect = full_view_rect
         clip_path = None
         # Clip grid to map bounds if set — bounded terrains' grid should
         # conform to their exact boundary shape(s), not just a rectangle.
@@ -331,7 +351,7 @@ class CanvasEngine(QWidget):
                 bounds = QRectF(-hw, -hh, self._map_bounds["width"], self._map_bounds["height"])
             view_rect = view_rect.intersected(bounds)
 
-        self.grid.update(view_rect, self.viewport.zoom_level, clip_path)
+        self.grid.update(view_rect, self.viewport.zoom_level, clip_path, full_view_rect)
 
     # --- Event routing ---
 
@@ -368,9 +388,15 @@ class CanvasEngine(QWidget):
             )
             return
 
-        # Let boundary items handle hover/drag
+        # Let boundary items handle hover/drag — but only near their actual
+        # border (matches _on_mouse_press's own _hit_border check below).
+        # Without that check, ANY move over a bounded terrain's whole
+        # interior area (not just its edge) got redirected here instead of
+        # reaching the active tool, silently breaking painting (terrain
+        # brush, região brush, anything) for the entire inside of the
+        # terrain, not just its border.
         item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
-        if isinstance(item, MovableBoundaryItem):
+        if isinstance(item, MovableBoundaryItem) and item._hit_border(item.mapFromScene(scene_pos)):
             from PySide6.QtWidgets import QGraphicsView
             QGraphicsView.mouseMoveEvent(self.viewport, event)
             return

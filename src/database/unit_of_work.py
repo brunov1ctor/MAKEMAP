@@ -14,7 +14,7 @@ from src.database.repositories.entities import (
     QuestChainRepository, DungeonRepository, EventRepository,
     FactionRepository, TagRepository, MapRepository,
     LayerRepository, CanvasItemRepository, AssetRepository,
-    AssetPackRepository,
+    AssetPackRepository, ZoneRepository,
 )
 from src.database.repositories.asset_settings import AssetSettingsRepository
 
@@ -51,6 +51,7 @@ class UnitOfWork:
         self.assets = AssetRepository(self.db)
         self.asset_packs = AssetPackRepository(self.db)
         self.asset_settings = AssetSettingsRepository(self.db)
+        self.zones = ZoneRepository(self.db)
 
     def close(self):
         self.db.close()

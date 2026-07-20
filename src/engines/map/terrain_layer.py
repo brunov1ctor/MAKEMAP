@@ -424,10 +424,18 @@ class TerrainLayer:
     # ─── Undo ────────────────────────────────────────────────────────────
 
     def capture_state(self) -> dict:
-        """Snapshot full layer state (mask + stencil + bounds) for undo/redo."""
+        """Snapshot full layer state (mask + stencil + bounds) for undo/redo.
+
+        Uses the QImage copy CONSTRUCTOR (not the `.copy()` method) — with
+        Format_ARGB32_Premultiplied images the bare `.copy()` call has been
+        observed to intermittently return a detached-but-null (0x0) image
+        (likely an implicit-sharing/COW detach hiccup through the PySide
+        bindings), silently corrupting undo snapshots. The constructor
+        form is the more standard deep-copy idiom and doesn't exhibit it.
+        """
         return {
-            "mask": self._mask.copy(),
-            "stencil": self._stencil.copy(),
+            "mask": QImage(self._mask),
+            "stencil": QImage(self._stencil),
             "has_stencil": self._has_stencil,
             "width": self._width,
             "height": self._height,
@@ -436,8 +444,8 @@ class TerrainLayer:
 
     def restore_state(self, state: dict):
         """Restore a previously captured state (undoes/redoes a whole stroke)."""
-        self._mask = state["mask"].copy()
-        self._stencil = state["stencil"].copy()
+        self._mask = QImage(state["mask"])
+        self._stencil = QImage(state["stencil"])
         self._has_stencil = state["has_stencil"]
         self._width = state["width"]
         self._height = state["height"]

@@ -8,7 +8,6 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen,
 
 from src.styles.tokens import Colors, Typography
 from src.layouts.panels.view_dropdown import ViewDropdown
-from src.layouts.panels.region_mode_button import RegionModeButton
 
 
 def _paint_glass(widget, event, radius=10):
@@ -42,7 +41,6 @@ class CanvasToolbar(QFrame):
     tool_selected = Signal(str)
     action_triggered = Signal(str)  # non-tool buttons (Grid, Undo, etc.)
     view_toggled = Signal(str, bool)  # forwarded from the View dropdown
-    region_preset_selected = Signal(str)  # forwarded from the Região/Bioma dropdown
     dragged = Signal(int, int)  # delta x, y in parent coordinates
     orientation_changed = Signal(str)  # "horizontal" | "vertical"
 
@@ -58,16 +56,16 @@ class CanvasToolbar(QFrame):
 
         self._tool_defs = [
             ("⬚", "Selecionar", "V", True),
-            ("✋", "Pan", "H", True),
-            None,
-            ("🗺", "Terreno", "", False, True),  # toggle action
-            ("🏙", "Regiões", "", False, True),  # toggle action
-            ("🖌", "Brush", "B", True),
-            "__region__",
+            ("🌎", "Terreno", "", False, True),  # toggle action
+            ("🖌", "Brush", "B", True, False, "Pincel"),
+            ("🌳", "Região", "", False, True),  # toggle action — opens the CRUD panel
             ("T", "Texto", "T", True),
+            ("👾", "Spawn", "", True),
             ("📍", "Marcador", "K", True),
+            ("🎯", "Eventos", "", True),
+            ("💡", "Iluminação", "", False, True),  # toggle action
             None,
-            ("⊞", "Grid", "G", False),
+            ("📐", "Grid", "G", False),
             "__view__",
             None,
             ("↶", "Undo", "Ctrl+Z", False),
@@ -114,23 +112,13 @@ class CanvasToolbar(QFrame):
                 view_btn.visibility_changed.connect(self.view_toggled.emit)
                 self._items.append(view_btn)
                 continue
-            if item == "__region__":
-                region_btn = RegionModeButton()
-                # One button, three underlying tool names — _on_tool needs to
-                # know they all belong to it so picking "Estrada" from its
-                # menu doesn't leave the button looking unchecked.
-                region_btn._member_names = {"Região", "Estrada", "Rio"}
-                region_btn.mode_activated.connect(self._on_tool)
-                region_btn.preset_selected.connect(self.region_preset_selected.emit)
-                self._items.append(region_btn)
-                self._tool_buttons.append(("Região", region_btn, True, False))
-                continue
             icon, name, shortcut, is_tool = item[:4]
             is_toggle = item[4] if len(item) > 4 else False
+            label = item[5] if len(item) > 5 else name
 
             btn = QToolButton()
             btn.setText(icon)
-            btn.setToolTip(f"{name} ({shortcut})" if shortcut else name)
+            btn.setToolTip(f"{label} ({shortcut})" if shortcut else label)
             btn.setFixedSize(32, 32)
             btn.setCheckable(is_tool or is_toggle)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -151,7 +139,13 @@ class CanvasToolbar(QFrame):
                 }}
             """)
             if is_tool:
-                btn.clicked.connect(lambda checked, n=name: self._on_tool(n))
+                # Every tool button toggles off back to Pan (free map
+                # dragging) on a second click, instead of behaving like a
+                # radio that can only ever be switched to a different tool.
+                # CanvasEngine defaults its active tool to Pan at
+                # construction (map movable right away), so these all start
+                # unchecked to match.
+                btn.clicked.connect(lambda checked, n=name: self._on_tool_toggled(checked, n))
             else:
                 btn.clicked.connect(lambda checked, n=name: self._on_action(n))
             self._items.append(btn)
@@ -222,12 +216,15 @@ class CanvasToolbar(QFrame):
     def paintEvent(self, event):
         _paint_glass(self, event, radius=10)
 
+    def _on_tool_toggled(self, checked: bool, name: str):
+        self._on_tool(name if checked else "Pan")
+
     def _on_tool(self, name: str):
         for n, btn, is_tool, is_toggle in self._tool_buttons:
             if is_tool:
-                # RegionModeButton covers three tool names under one button
-                # (see _member_names above) — everything else just matches
-                # its own single name, same as before.
+                # A button may cover more than one underlying tool name via
+                # `_member_names` (not used today, kept for buttons like
+                # this that consolidate a small family of related tools).
                 members = getattr(btn, "_member_names", None) or {n}
                 btn.setChecked(name in members)
             elif is_toggle:

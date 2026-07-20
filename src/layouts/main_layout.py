@@ -4,7 +4,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*Failed to disconnect.*", category=RuntimeWarning)
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QSizePolicy, QLabel
-from PySide6.QtCore import Qt, QRect
+from PySide6.QtCore import Qt, QRect, QTimer
 from PySide6.QtGui import QColor, QPixmap
 
 from src.styles.tokens import Colors
@@ -15,6 +15,7 @@ from src.layouts.panels.brush.asset_browser import AssetBrowserPanel
 from src.layouts.panels.grid_panel import GridSettingsPanel
 from src.layouts.panels.terrain.panel import TerrainSettingsPanel
 from src.layouts.panels.region.panel import RegionSettingsPanel
+from src.layouts.panels.region.region_edit_panel import RegionEditPanel
 from src.layouts.panels.select_panel import SelectToolPanel
 from src.layouts.panels.explorer import ExplorerPanel, FilterPanel
 from src.layouts.panels.canvas_area import CanvasArea
@@ -85,6 +86,10 @@ class MainLayout(QWidget):
         self.region_panel.hide()
         self.region_panel.close_requested.connect(self._close_region_panel)
 
+        self.region_edit_panel = RegionEditPanel(self)
+        self.region_edit_panel.hide()
+        self.region_edit_panel.content_changed.connect(self._reposition)
+
         # ═══ Mediators ═══
         self._brush_med = BrushMediator(self)
         self._terrain_med = TerrainMediator(self)
@@ -109,7 +114,12 @@ class MainLayout(QWidget):
         )
         self._panel_mgr.register(
             "Region", self.region_panel,
+            on_hide=self._on_region_panel_hidden,
         )
+        # RegionEdit rides next to Region (not through PanelManager's
+        # exclusivity — same reasoning as AssetBrowserPanel next to Brush):
+        # the CRUD list and the detail/paint panel need to be visible
+        # *together*, the opposite of mutual exclusivity.
         self._panel_mgr.register(
             "Select", self.select_panel,
         )
@@ -123,7 +133,9 @@ class MainLayout(QWidget):
         self.terrain_panel.terrain_removed.connect(self._terrain_med.on_removed)
         self.terrain_panel.terrain_selected.connect(self._terrain_med.on_selected)
         self.terrain_panel.background_changed.connect(self._terrain_med.on_background)
-        self.terrain_panel.content_changed.connect(self._reposition)
+        # Deferred — same reasoning as Região's card list: a freshly
+        # inserted TerrainCard's sizeHint() isn't settled synchronously.
+        self.terrain_panel.content_changed.connect(lambda: QTimer.singleShot(0, self._reposition))
 
         # Map boundary overlays reference
         self._terrain_boundaries = self._terrain_med.boundaries
@@ -132,10 +144,18 @@ class MainLayout(QWidget):
         self.region_panel.region_add_requested.connect(self._region_med.on_add_requested)
         self.region_panel.region_renamed.connect(self._region_med.on_renamed)
         self.region_panel.region_removed.connect(self._region_med.on_removed)
-        self.region_panel.region_selected.connect(self._region_med.on_selected)
+        self.region_panel.region_selected.connect(self._region_med.on_card_clicked)
+        self.region_panel.region_edit_requested.connect(self._region_med.on_selected)
         self.region_panel.region_locate_requested.connect(self._region_med.on_locate)
-        self.region_panel.region_stars_changed.connect(self._region_med.on_stars_changed)
-        self.region_panel.content_changed.connect(self._reposition)
+        self.region_panel.region_visibility_toggled.connect(self._region_med.on_card_visibility_toggled)
+        self.region_panel.region_paint_cleared.connect(self._region_med.on_paint_cleared)
+        # Deferred (not a direct connect like Terrain's content_changed):
+        # this one fires right after a brand-new RegionCard is inserted
+        # into the list layout, and a freshly-constructed child widget's
+        # sizeHint() isn't reliably settled until Qt's run an event-loop
+        # tick — reading it synchronously here would undercount and leave
+        # the panel too short to show the just-added card.
+        self.region_panel.content_changed.connect(lambda: QTimer.singleShot(0, self._reposition))
 
         # Explorer (esquerda)
         self._left_container = QWidget(self)
@@ -210,7 +230,9 @@ class MainLayout(QWidget):
 
         # ═══ Conexões ═══
         self.canvas.engine.cursor_moved.connect(
-            lambda x, y: self.status_bar.coords.setText(f"X: {x:.0f}  Y: {y:.0f}")
+            # Scene Y grows downward (Qt convention); displayed Y is flipped
+            # so it grows upward like a map's north, matching the grid ruler.
+            lambda x, y: self.status_bar.coords.setText(f"X: {x:.0f}  Y: {-y:.0f}")
         )
         self.canvas.engine.zoom_changed.connect(self._on_zoom)
         self.canvas.engine.tool_changed.connect(
@@ -278,6 +300,24 @@ class MainLayout(QWidget):
         avail = self._toolbar_med.carve_panel_area(avail)
         self._panel_mgr.layout(avail.x(), avail.y(), avail.width(), avail.height())
 
+        # Região's CRUD list has a pinned header + "Nova Região" button
+        # living OUTSIDE its card-list scroll area, so PanelManager's
+        # generic _content_height() (which only measures the first
+        # QScrollArea it finds) undercounts it — override with the panel's
+        # own content_height(), which accounts for both.
+        if self.region_panel.isVisible():
+            rp = self.region_panel.geometry()
+            rp_h = min(self.region_panel.content_height(), avail.height())
+            self.region_panel.setGeometry(rp.x(), rp.y(), rp.width(), rp_h)
+
+        # Terrain nests several QScrollAreas (whole-panel, terrain-card
+        # list, background image browser) — same ambiguity as Região's
+        # generic sizing, same override via its own content_height().
+        if self.terrain_panel.isVisible():
+            tp = self.terrain_panel.geometry()
+            tp_h = min(self.terrain_panel.content_height(), avail.height())
+            self.terrain_panel.setGeometry(tp.x(), tp.y(), tp.width(), tp_h)
+
         # Asset browser rides next to Brush (not through PanelManager — see
         # the comment where it's created) whenever both are visible.
         if self.brush_panel.isVisible() and self.asset_browser_panel.isVisible():
@@ -286,6 +326,23 @@ class MainLayout(QWidget):
             ab_w = min(self.asset_browser_panel.PANEL_WIDTH, max(0, avail.right() - ab_x))
             self.asset_browser_panel.setGeometry(ab_x, bp_rect.y(), ab_w, bp_rect.height())
             self.asset_browser_panel.raise_()
+
+        # Região's edit panel rides next to the CRUD list the same way —
+        # but sized to its OWN content (collapsible sections growing/
+        # shrinking), same smart-height behavior Terrain's BackgroundSection
+        # gets via PanelManager._content_height, not just copying Region's
+        # height verbatim (which ignored its collapsed/expanded sections).
+        if self.region_panel.isVisible() and self.region_edit_panel.isVisible():
+            rp_rect = self.region_panel.geometry()
+            re_x = rp_rect.right() + 8
+            re_w = min(self.region_edit_panel.PANEL_WIDTH, max(0, avail.right() - re_x))
+            # Capped to the available work area, NOT to Region's own height —
+            # the two panels size independently to their own content now, so
+            # one being shorter must never squash the other.
+            max_h = max(0, avail.bottom() - rp_rect.y())
+            re_h = min(PanelManager._content_height(self.region_edit_panel), max_h)
+            self.region_edit_panel.setGeometry(re_x, rp_rect.y(), re_w, re_h)
+            self.region_edit_panel.raise_()
 
         self.progression.setGeometry(center_x, body_bottom - prog_h, center_w, prog_h)
         self.status_bar.setGeometry(0, h - status_h, w, status_h)
@@ -331,6 +388,15 @@ class MainLayout(QWidget):
         self.asset_browser_panel.hide()
         self._reposition()
 
+    def _on_region_panel_hidden(self):
+        """Same reasoning as _on_brush_panel_hidden — the edit panel has
+        nothing to anchor next to (and no CRUD list to add its card to)
+        once Region itself is closed, by PanelManager's exclusivity or
+        otherwise."""
+        if self.region_edit_panel.isVisible():
+            self._region_med.on_close_edit()
+        self._reposition()
+
     def _on_tool_selected(self, tool_name: str):
         if tool_name == "Brush":
             self._panel_mgr.show("Brush")
@@ -365,13 +431,10 @@ class MainLayout(QWidget):
     # ─── Toolbar Actions ───
 
     def _on_toolbar_action(self, name: str):
-        if name in ("Grid", "Terreno", "Regiões"):
-            self.canvas.engine.tool_manager.activate("Selecionar")
-
         actions = {
             "Grid": self._toggle_grid_panel,
             "Terreno": self._toggle_terrain_panel,
-            "Regiões": self._toggle_region_panel,
+            "Região": self._toggle_region_panel,
             "Undo": self.canvas.engine.history.undo,
             "Redo": self.canvas.engine.history.redo,
         }
@@ -419,7 +482,6 @@ class MainLayout(QWidget):
 
     def _close_region_panel(self):
         self._panel_mgr.hide("Region")
-        self.canvas_toolbar.uncheck_action("Regiões")
         self._reposition()
 
     # ─── View Dropdown (show/hide UI chrome) ───

@@ -421,6 +421,31 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_layers_map ON layers(map_id);
         CREATE INDEX IF NOT EXISTS idx_entity_tags_entity ON entity_tags(entity_id, entity_type);
     """),
+    (2, "Painted zones (Região panel — brush-painted colored areas)", """
+        -- map_id is a plain tag, not a FK to maps(id): the maps/worlds
+        -- hierarchy has no creation flow wired up anywhere yet, and
+        -- painted zones shouldn't be blocked on that unrelated feature.
+        CREATE TABLE IF NOT EXISTS painted_zones (
+            id TEXT PRIMARY KEY,
+            map_id TEXT NOT NULL DEFAULT 'default',
+            category_key TEXT NOT NULL,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL,
+            mask_png TEXT NOT NULL DEFAULT '',
+            mask_x REAL DEFAULT 0,
+            mask_y REAL DEFAULT 0,
+            stars INTEGER DEFAULT 0,
+            estilo TEXT DEFAULT 'Nenhum',
+            observacao TEXT DEFAULT '',
+            visible INTEGER DEFAULT 1,
+            brush_radius REAL DEFAULT 50,
+            brush_softness REAL DEFAULT 0.5,
+            brush_opacity REAL DEFAULT 0.5,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_painted_zones_map ON painted_zones(map_id);
+    """),
 ]
 
 

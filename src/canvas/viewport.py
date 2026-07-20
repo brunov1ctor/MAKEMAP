@@ -160,7 +160,7 @@ class Viewport(QGraphicsView):
         super().__init__(parent)
 
         self._scene = QGraphicsScene(self)
-        self._scene.setSceneRect(QRectF(-50000, -50000, 100000, 100000))
+        self._scene.setSceneRect(QRectF(-5_000_000, -5_000_000, 10_000_000, 10_000_000))
         self.setScene(self._scene)
 
         # Rendering
