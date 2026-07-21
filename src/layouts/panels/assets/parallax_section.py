@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QLineEdit, QStackedWidget, QCheckBox, QTextEdit, QComboBox,
     QGraphicsOpacityEffect,
 )
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QSize, QPoint, QTimer
 from PySide6.QtGui import QPixmap, QImage
 
 from src.styles.tokens import Colors
@@ -141,27 +141,49 @@ class ParallaxPresetSection(QFrame):
     row per layer (thumbnail, speed, opacity, stacking order, delete)."""
 
     delete_requested = Signal(str)  # preset_key
+    reorder_requested = Signal(str, str)  # from_preset_key, to_preset_key
 
     def __init__(self, preset_key: str, name: str, parent=None):
         super().__init__(parent)
         self.preset_key = preset_key
         self._expanded = True
+        self._drop_target = False
+        self._is_parallax_preset_section = True
         self.setStyleSheet("background: transparent;")
 
         main = QVBoxLayout(self)
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
+        # Without this, collapsing the layer list (hiding self._content)
+        # leaves the section's parent layout holding a stale, too-tall slot
+        # for a moment — and QVBoxLayout, with no stretch and nothing left
+        # to fill it, centers the lone visible header inside that leftover
+        # space instead of pinning it to the top, which reads as a gap
+        # between this card's header and whatever comes above it.
+        main.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # ─── Header ───
         self._header = QFrame()
         self._header.setFixedHeight(32)
-        self._header.setStyleSheet(
-            f"QFrame {{ background: rgba(255,255,255,0.02); border: none; "
-            f"border-bottom: 1px solid {Colors.BORDER_SUBTLE}; }}"
-        )
+        self._header.setStyleSheet(self._header_style())
         h_lay = QHBoxLayout(self._header)
         h_lay.setContentsMargins(10, 0, 10, 0)
         h_lay.setSpacing(4)
+
+        # ─── Drag handle: reorders the whole preset relative to its
+        # siblings — same GhostCard/hover-highlight pattern the layer rows
+        # below already use, just one level up — ghost grabs the header
+        # only (not the whole card, which can be tall with many layers).
+        self._drag_handle = QLabel("⠿")
+        self._drag_handle.setFixedWidth(16)
+        self._drag_handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._drag_handle.setCursor(Qt.CursorShape.SizeAllCursor)
+        self._drag_handle.setToolTip("Arraste para reordenar este preset")
+        self._drag_handle.setStyleSheet(
+            f"color: {Colors.TEXT_MUTED}; font-size: 13px; background: transparent; border: none;"
+        )
+        self._setup_preset_drag(self._drag_handle)
+        h_lay.addWidget(self._drag_handle)
 
         self._arrow = QToolButton()
         self._arrow.setText("▼")
@@ -323,10 +345,127 @@ class ParallaxPresetSection(QFrame):
 
         self._refresh_layers()
 
+    def _header_style(self, drop_target: bool = False) -> str:
+        border = Colors.ACCENT if drop_target else Colors.BORDER_SUBTLE
+        bg = "rgba(79,195,247,0.15)" if drop_target else "rgba(255,255,255,0.02)"
+        return f"QFrame {{ background: {bg}; border: none; border-bottom: 1px solid {border}; }}"
+
+    def _set_drop_target(self, on: bool):
+        self._drop_target = on
+        self._header.setStyleSheet(self._header_style(on))
+
+    @staticmethod
+    def _preset_section_at_global_pos(global_pos):
+        from PySide6.QtWidgets import QApplication
+        w = QApplication.widgetAt(global_pos)
+        while w is not None:
+            if getattr(w, "_is_parallax_preset_section", False):
+                return w
+            w = w.parentWidget()
+        return None
+
+    def _setup_preset_drag(self, handle: QLabel):
+        """Same press/move/release ghost-drag pattern as _build_layer_row's
+        handle, one level up: dragging this reorders the whole preset among
+        its siblings in the Config panel's list, instead of a layer inside it."""
+        drag_state = {"start": None, "ghost": None, "hover_section": None}
+
+        def _find_scroll_host() -> QWidget:
+            from PySide6.QtWidgets import QScrollArea
+            w = self.parent()
+            while w:
+                if isinstance(w, QScrollArea):
+                    return w.viewport()
+                if w.parent() is None:
+                    return w
+                w = w.parent()
+            return self
+
+        def _clear_hover_highlight():
+            hover_section = drag_state["hover_section"]
+            if hover_section is not None:
+                hover_section._set_drop_target(False)
+                drag_state["hover_section"] = None
+
+        def _handle_press(event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                drag_state["start"] = event.pos()
+
+        def _handle_move(event):
+            start = drag_state["start"]
+            if start is None:
+                return
+            if drag_state["ghost"] is None:
+                if (event.pos() - start).manhattanLength() <= 6:
+                    return
+                from src.layouts.panels.assets.card import GhostCard
+                host = _find_scroll_host()
+                drag_state["ghost"] = GhostCard(self._header, host)
+
+            ghost = drag_state["ghost"]
+            global_pos = event.globalPosition().toPoint()
+            offset_in_header = handle.mapTo(self._header, start)
+            ghost.move_to(global_pos, offset_in_header)
+
+            target = self._preset_section_at_global_pos(global_pos)
+            if target is not drag_state["hover_section"]:
+                _clear_hover_highlight()
+                if target is not None and target is not self:
+                    target._set_drop_target(True)
+                    drag_state["hover_section"] = target
+
+        def _handle_release(event):
+            ghost = drag_state["ghost"]
+            if ghost is not None:
+                ghost.hide()
+                ghost.deleteLater()
+                target = self._preset_section_at_global_pos(event.globalPosition().toPoint())
+                _clear_hover_highlight()
+                if target is not None and target is not self:
+                    self.reorder_requested.emit(self.preset_key, target.preset_key)
+            drag_state["start"] = None
+            drag_state["ghost"] = None
+
+        handle.mousePressEvent = _handle_press
+        handle.mouseMoveEvent = _handle_move
+        handle.mouseReleaseEvent = _handle_release
+
+    def _find_scroll_area(self):
+        """Walks up to the enclosing QScrollArea (the Config panel's own,
+        several levels up) — used by _toggle to keep this card's header
+        pinned at the same on-screen spot across expand/collapse, instead
+        of the whole list jumping when this card's height changes."""
+        from PySide6.QtWidgets import QScrollArea
+        w = self.parent()
+        while w is not None:
+            if isinstance(w, QScrollArea):
+                return w
+            w = w.parent()
+        return None
+
     def _toggle(self):
+        scroll_area = self._find_scroll_area()
+        old_viewport_y = self.mapTo(scroll_area.viewport(), QPoint(0, 0)).y() if scroll_area else None
+
         self._expanded = not self._expanded
         self._content.setVisible(self._expanded)
         self._arrow.setText("▼" if self._expanded else "▶")
+
+        if scroll_area is not None:
+            def _restore_scroll():
+                # Absolute, not relative: collapsing/expanding shrinks or
+                # grows the total scrollable height, which can silently
+                # clamp the scrollbar's value on its own — computing the
+                # target value from scratch (this card's fixed position
+                # inside the scrolled content minus where we want its top
+                # to land in the viewport) is robust to that, where
+                # "current value + delta" was not.
+                content_y = self.mapTo(scroll_area.widget(), QPoint(0, 0)).y()
+                scroll_area.verticalScrollBar().setValue(content_y - old_viewport_y)
+            # Deferred: hide()/show() doesn't resettle the layout
+            # synchronously, so measuring the new position right away would
+            # still read the stale (pre-toggle) geometry.
+            QTimer.singleShot(0, _restore_scroll)
 
     def _start_rename(self):
         self._name_edit.setText(self._title_label.text())
@@ -484,7 +623,12 @@ class ParallaxPresetSection(QFrame):
     def _row_style(self, drop_target: bool = False) -> str:
         border = Colors.ACCENT if drop_target else Colors.BORDER_SUBTLE
         bg = "rgba(79,195,247,0.10)" if drop_target else "rgba(255,255,255,0.03)"
-        return f"QFrame {{ background: {bg}; border: 1px solid {border}; border-radius: 6px; }}"
+        style = f"QFrame {{ background: {bg}; border: 1px solid {border}; border-radius: 6px; }}"
+        if not drop_target:
+            # Hover highlight — skipped while this row is an active drag
+            # target, which already has its own (stronger) highlight above.
+            style += f"QFrame:hover {{ background: rgba(79,195,247,0.06); border-color: {Colors.ACCENT}; }}"
+        return style
 
     def _row_at_global_pos(self, global_pos) -> QFrame | None:
         """Which layer row (if any) is under a global point — walks up from

@@ -1,0 +1,111 @@
+{
+  "active_key": "futurista",
+  "presets": [
+    {
+      "key": "futurista",
+      "name": "futurista",
+      "show_info": true,
+      "layers": [
+        {
+          "image_path": "futurista\\fundo.png",
+          "name": "fundo",
+          "role": "main_pointer",
+          "animation": "fixed",
+          "period": 0.0,
+          "opacity": 1.0,
+          "scale": 1.0
+        },
+        {
+          "image_path": "futurista\\base.png",
+          "name": "base",
+          "role": "background_fx",
+          "animation": "interaction",
+          "period": 12.0,
+          "opacity": 0.6,
+          "scale": 1.22
+        },
+        {
+          "image_path": "futurista\\borda.png",
+          "name": "borda",
+          "role": "ring_degrees",
+          "animation": "interaction",
+          "period": 24.0,
+          "opacity": 1.0,
+          "scale": 1.0
+        },
+        {
+          "image_path": "futurista\\semi borda.png",
+          "name": "semi borda",
+          "role": "background_fx",
+          "animation": "rotate_cw",
+          "period": 40.0,
+          "opacity": 0.9,
+          "scale": 0.97
+        },
+        {
+          "image_path": "futurista\\cordenadas.png",
+          "name": "marcadores",
+          "role": "outer_glow",
+          "animation": "fixed",
+          "period": 18.0,
+          "opacity": 0.9,
+          "scale": 0.89
+        },
+        {
+          "image_path": "futurista\\marcadores.png",
+          "name": "cordenadas",
+          "role": "background_fx",
+          "animation": "locked_to_view",
+          "period": 0.0,
+          "opacity": 1.0,
+          "scale": 0.83
+        },
+        {
+          "image_path": "futurista\\aura.png",
+          "name": "aura",
+          "role": "outer_glow",
+          "animation": "interaction",
+          "period": 2.2,
+          "opacity": 0.45,
+          "scale": 0.88
+        },
+        {
+          "image_path": "futurista\\aura moving.png",
+          "name": "aura moving",
+          "role": "outer_glow",
+          "animation": "pulse",
+          "period": 6.0,
+          "opacity": 0.7,
+          "scale": 0.94
+        },
+        {
+          "image_path": "futurista\\ponteiros principal.png",
+          "name": "ponteiros principal",
+          "role": "main_pointer",
+          "animation": "locked_to_view",
+          "period": 0.0,
+          "opacity": 1.0,
+          "scale": 0.94
+        },
+        {
+          "image_path": "futurista\\ponteiros secundarios.png",
+          "name": "ponteiros secundarios",
+          "role": "secondary_pointer",
+          "animation": "locked_to_view",
+          "period": 0.0,
+          "opacity": 0.85,
+          "scale": 0.7
+        },
+        {
+          "image_path": "futurista\\núcleo.png",
+          "name": "núcleo",
+          "role": "core",
+          "animation": "pulse",
+          "period": 1.8,
+          "opacity": 1.0,
+          "scale": 0.32
+        }
+      ]
+    }
+  ]
+}

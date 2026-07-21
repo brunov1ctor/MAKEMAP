@@ -15,9 +15,11 @@ from PySide6.QtCore import Qt
 from src.styles.tokens import Colors
 from src.layouts.panels.assets.card import CategorySection
 from src.layouts.panels.assets.parallax_section import ParallaxPresetSection
+from src.layouts.panels.assets.navigation_section import NavigationPresetSection
 from src.layouts.panels.brush.flow_layout import FlowLayout
 from src.engines.assets.library import DEFAULT_STYLE, list_styles
 from src.engines.map.parallax import get_parallax_library
+from src.engines.map.navigation import get_navigation_library
 
 _BG_CATEGORIES = [
     ("abstract", "🎨", "Abstract"),
@@ -100,6 +102,9 @@ class AssetSoundManager(QWidget):
         self._parallax_group = self._build_parallax_group()
         main.addWidget(self._parallax_group)
 
+        self._navigation_group = self._build_navigation_group()
+        main.addWidget(self._navigation_group)
+
         main.addStretch()
         self._show_group("assets")
 
@@ -120,6 +125,12 @@ class AssetSoundManager(QWidget):
         layout = QVBoxLayout(group)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        # See ParallaxPresetSection's own setAlignment for why: without this,
+        # a collapsed/removed preset can leave this group holding more
+        # height than it currently needs, and QVBoxLayout centers the
+        # header+list block inside that leftover space instead of pinning
+        # it to the top — showing up as a gap below "Presets de Parallax".
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         header = QFrame()
         header.setFixedHeight(36)
@@ -152,6 +163,7 @@ class AssetSoundManager(QWidget):
         self._parallax_list_layout = QVBoxLayout()
         self._parallax_list_layout.setContentsMargins(8, 6, 8, 6)
         self._parallax_list_layout.setSpacing(6)
+        self._parallax_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         layout.addLayout(self._parallax_list_layout)
         self._parallax_sections: dict[str, ParallaxPresetSection] = {}
         self._new_parallax_row = None
@@ -164,8 +176,20 @@ class AssetSoundManager(QWidget):
     def _add_parallax_section(self, key: str, name: str):
         section = ParallaxPresetSection(key, name)
         section.delete_requested.connect(self._on_delete_parallax_preset)
+        section.reorder_requested.connect(self._on_reorder_parallax_preset)
         self._parallax_list_layout.addWidget(section)
         self._parallax_sections[key] = section
+
+    def _on_reorder_parallax_preset(self, from_key: str, to_key: str):
+        get_parallax_library().reorder_preset(from_key, to_key)
+        # Re-sync visual order to the library's (now-updated) order instead
+        # of computing index math here — same "full rebuild from source of
+        # truth" pattern the sections themselves use for their own rows.
+        for preset in get_parallax_library().list_presets():
+            section = self._parallax_sections.get(preset.key)
+            if section is not None:
+                self._parallax_list_layout.removeWidget(section)
+                self._parallax_list_layout.addWidget(section)
 
     def _add_parallax_preset(self):
         """Same inline dashed-row creation pattern as _add_category/_add_style
@@ -248,6 +272,156 @@ class AssetSoundManager(QWidget):
             self._parallax_list_layout.removeWidget(section)
             section.deleteLater()
 
+    def _build_navigation_group(self) -> QWidget:
+        group = QWidget()
+        group.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        # See ParallaxPresetSection's own setAlignment for why: without this,
+        # a collapsed/removed preset can leave this group holding more
+        # height than it currently needs, and QVBoxLayout centers the
+        # header+list block inside that leftover space instead of pinning
+        # it to the top — showing up as a gap below "Presets de Navegação".
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        header = QFrame()
+        header.setFixedHeight(36)
+        header.setStyleSheet(
+            f"QFrame {{ background: rgba(255,255,255,0.03); border: none; "
+            f"border-bottom: 1px solid {Colors.BORDER_SUBTLE}; }}"
+        )
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(12, 0, 12, 0)
+        h_lay.setSpacing(8)
+        h_lbl = QLabel("🧭 Presets de Navegação")
+        h_lbl.setStyleSheet(
+            f"color: {Colors.ACCENT}; font-size: 11pt; font-weight: bold; "
+            f"background: transparent; border: none;"
+        )
+        h_lay.addWidget(h_lbl)
+        h_lay.addStretch()
+        add_preset_btn = QToolButton()
+        add_preset_btn.setText("+ Novo Preset")
+        add_preset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_preset_btn.setStyleSheet(
+            f"QToolButton {{ background: {Colors.ACCENT_DIM}; border: none; padding: 3px 8px; "
+            f"color: {Colors.ACCENT}; font-size: 9pt; font-weight: bold; border-radius: 4px; }}"
+            f"QToolButton:hover {{ background: rgba(79,195,247,0.3); }}"
+        )
+        add_preset_btn.clicked.connect(self._add_navigation_preset)
+        h_lay.addWidget(add_preset_btn)
+        layout.addWidget(header)
+
+        self._navigation_list_layout = QVBoxLayout()
+        self._navigation_list_layout.setContentsMargins(8, 6, 8, 6)
+        self._navigation_list_layout.setSpacing(6)
+        self._navigation_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(self._navigation_list_layout)
+        self._navigation_sections: dict[str, NavigationPresetSection] = {}
+        self._new_navigation_row = None
+
+        for preset in get_navigation_library().list_presets():
+            self._add_navigation_section(preset.key, preset.name)
+
+        return group
+
+    def _add_navigation_section(self, key: str, name: str):
+        section = NavigationPresetSection(key, name)
+        section.delete_requested.connect(self._on_delete_navigation_preset)
+        section.reorder_requested.connect(self._on_reorder_navigation_preset)
+        self._navigation_list_layout.addWidget(section)
+        self._navigation_sections[key] = section
+
+    def _on_reorder_navigation_preset(self, from_key: str, to_key: str):
+        get_navigation_library().reorder_preset(from_key, to_key)
+        for preset in get_navigation_library().list_presets():
+            section = self._navigation_sections.get(preset.key)
+            if section is not None:
+                self._navigation_list_layout.removeWidget(section)
+                self._navigation_list_layout.addWidget(section)
+
+    def _add_navigation_preset(self):
+        """Same inline dashed-row creation pattern as _add_parallax_preset —
+        no native dialog for naming the preset."""
+        if getattr(self, "_new_navigation_row", None):
+            self._new_navigation_row.findChild(QLineEdit).setFocus()
+            return
+
+        row = QFrame()
+        row.setStyleSheet(f"""
+            QFrame {{
+                background: rgba(255,255,255,0.03); border: 1px dashed {Colors.ACCENT};
+                border-radius: 6px;
+            }}
+        """)
+        row_lay = QHBoxLayout(row)
+        row_lay.setContentsMargins(10, 6, 8, 6)
+        row_lay.setSpacing(6)
+
+        edit = QLineEdit()
+        edit.setPlaceholderText("Nome do preset...")
+        edit.setStyleSheet(f"""
+            QLineEdit {{
+                background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 4px; color: {Colors.TEXT_PRIMARY}; font-size: 10pt;
+                padding: 2px 6px;
+            }}
+            QLineEdit:focus {{ border-color: {Colors.ACCENT}; }}
+        """)
+        row_lay.addWidget(edit, 1)
+
+        confirm_btn = QToolButton()
+        confirm_btn.setText("✓")
+        confirm_btn.setFixedSize(22, 22)
+        confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        confirm_btn.setStyleSheet(f"""
+            QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
+                color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
+            QToolButton:hover {{ background: rgba(79,195,247,0.3); }}
+        """)
+        row_lay.addWidget(confirm_btn)
+
+        cancel_btn = QToolButton()
+        cancel_btn.setText("✕")
+        cancel_btn.setFixedSize(22, 22)
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet(f"""
+            QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
+                color: {Colors.TEXT_MUTED}; background: transparent; }}
+            QToolButton:hover {{ color: {Colors.ERROR}; background: rgba(239,83,80,0.2); }}
+        """)
+        row_lay.addWidget(cancel_btn)
+
+        confirm_btn.clicked.connect(lambda: self._confirm_new_navigation_preset(edit.text()))
+        cancel_btn.clicked.connect(self._close_new_navigation_row)
+        edit.returnPressed.connect(lambda: self._confirm_new_navigation_preset(edit.text()))
+
+        self._navigation_list_layout.insertWidget(0, row)
+        self._new_navigation_row = row
+        edit.setFocus()
+
+    def _close_new_navigation_row(self):
+        if getattr(self, "_new_navigation_row", None):
+            self._navigation_list_layout.removeWidget(self._new_navigation_row)
+            self._new_navigation_row.deleteLater()
+            self._new_navigation_row = None
+
+    def _confirm_new_navigation_preset(self, name: str):
+        name = name.strip()
+        self._close_new_navigation_row()
+        if not name:
+            return
+        preset = get_navigation_library().add_preset(name)
+        self._add_navigation_section(preset.key, preset.name)
+
+    def _on_delete_navigation_preset(self, key: str):
+        get_navigation_library().remove_preset(key)
+        section = self._navigation_sections.pop(key, None)
+        if section:
+            self._navigation_list_layout.removeWidget(section)
+            section.deleteLater()
+
     def _build_group_tabs(self) -> QFrame:
         container = QFrame()
         container.setStyleSheet(
@@ -261,8 +435,8 @@ class AssetSoundManager(QWidget):
         self._group_tab_flow = FlowLayout(container, spacing=2)
         self._group_tab_flow.setContentsMargins(10, 4, 10, 4)
 
-        self._group_keys = ["assets", "bg_images", "parallax"]
-        self._group_labels = ["🎨 Assets", "🖼 Backgrounds Estáticos", "🌄 Parallax"]
+        self._group_keys = ["assets", "bg_images", "parallax", "navigation"]
+        self._group_labels = ["🎨 Assets", "🖼 Backgrounds Estáticos", "🌄 Parallax", "🧭 Navegação"]
         self._group_buttons: list[QToolButton] = []
         for i, label in enumerate(self._group_labels):
             btn = QToolButton()
@@ -386,6 +560,7 @@ class AssetSoundManager(QWidget):
         self._assets_group.setVisible(key == "assets")
         self._bg_images_group.setVisible(key == "bg_images")
         self._parallax_group.setVisible(key == "parallax")
+        self._navigation_group.setVisible(key == "navigation")
 
     def showEvent(self, event):
         super().showEvent(event)

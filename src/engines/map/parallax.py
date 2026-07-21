@@ -250,6 +250,21 @@ class ParallaxLibrary(QObject):
             shutil.rmtree(preset_dir, ignore_errors=True)
         self.save()
 
+    def reorder_preset(self, from_key: str, to_key: str):
+        """Move a whole preset to sit where another one is — drag-and-drop
+        in the Config panel, same idea as reorder_layer but one level up.
+        Dict insertion order is what both list_presets() and save() iterate
+        in, so rebuilding it in the new key order is enough to persist it."""
+        if from_key == to_key or from_key not in self._presets or to_key not in self._presets:
+            return
+        keys = list(self._presets.keys())
+        from_idx = keys.index(from_key)
+        to_idx = keys.index(to_key)
+        keys.pop(from_idx)
+        keys.insert(to_idx, from_key)
+        self._presets = {k: self._presets[k] for k in keys}
+        self.save()
+
     def add_layer(self, preset_key: str, source_path: str) -> ParallaxLayer | None:
         preset = self._presets.get(preset_key)
         if preset is None:

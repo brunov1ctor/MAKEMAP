@@ -153,6 +153,7 @@ class Viewport(QGraphicsView):
     """Main canvas viewport with infinite zoom and pan."""
 
     zoom_changed = Signal(float)  # emits current zoom level (1.0 = 100%)
+    rotation_changed = Signal(float)  # emits current rotation, degrees [0, 360)
     cursor_moved = Signal(float, float)  # scene X, Y
     view_changed = Signal()  # emitted on any pan or zoom
 
@@ -185,6 +186,7 @@ class Viewport(QGraphicsView):
 
         # State
         self._zoom = 1.0
+        self._rotation_deg = 0.0
         self._panning = False
         self._pan_start = QPointF()
         self._space_held = False
@@ -361,24 +363,24 @@ class Viewport(QGraphicsView):
     def zoom_percent(self) -> int:
         return int(self._zoom * 100)
 
-    def set_zoom(self, level: float, center: QPointF | None = None):
-        if level <= 0 or level == self._zoom:
-            return
+    @property
+    def rotation_deg(self) -> float:
+        return self._rotation_deg
 
-        if center is None:
-            center = self.viewport().rect().center()
-            center = QPointF(center.x(), center.y())
-
-        # Get scene point under cursor before zoom
-        old_scene_pos = self.mapToScene(int(center.x()), int(center.y()))
-
-        # Apply new transform
-        self._zoom = level
+    def _rebuild_transform(self):
+        """Composes the current zoom and rotation into one transform — used
+        by both set_zoom and set_rotation so neither ever wipes out the
+        other (a bare `t.scale(...)` replacing the whole transform, like
+        this used to do, would silently reset any rotation back to 0)."""
         t = QTransform()
+        t.rotate(self._rotation_deg)
         t.scale(self._zoom, self._zoom)
         self.setTransform(t)
 
-        # Keep scene point under cursor
+    def _reanchor(self, old_scene_pos: QPointF, center: QPointF):
+        """Keeps `old_scene_pos` under the same screen `center` point after
+        the transform changes — same anchoring trick set_zoom already used
+        for the cursor position, reused here for set_rotation too."""
         new_screen_pos = self.mapFromScene(old_scene_pos)
         delta = center - QPointF(new_screen_pos.x(), new_screen_pos.y())
         self.horizontalScrollBar().setValue(
@@ -388,7 +390,37 @@ class Viewport(QGraphicsView):
             self.verticalScrollBar().value() - int(delta.y())
         )
 
+    def set_zoom(self, level: float, center: QPointF | None = None):
+        if level <= 0 or level == self._zoom:
+            return
+
+        if center is None:
+            center = self.viewport().rect().center()
+            center = QPointF(center.x(), center.y())
+
+        old_scene_pos = self.mapToScene(int(center.x()), int(center.y()))
+        self._zoom = level
+        self._rebuild_transform()
+        self._reanchor(old_scene_pos, center)
+
         self.zoom_changed.emit(self._zoom)
+        self.view_changed.emit()
+
+    def set_rotation(self, degrees: float, center: QPointF | None = None):
+        degrees = degrees % 360.0
+        if degrees == self._rotation_deg:
+            return
+
+        if center is None:
+            center = self.viewport().rect().center()
+            center = QPointF(center.x(), center.y())
+
+        old_scene_pos = self.mapToScene(int(center.x()), int(center.y()))
+        self._rotation_deg = degrees
+        self._rebuild_transform()
+        self._reanchor(old_scene_pos, center)
+
+        self.rotation_changed.emit(self._rotation_deg)
         self.view_changed.emit()
 
     def zoom_in(self):
@@ -404,8 +436,16 @@ class Viewport(QGraphicsView):
         items_rect = self._scene.itemsBoundingRect()
         if items_rect.isEmpty():
             return
+        # fitInView builds a fresh axis-aligned transform, discarding any
+        # rotation — resync our tracked state to match so a later
+        # set_zoom/set_rotation (which reapplies _rotation_deg via
+        # _rebuild_transform) doesn't suddenly snap the view back to a
+        # rotation that's no longer actually there.
         self.fitInView(items_rect, Qt.AspectRatioMode.KeepAspectRatio)
-        self._zoom = self.transform().m11()
+        self._zoom = math.hypot(self.transform().m11(), self.transform().m12())
+        if self._rotation_deg != 0.0:
+            self._rotation_deg = 0.0
+            self.rotation_changed.emit(0.0)
         self.zoom_changed.emit(self._zoom)
 
     def center_on_point(self, scene_pos: QPointF):

@@ -54,7 +54,7 @@
           "opacity": 0.48,
           "order": 2,
           "tile_mode": "fade",
-          "motion_mode": "orbit",
+          "motion_mode": "scroll",
           "orbit_radius": 24.0,
           "orbit_period": 25.0,
           "opacity_pulse": true,

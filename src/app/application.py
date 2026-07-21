@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 from PySide6.QtGui import QKeySequence
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QRect
 
 from src.styles.stylesheet import build_stylesheet
 from src.layouts.main_layout import MainLayout
@@ -74,6 +74,62 @@ class MainWindow(QMainWindow):
         self._projects_panel.delete_requested.connect(self._on_panel_delete)
 
         self._setup_shortcuts()
+        self._screen_watch_connected = False
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # windowHandle() is only valid once the native window exists, which
+        # happens on first show — connect here (once) instead of in
+        # __init__, and immediately clamp in case we're already opening on
+        # a monitor smaller than the 1280x720 floor set above.
+        if not self._screen_watch_connected and self.windowHandle():
+            self.windowHandle().screenChanged.connect(self._on_screen_changed)
+            self._screen_watch_connected = True
+            self._clamp_to_screen()
+
+    def _on_screen_changed(self, screen):
+        # Deferred: right after a drag-to-another-monitor, Qt hasn't
+        # necessarily finished re-maximizing the window yet — measuring on
+        # the next event-loop tick gets the settled geometry.
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._clamp_to_screen)
+
+    def _clamp_to_screen(self):
+        """Keep the window fully on whatever screen it's currently on.
+
+        setMinimumSize(1280, 720) below assumes a monitor at least that
+        big; dragged to a smaller one, Windows still enforces that floor
+        and leaves the excess (bottom/right — whatever panel happens to be
+        open, e.g. Config) physically off-screen instead of shrinking to
+        fit. Relaxing the floor to the smaller screen's own available size
+        and re-clamping position/size mirrors what FloatingCoordinator
+        already does for floating panels, just one level up — for the
+        window itself against its monitor instead of a panel against the
+        window.
+        """
+        screen = self.screen()
+        if not screen:
+            return
+        avail = screen.availableGeometry()
+
+        self.setMinimumSize(min(1280, avail.width()), min(720, avail.height()))
+
+        if self.isMaximized():
+            if self.geometry() != avail:
+                self.setGeometry(avail)
+            return
+
+        geo = QRect(self.x(), self.y(), min(self.width(), avail.width()), min(self.height(), avail.height()))
+        if geo.right() > avail.right():
+            geo.moveRight(avail.right())
+        if geo.bottom() > avail.bottom():
+            geo.moveBottom(avail.bottom())
+        if geo.left() < avail.left():
+            geo.moveLeft(avail.left())
+        if geo.top() < avail.top():
+            geo.moveTop(avail.top())
+        if geo != self.geometry():
+            self.setGeometry(geo)
 
     def _setup_shortcuts(self):
         """Atalhos de teclado sem menu bar nativo."""
@@ -161,10 +217,14 @@ class MainWindow(QMainWindow):
 
     def _on_panel_project_opened(self, proj: Project):
         self._hide_projects()
-        self.project = proj
-        self._on_project_loaded()
+        self._load_project(proj)
         # Also close fullscreen menu if open
         self.layout_widget._hide_menu_view()
+
+    def _load_project(self, proj: Project):
+        """Make `proj` the active project without touching any panel visibility."""
+        self.project = proj
+        self._on_project_loaded()
 
     def _on_panel_delete(self, path: str):
         from pathlib import Path as P

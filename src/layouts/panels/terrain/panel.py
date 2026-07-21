@@ -452,6 +452,11 @@ class TerrainSettingsPanel(QFrame):
     def selected_terrain_id(self) -> str:
         return self._selected_id
 
+    @property
+    def selected_terrain_name(self) -> str:
+        card = self._cards.get(self._selected_id)
+        return card.name if card else ""
+
     # ─── Signal handlers ───
 
     def _on_infinite_toggled(self, checked: bool):

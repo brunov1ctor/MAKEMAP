@@ -115,6 +115,38 @@ class MobsPanel(QWidget):
 
     closed = Signal()
 
+    # Sidebar scales with the window instead of staying at a fixed pixel
+    # width — otherwise moving the app to a monitor with a very different
+    # resolution leaves it the same size while only the center card grid
+    # flexes, skewing the proportion from screen to screen. Ratio is tuned
+    # to land close to the original fixed 190px at this panel's typical
+    # ~1568px content width; min/max keep it usable at the extremes.
+    #
+    # The edit panel (right column) deliberately stays OUT of this —
+    # MobEditPanel.setSizePolicy(Fixed, Expanding) plus the comment at
+    # mob_edit_panel.py:119 record that its fields were hand-tuned to fit
+    # exactly PANEL_WIDTH (380px) with nothing scrolling, and that an outer
+    # QScrollArea safety net was tried and abandoned there (viewport gets
+    # stuck near-zero after showMaximized()). Resizing it away from 380
+    # fights that design instead of fixing anything.
+    # 264px is the real floor already — the "CATEGORIAS" label + "+ Nova
+    # categoria" button share one row that can't compress past their own
+    # text width (confirmed via minimumSizeHint()); MIN_W just documents
+    # that intent; the actual clamp always defers to the live
+    # minimumSizeHint() below in case that row's content changes later.
+    _LEFT_RATIO = 0.15
+    _LEFT_MIN_W = 264
+    _LEFT_MAX_W = 320
+
+    # Same idea, vertically: Resumo Rápido (donut + rarity legend) was sized
+    # purely to its own content while Categorias soaked up whatever height
+    # was left over (stretch=1). On a shorter window that leftover shrinks
+    # but Resumo Rápido never does, so it ends up dominating the column
+    # instead of the category list. Ratio tuned to match its original
+    # ~220px content height at this panel's typical ~748px height.
+    _SUMMARY_RATIO = 0.29
+    _SUMMARY_MAX_H = 260
+
     def __init__(self, uow, zones_provider=None, parent=None):
         super().__init__(parent)
         self._uow = uow
@@ -131,6 +163,7 @@ class MobsPanel(QWidget):
         self._build_ui()
         self._ui_ready = True
         self._reload()
+        self._apply_responsive_layout()
 
     # ─── UI construction ───
 
@@ -223,7 +256,6 @@ class MobsPanel(QWidget):
         body.addWidget(self._build_left_column())
         body.addLayout(self._build_center(), 1)
         self._edit_panel = MobEditPanel()
-        self._edit_panel.setFixedWidth(MobEditPanel.PANEL_WIDTH)
         self._edit_panel.save_requested.connect(self._on_save)
         self._edit_panel.cancel_requested.connect(self._on_cancel_edit)
         self._edit_panel.duplicate_requested.connect(self._on_duplicate)
@@ -234,13 +266,43 @@ class MobsPanel(QWidget):
         body.addWidget(self._edit_panel)
         outer.addLayout(body, 1)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_responsive_layout()
+
+    def _apply_responsive_layout(self):
+        total_w = self.width()
+        if total_w <= 0 or not hasattr(self, "_left_container"):
+            return
+        # Same never-below-natural-minimum floor as the summary card below —
+        # the search box + "+ Nova categoria" button up top aren't inside
+        # the sidebar's internal scroll area, so they can't compress past
+        # their own content width without clipping/overlapping.
+        content_min_w = self._left_container.minimumSizeHint().width()
+        ratio_w = round(total_w * self._LEFT_RATIO)
+        left_w = max(content_min_w, min(self._LEFT_MAX_W, max(self._LEFT_MIN_W, ratio_w)))
+        self._left_container.setFixedWidth(left_w)
+
+        total_h = self.height()
+        if total_h > 0 and hasattr(self, "_summary_card"):
+            # The donut (DonutChart.setFixedSize(96, 96)) and legend rows
+            # can't compress — floor at the card's own minimumSizeHint
+            # rather than a guessed constant, or a small enough monitor
+            # forces it below what the donut/icons actually need and they
+            # overlap instead of the card just staying a bit taller than
+            # the ratio would like.
+            content_min_h = self._summary_card.minimumSizeHint().height()
+            ratio_h = round(total_h * self._SUMMARY_RATIO)
+            summary_h = max(content_min_h, min(self._SUMMARY_MAX_H, ratio_h))
+            self._summary_card.setFixedHeight(summary_h)
+
     def _build_left_column(self) -> QWidget:
         """Categories and Resumo Rápido as two independent, visibly
         separate cards stacked in the left column — NOT one nested inside
         the other, which used to make Resumo Rápido read as part of the
         same panel as the category list."""
         container = QWidget()
-        container.setFixedWidth(190)
+        self._left_container = container
         outer = QVBoxLayout(container)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(10)
@@ -325,6 +387,7 @@ class MobsPanel(QWidget):
         """"Resumo Rápido" — its own independent bordered card, a sibling
         of the category list (not nested inside it)."""
         summary_card = QFrame()
+        self._summary_card = summary_card
         summary_card.setStyleSheet(f"""
             QFrame {{ background: rgba(255,255,255,0.03); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px; }}
         """)

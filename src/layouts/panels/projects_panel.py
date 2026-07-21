@@ -41,7 +41,7 @@ class _ProjectCard(QWidget):
     delete_requested = Signal(str)    # path
     renamed = Signal(str, str)        # path, new_name
 
-    def __init__(self, name: str, path: str, is_active: bool, parent=None):
+    def __init__(self, name: str, path: str, is_active: bool, editing: bool = False, parent=None):
         super().__init__(parent)
         self._path = path
         self._name = name
@@ -54,9 +54,9 @@ class _ProjectCard(QWidget):
             f"QWidget#projCard:hover {{ background: {Colors.PANEL_HOVER}; border-color: {Colors.ACCENT}; }}"
             f"QWidget#projCard QLabel {{ background: transparent; border: none; }}"
         )
-        self._build()
+        self._build(editing)
 
-    def _build(self):
+    def _build(self, editing: bool = False):
         L = QVBoxLayout(self)
         L.setContentsMargins(12, 10, 12, 10)
         L.setSpacing(4)
@@ -146,6 +146,13 @@ class _ProjectCard(QWidget):
         btns.addStretch()
         L.addLayout(btns)
 
+        if editing:
+            self._name_lbl.hide()
+            self._name_edit.show()
+            self._name_edit.setFocus()
+            self._name_edit.selectAll()
+            self._btn_rename.setText("Salvar")
+
     def _on_delete_clicked(self):
         self._confirm_widget.show()
         self._btn_del.hide()
@@ -186,13 +193,15 @@ class ProjectsPanel(QWidget):
     """Painel CRUD de projetos — overlay glass, draggable."""
 
     closed = Signal()
-    project_opened = Signal(object)   # Project
+    project_opened = Signal(object)   # Project — opening an existing project
+    project_created = Signal(object)  # Project — creating a new one (panel stays open to rename)
     new_requested = Signal()
     delete_requested = Signal(str)    # path
 
     def __init__(self, active_path: str = "", parent=None):
         super().__init__(parent)
         self._active_path = active_path
+        self._new_card_path: str | None = None
         self._drag_pos = None
         self.setMinimumWidth(350)
         self.setMaximumWidth(500)
@@ -221,7 +230,7 @@ class ProjectsPanel(QWidget):
         btn_new = QPushButton("+ Novo")
         btn_new.setFixedHeight(26)
         btn_new.setStyleSheet(_btn_primary())
-        btn_new.clicked.connect(self.new_requested.emit)
+        btn_new.clicked.connect(self._new_project)
         hdr.addWidget(btn_new)
 
         close_btn = QPushButton("✕")
@@ -315,6 +324,7 @@ class ProjectsPanel(QWidget):
             card = _ProjectCard(
                 entry.name, entry.path,
                 is_active=(entry.path == self._active_path),
+                editing=(entry.path == self._new_card_path),
                 parent=self._content,
             )
             card.open_requested.connect(self._on_open)
@@ -322,8 +332,22 @@ class ProjectsPanel(QWidget):
             card.renamed.connect(self._on_renamed)
             L.addWidget(card)
 
+        self._new_card_path = None
         L.addStretch()
         self._content.show()
+
+    def _new_project(self):
+        name = f"Projeto_{int(time.time())}"
+        try:
+            proj = Project.create(PROJECTS_DIR, name)
+        except Exception as e:
+            logging.getLogger("MAKEMAP").warning("New project error: %s", e)
+            return
+        add_recent(name, str(proj.path))
+        self._new_card_path = str(proj.path)
+        self._active_path = str(proj.path)
+        self.refresh()
+        self.project_created.emit(proj)
 
     def _on_open(self, path: str):
         try:

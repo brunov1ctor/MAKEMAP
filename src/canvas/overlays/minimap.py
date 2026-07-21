@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QToolButton, QSlider, QGraphicsView,
 )
 from PySide6.QtCore import Qt, Signal, QRectF, QTimer
-from PySide6.QtGui import QColor, QPen, QBrush, QPainter
+from PySide6.QtGui import QColor, QPen, QBrush, QPainter, QPolygonF
 
 from src.styles.tokens import Colors, Typography
 
@@ -59,20 +59,23 @@ class _MiniMapView(QGraphicsView):
         self.setInteractive(False)
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
         self.setStyleSheet(f"background: {Colors.BG_TERTIARY}; border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px;")
-        self._view_rect: QRectF = QRectF()
+        self._view_polygon = QPolygonF()
 
-    def set_viewport_rect(self, rect: QRectF):
-        """Store viewport rect and trigger repaint (drawn in foreground, not in scene)."""
-        self._view_rect = rect
+    def set_viewport_polygon(self, polygon: QPolygonF):
+        """Store the main viewport's on-scene outline and trigger a repaint
+        (drawn in foreground, not in scene). A QPolygonF (not a QRectF) —
+        once the main view can rotate, its visible area is a rotated quad,
+        not an axis-aligned rect."""
+        self._view_polygon = polygon
         self.viewport().update()
 
     def drawForeground(self, painter: QPainter, rect: QRectF):
         """Draw viewport indicator on top without adding items to the shared scene."""
-        if self._view_rect.isNull() or self._view_rect.isEmpty():
+        if self._view_polygon.isEmpty():
             return
         painter.setPen(QPen(QColor(79, 195, 247, 200), 0))  # cosmetic pen
         painter.setBrush(QBrush(QColor(79, 195, 247, 30)))
-        painter.drawRect(self._view_rect)
+        painter.drawPolygon(self._view_polygon)
 
     def wheelEvent(self, event):
         event.ignore()
@@ -338,12 +341,15 @@ class MiniMap(QFrame):
         self._mini_view.fitInView(fit_rect, Qt.AspectRatioMode.KeepAspectRatio)
         self._mini_view.viewport().update()
 
-        # Viewport indicator
+        # Viewport indicator — map all 4 corners individually rather than
+        # two opposite corners into a QRectF: once the main view can
+        # rotate, its visible area is a rotated quad, and two corner
+        # points no longer describe an axis-aligned rect.
         vp = self._main_viewport
-        top_left = vp.mapToScene(0, 0)
-        bottom_right = vp.mapToScene(vp.viewport().width(), vp.viewport().height())
-        view_rect = QRectF(top_left, bottom_right)
-        self._mini_view.set_viewport_rect(view_rect)
+        vp_rect = vp.viewport().rect()
+        corners = [vp_rect.topLeft(), vp_rect.topRight(), vp_rect.bottomRight(), vp_rect.bottomLeft()]
+        polygon = QPolygonF([vp.mapToScene(c) for c in corners])
+        self._mini_view.set_viewport_polygon(polygon)
 
         # Restore
         for item in shown:

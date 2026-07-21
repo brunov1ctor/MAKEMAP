@@ -16,7 +16,12 @@
       "Bash(python -c ' *)",
       "Bash(rm -f /tmp/smoke_mobs.py)",
       "Bash(py -c ' *)",
-      "Read(//c/Users/bruno/AppData/Local/Temp/claude/**)"
+      "Read(//c/Users/bruno/AppData/Local/Temp/claude/**)",
+      "Bash(QT_QPA_PLATFORM=offscreen python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\798169c1-1a91-42ad-b32a-076111b7ccd0\\\\scratchpad\\\\repro_screen_clamp.py\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/layouts/panels/mobs/panel.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(QT_QPA_PLATFORM=offscreen python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\798169c1-1a91-42ad-b32a-076111b7ccd0\\\\scratchpad\\\\repro_mobs_widths.py\")",
+      "Bash(QT_QPA_PLATFORM=offscreen python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\798169c1-1a91-42ad-b32a-076111b7ccd0\\\\scratchpad\\\\measure_summary_height.py\")",
+      "Bash(QT_QPA_PLATFORM=offscreen python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\798169c1-1a91-42ad-b32a-076111b7ccd0\\\\scratchpad\\\\repro_mobs_heights.py\")"
     ],
     "additionalDirectories": [
       "\\tmp"

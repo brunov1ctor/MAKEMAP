@@ -19,10 +19,10 @@ import json
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit, QComboBox,
     QSpinBox, QDoubleSpinBox, QPushButton, QToolButton, QTabWidget, QWidget,
-    QSizePolicy, QGridLayout, QScrollArea,
+    QSizePolicy, QGridLayout, QScrollArea, QAbstractSpinBox,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QIcon
 
 from src.styles.tokens import Colors
 from src.layouts.panel_manager import paint_glass_panel
@@ -34,7 +34,7 @@ from src.layouts.panels.mobs.categories import (
 _INPUT_STYLE = f"""
     QLineEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
         background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-        border-radius: 6px; padding: 4px 6px; color: {Colors.TEXT_PRIMARY}; font-size: 11px;
+        border-radius: 5px; padding: 1px 4px; color: {Colors.TEXT_PRIMARY}; font-size: 10px;
     }}
     QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
         border-color: {Colors.ACCENT};
@@ -43,6 +43,7 @@ _INPUT_STYLE = f"""
         background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
         selection-background-color: {Colors.ACCENT_DIM}; border: 1px solid {Colors.BORDER};
     }}
+    QComboBox::drop-down {{ width: 12px; border: none; }}
     QLabel {{ color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none; }}
 """
 
@@ -59,6 +60,11 @@ def _spin(minimum=0, maximum=999999, value=0) -> QSpinBox:
     s = QSpinBox()
     s.setRange(minimum, maximum)
     s.setValue(value)
+    # Up/down buttons dropped entirely (not just hidden via QSS — a
+    # stylesheet width:0 on the button still leaves the arrow glyph
+    # painted, overlapping the value text) so the full number is legible
+    # in the narrow columns this panel now uses.
+    s.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
     return s
 
 
@@ -66,6 +72,7 @@ def _dspin(minimum=0.0, maximum=100.0, value=0.0, suffix="") -> QDoubleSpinBox:
     s = QDoubleSpinBox()
     s.setRange(minimum, maximum)
     s.setValue(value)
+    s.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
     if suffix:
         s.setSuffix(suffix)
     return s
@@ -88,7 +95,7 @@ class MobEditPanel(QFrame):
     """Detail / edit form for the selected (or newly created) mob."""
 
     PANEL_WIDTH = 380
-    _TABS_HEIGHT = 260
+    _TABS_HEIGHT = 314
 
     save_requested = Signal(dict)
     cancel_requested = Signal()
@@ -108,9 +115,24 @@ class MobEditPanel(QFrame):
         self._loading = True
 
         self.setStyleSheet("background: transparent; border: none;" + _INPUT_STYLE)
+
+        # A single plain QVBoxLayout for the whole panel (no outer
+        # QScrollArea): every field is sized to fit the panel's natural
+        # height (see _TABS_HEIGHT and the compact thumb/description
+        # sizing below) so nothing needs to scroll. An outer QScrollArea
+        # was tried here as a safety net, but QScrollArea's viewport
+        # geometry can get stuck at a stale (near-zero) size when the
+        # window reaches its final size via showMaximized() rather than
+        # a direct resize — it never re-settles, so the tabs silently
+        # disappear on real launch even though everything renders fine
+        # in an offscreen/synchronous resize test. Each individual tab's
+        # own QScrollArea (see _add_tab) doesn't hit this, since those
+        # scroll areas are created and sized only once their fixed-height
+        # parent (_tabs) is already at its final size.
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(12, 10, 12, 12)
-        self._layout.setSpacing(6)
+        self._layout.setContentsMargins(8, 5, 8, 5)
+        self._layout.setSpacing(1)
+        self._footer_layout = self._layout
 
         self._build_ui()
         self._wire_dirty_tracking()
@@ -120,12 +142,20 @@ class MobEditPanel(QFrame):
     # ─── UI construction ───
 
     def _build_ui(self):
-        # Header row 1 — icon + name, favorite star + rarity badge, then
-        # duplicate/delete icons.
+        # Header row 1 — small clickable avatar (doubles as the image
+        # picker, replacing what used to be a separate full-width image
+        # row — a whole row's height saved) + name, favorite star + rarity
+        # badge, then duplicate/delete icons.
         header = QHBoxLayout()
-        icon = QLabel("🐾")
-        icon.setStyleSheet("font-size: 18px; background: transparent; border: none;")
-        header.addWidget(icon)
+        self._thumb = QToolButton()
+        self._thumb.setFixedSize(28, 28)
+        self._thumb.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._thumb.setToolTip("Alterar imagem")
+        self._thumb.setIconSize(self._thumb.size())
+        self._thumb_pixmap = None
+        self._image_path = ""
+        self._thumb.clicked.connect(self._on_pick_image)
+        header.addWidget(self._thumb)
         title = QLabel("Mob Selecionado")
         title.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 13px; font-weight: bold; background: transparent; border: none;")
         self._title_label = title
@@ -149,7 +179,10 @@ class MobEditPanel(QFrame):
         header.addWidget(self._icon_button("🗑", "Excluir mob", lambda: self.delete_requested.emit(self._mob_id)))
         self._layout.addLayout(header)
 
-        # Header row 2 — ID, then a "Salvo"/"Não salvo" indicator
+        # Header row 2 — ID, then a "Salvo"/"Não salvo" indicator — folded
+        # into a single slim row (rather than its own section) to save a
+        # full row's worth of height in a panel that's already tight on
+        # vertical space.
         id_row = QHBoxLayout()
         self._id_label = QLabel("")
         self._id_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
@@ -159,30 +192,12 @@ class MobEditPanel(QFrame):
         self._save_status_label.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: 9px; font-weight: bold; background: transparent; border: none;")
         id_row.addWidget(self._save_status_label)
         self._layout.addLayout(id_row)
-
-        # ─── Image — full width, on its own row ───
-        self._thumb = QLabel()
-        self._thumb.setFixedHeight(110)
-        self._thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._thumb.setScaledContents(True)
-        self._thumb_pixmap = None
-        self._image_path = ""
-        self._layout.addWidget(self._thumb)
-
-        self._cam_btn = QToolButton(self._thumb)
-        self._cam_btn.setText("📷")
-        self._cam_btn.setFixedSize(24, 24)
-        self._cam_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._cam_btn.setStyleSheet("""
-            QToolButton { background: rgba(0,0,0,0.55); border: none; border-radius: 12px; font-size: 12px; }
-            QToolButton:hover { background: rgba(0,0,0,0.75); }
-        """)
-        self._cam_btn.clicked.connect(self._on_pick_image)
         self._refresh_thumb()
 
-        # ─── Nome ───
-        self._layout.addWidget(QLabel("Nome"))
+        # ─── Nome — placeholder text stands in for a separate "Nome"
+        # label, saving a whole row's height. ───
         self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("Nome do mob")
         self._layout.addWidget(self._name_edit)
 
         # ─── Categoria | Subcategoria — plain QHBoxLayout, same pattern as
@@ -202,39 +217,29 @@ class MobEditPanel(QFrame):
         cat_row.addWidget(self._subcategory_edit, 1)
         self._layout.addLayout(cat_row)
 
-        # ─── Tier | Nível ───
-        tier_row = QHBoxLayout()
+        # ─── Tier | Nível | Status | Raridade — one dense row instead of
+        # two, since none of these labels or values need much width. ───
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(4)
         self._tier_spin = _spin(1, 10, 1)
         self._level_spin = _spin(1, 999, 1)
-        tier_row.addWidget(QLabel("Tier"))
-        tier_row.addWidget(self._tier_spin)
-        tier_row.addWidget(QLabel("Nível"))
-        tier_row.addWidget(self._level_spin)
-        self._layout.addLayout(tier_row)
-
-        # ─── Status | Raridade ───
-        status_row = QHBoxLayout()
         self._status_combo = _combo(STATUS_OPTIONS)
         self._rarity_combo = _combo([label for _k, _c, label in RARITY_DEFS])
         self._rarity_combo.currentIndexChanged.connect(self._refresh_rarity_badge)
-        status_row.addWidget(QLabel("Status"))
-        status_row.addWidget(self._status_combo)
-        status_row.addWidget(QLabel("Raridade"))
-        status_row.addWidget(self._rarity_combo)
-        self._layout.addLayout(status_row)
+        for w in (self._tier_spin, self._level_spin):
+            w.setMaximumWidth(44)
+        for label, widget in (("Tier", self._tier_spin), ("Nível", self._level_spin),
+                               ("Status", self._status_combo), ("Raridade", self._rarity_combo)):
+            stats_row.addWidget(QLabel(label))
+            stats_row.addWidget(widget)
+        self._layout.addLayout(stats_row)
         self._refresh_rarity_badge()
 
-        # ─── Descrição ───
-        desc_header = QHBoxLayout()
-        desc_header.addWidget(QLabel("Descrição"))
-        desc_header.addStretch()
-        edit_hint = QLabel("✎")
-        edit_hint.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px; background: transparent; border: none;")
-        desc_header.addWidget(edit_hint)
-        self._layout.addLayout(desc_header)
+        # ─── Descrição — placeholder text stands in for a separate label
+        # here too, same reasoning as Nome above. ───
         self._desc_edit = QTextEdit()
         self._desc_edit.setPlaceholderText("Descrição...")
-        self._desc_edit.setFixedHeight(50)
+        self._desc_edit.setFixedHeight(20)
         self._layout.addWidget(self._desc_edit)
 
         # ─── Tabs — each page rides in its own QScrollArea and the
@@ -295,7 +300,10 @@ class MobEditPanel(QFrame):
         save_btn.clicked.connect(lambda: self.save_requested.emit(self.collect_values()))
         btn_row.addWidget(cancel_btn)
         btn_row.addWidget(save_btn)
-        self._layout.addLayout(btn_row)
+        footer_sep = _hr()
+        self._footer_layout.addWidget(footer_sep)
+        self._footer_layout.addSpacing(3)
+        self._footer_layout.addLayout(btn_row)
 
     def _add_tab(self, widget: QWidget, label: str):
         scroll = QScrollArea()
@@ -346,20 +354,18 @@ class MobEditPanel(QFrame):
 
     def _refresh_thumb(self):
         if self._thumb_pixmap is not None:
-            self._thumb.setPixmap(self._thumb_pixmap)
-            self._thumb.setStyleSheet("border-radius: 10px; border: 1px solid rgba(255,255,255,0.15);")
+            self._thumb.setIcon(QIcon(self._thumb_pixmap))
+            self._thumb.setText("")
+            self._thumb.setStyleSheet("""
+                QToolButton { border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); }
+            """)
         else:
-            self._thumb.setPixmap(QPixmap())
+            self._thumb.setIcon(QIcon())
             self._thumb.setText("👹")
             self._thumb.setStyleSheet(f"""
-                border-radius: 10px; border: 1px solid rgba(255,255,255,0.15);
-                background: rgba(255,255,255,0.05); font-size: 40px; color: {Colors.TEXT_MUTED};
+                QToolButton {{ border-radius: 6px; border: 1px solid rgba(255,255,255,0.15);
+                background: rgba(255,255,255,0.05); font-size: 13px; color: {Colors.TEXT_MUTED}; }}
             """)
-        self._cam_btn.move(self._thumb.width() - self._cam_btn.width() - 8, self._thumb.height() - self._cam_btn.height() - 8)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._cam_btn.move(self._thumb.width() - self._cam_btn.width() - 8, self._thumb.height() - self._cam_btn.height() - 8)
 
     def _on_pick_image(self):
         from PySide6.QtWidgets import QFileDialog
@@ -410,13 +416,14 @@ class MobEditPanel(QFrame):
     def _build_atributos_tab(self) -> QWidget:
         w = QWidget()
         outer = QVBoxLayout(w)
-        outer.setSpacing(6)
+        outer.setSpacing(2)
 
         outer.addWidget(_section_label("ATRIBUTOS GERAIS"))
         outer.addWidget(_hr())
 
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(2)
+        grid.setVerticalSpacing(2)
         self._hp_spin = _spin(1, 9_999_999, 100)
         self._mana_spin = _spin(0, 999999, 50)
         self._damage_spin = _spin(0, 999999, 10)
@@ -426,14 +433,6 @@ class MobEditPanel(QFrame):
         self._dodge_spin = _dspin(0, 100, 5, " %")
         self._resist_fisica_spin = _dspin(-100, 100, 0, " %")
         self._resist_magica_spin = _dspin(-100, 100, 0, " %")
-        left_fields = [
-            ("HP Máximo", self._hp_spin), ("Mana Máxima", self._mana_spin),
-            ("Ataque", self._damage_spin), ("Defesa", self._defense_spin),
-            ("Velocidade", self._speed_spin), ("Precisão", self._precision_spin),
-            ("Esquiva", self._dodge_spin), ("Resist. Física", self._resist_fisica_spin),
-            ("Resist. Mágica", self._resist_magica_spin),
-        ]
-
         self._element_combo = _combo(ELEMENT_OPTIONS)
         self._weight_spin = _dspin(0, 99999, 0, " kg")
         self._xp_spin = _spin(0, 9_999_999, 0)
@@ -442,47 +441,57 @@ class MobEditPanel(QFrame):
         self._ai_combo = _combo(AI_TYPE_OPTIONS)
         self._behavior_combo = _combo(BEHAVIOR_OPTIONS)
         self._alignment_combo = _combo(ALIGNMENT_OPTIONS)
-        right_fields = [
-            ("Elemento", self._element_combo), ("Peso", self._weight_spin),
-            ("XP", self._xp_spin), ("Ouro", self._gold_spin),
-            ("Tamanho", self._size_combo), ("Tipo de IA", self._ai_combo),
-            ("Comportamento", self._behavior_combo), ("Alinhamento", self._alignment_combo),
+
+        # All 17 general fields packed 3 label+field pairs per row (6
+        # grid columns) instead of 2 — the panel is only 380px wide, so
+        # fitting everything without a scrollbar means trading row count
+        # for column count wherever the labels are short enough to allow it.
+        all_fields = [
+            ("HP Máx.", self._hp_spin), ("Mana Máx.", self._mana_spin),
+            ("Ataque", self._damage_spin), ("Defesa", self._defense_spin),
+            ("Velocidade", self._speed_spin), ("Precisão", self._precision_spin),
+            ("Esquiva", self._dodge_spin), ("R. Física", self._resist_fisica_spin),
+            ("R. Mágica", self._resist_magica_spin), ("Elemento", self._element_combo),
+            ("Peso", self._weight_spin), ("XP", self._xp_spin),
+            ("Ouro", self._gold_spin), ("Tamanho", self._size_combo),
+            ("Tipo IA", self._ai_combo), ("Comport.", self._behavior_combo),
+            ("Alinhamento", self._alignment_combo),
         ]
+        for _label, widget in all_fields:
+            widget.setMaximumWidth(48 if isinstance(widget, (QSpinBox, QDoubleSpinBox)) else 66)
+            if isinstance(widget, QDoubleSpinBox):
+                widget.setDecimals(1)
 
-        # Capped so two label+field columns actually fit the panel's width
-        # instead of each spin/combo claiming its full natural min-width
-        # and forcing the tab (and the whole fixed-width panel) to overflow.
-        for _label, widget in left_fields + right_fields:
-            widget.setMaximumWidth(72 if isinstance(widget, (QSpinBox, QDoubleSpinBox)) else 100)
-
-        for i, (label, widget) in enumerate(left_fields):
-            grid.addWidget(QLabel(label), i, 0)
-            grid.addWidget(widget, i, 1)
-        for i, (label, widget) in enumerate(right_fields):
-            grid.addWidget(QLabel(label), i, 2)
-            grid.addWidget(widget, i, 3)
-        grid.setColumnStretch(1, 0)
-        grid.setColumnStretch(3, 0)
+        for i, (label, widget) in enumerate(all_fields):
+            row, col = i // 3, (i % 3) * 2
+            lbl = QLabel(label)
+            lbl.setToolTip(label)
+            grid.addWidget(lbl, row, col)
+            grid.addWidget(widget, row, col + 1)
+        for col in (1, 3, 5):
+            grid.setColumnStretch(col, 0)
         outer.addLayout(grid)
 
         outer.addWidget(_section_label("RESISTÊNCIAS"))
         outer.addWidget(_hr())
         res_grid = QGridLayout()
-        res_grid.setSpacing(4)
+        res_grid.setHorizontalSpacing(2)
+        res_grid.setVerticalSpacing(2)
         self._resistance_spins: dict[str, QDoubleSpinBox] = {}
         for i, (key, label) in enumerate(RESISTANCE_KEYS):
             spin = _dspin(-100, 100, 0, " %")
-            spin.setMaximumWidth(72)
+            spin.setDecimals(0)
+            spin.setMaximumWidth(44)
             self._resistance_spins[key] = spin
-            res_grid.addWidget(QLabel(label), i // 2, (i % 2) * 2)
-            res_grid.addWidget(spin, i // 2, (i % 2) * 2 + 1)
+            res_grid.addWidget(QLabel(label), i // 4, (i % 4) * 2)
+            res_grid.addWidget(spin, i // 4, (i % 4) * 2 + 1)
         outer.addLayout(res_grid)
 
         outer.addWidget(_section_label("DROPS PRINCIPAIS"))
         outer.addWidget(_hr())
         self._drops_edit = QTextEdit()
         self._drops_edit.setPlaceholderText("Um item por linha: Nome do item, taxa %, qtd")
-        self._drops_edit.setFixedHeight(60)
+        self._drops_edit.setFixedHeight(26)
         outer.addWidget(self._drops_edit)
         outer.addStretch()
         return w

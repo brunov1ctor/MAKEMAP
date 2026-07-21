@@ -25,7 +25,7 @@ from src.layouts.panels.inspector import InspectorPanel, QuestPanel, LayersPanel
 from src.layouts.panels.progression import ProgressionBar
 from src.layouts.panels.status_bar import StatusBar
 from src.layouts.panels.logs_panel import QtLogHandler, open_logs_dialog
-from src.canvas.overlays import Compass, MiniMap
+from src.canvas.overlays import Compass, CompassHUD, MiniMap
 from src.canvas.map_boundary import MapBoundary
 from src.engines.integrator import EngineIntegrator
 from src.layouts.mediators import BrushMediator, TerrainMediator, GridMediator, ToolbarMediator, RegionMediator
@@ -269,6 +269,8 @@ class MainLayout(QWidget):
 
         # Overlays
         self.compass = Compass(self)
+        self.compass.attach_viewport(self.canvas.engine.viewport)
+        self.compass_hud = CompassHUD(self)
         self.minimap = MiniMap(self)
         self.minimap.set_viewport(self.canvas.engine.viewport)
         self.canvas.engine._brush_tool.set_minimap(self.minimap)
@@ -281,7 +283,8 @@ class MainLayout(QWidget):
         self.floating = FloatingCoordinator(self)
         self.floating.register("toolbar", self.canvas_toolbar, movable=True)
         self.floating.register("minimap", self.minimap, movable=True)
-        self.floating.register("compass", self.compass)
+        self.floating.register("compass", self.compass, movable=True)
+        self.floating.register("compass_hud", self.compass_hud, movable=False)
         self.floating.register("top_bar", self.top_bar)
         self.floating.register("explorer", self._left_container)
         self.floating.register("inspector", self._right_scroll)
@@ -295,6 +298,7 @@ class MainLayout(QWidget):
         self.floating.register("select_panel", self.select_panel)
         self.floating.register("text_panel", self.text_panel)
         self.minimap.moved.connect(lambda: self.floating.push_clear("minimap"))
+        self.compass.moved.connect(lambda: self.floating.push_clear("compass"))
 
         # ═══ Conexões ═══
         self.canvas.engine.cursor_moved.connect(
@@ -313,6 +317,12 @@ class MainLayout(QWidget):
         self.minimap.zoom_changed.connect(self._on_zoom_slider)
         self.canvas.engine.grid_toggled.connect(self._on_grid_toggled)
         self.compass.expanded_changed.connect(self._on_compass_toggle)
+        self.canvas.engine.viewport.view_changed.connect(self._refresh_compass_hud)
+        self.terrain_panel.terrain_selected.connect(lambda _id: self._refresh_compass_hud())
+        self.terrain_panel.terrain_renamed.connect(lambda _id, _name: self._refresh_compass_hud())
+        from src.engines.map.navigation import get_navigation_library
+        get_navigation_library().changed.connect(self._refresh_compass_hud)
+        self._refresh_compass_hud()  # reflect the active preset's "Info" checkbox right away, not just after a later toggle
         self.top_bar.logs_clicked.connect(self._open_logs)
         self.top_bar.menu_clicked.connect(self._on_menu_view)
 
@@ -430,7 +440,19 @@ class MainLayout(QWidget):
         ov_top = body_top + toolbar_h
         ov_h = max(0, body_h - toolbar_h - prog_h)
 
-        self.compass.move(center_x + center_w - self.compass.width() - 16, ov_top + 8)
+        if self.compass.has_custom_position():
+            # User dragged it via its own grip — keep their spot, just
+            # clamp to stay reachable on resize (same pattern as minimap).
+            cx = min(max(self.compass.x(), center_x), max(center_x, center_x + center_w - self.compass.width()))
+            cy = min(max(self.compass.y(), ov_top), max(ov_top, ov_top + ov_h - self.compass.height()))
+            self.compass.move(cx, cy)
+        else:
+            self.compass.move(center_x + center_w - self.compass.width() - 16, ov_top + 8)
+        self.compass_hud.move(
+            self.compass.x() + self.compass.width() - self.compass_hud.width(),
+            self.compass.y() + self.compass.height() + 6,
+        )
+        self.compass_hud.raise_()
         if self.minimap.has_custom_position():
             # User dragged it — keep their spot, just clamp to stay reachable on resize.
             mx = min(max(self.minimap.x(), center_x), max(center_x, center_x + center_w - self.minimap.width()))
@@ -842,6 +864,37 @@ class MainLayout(QWidget):
             self.minimap.hide()
         else:
             self.minimap.show()
+        # The HUD's own visibility no longer depends on expanded/collapsed
+        # (see _refresh_compass_hud) — this call just repositions it under
+        # the compass's new size/geometry.
+        self._refresh_compass_hud()
+        self._reposition()
+
+    def _hud_allowed(self) -> bool:
+        """Whether the active navigation preset (if any) wants its HUD chip
+        shown — the "ℹ Info" checkbox next to "+ Camada" in Config →
+        Navegação. No active preset (fallback painted compass) always
+        allows it, same as before that checkbox existed."""
+        from src.engines.map.navigation import get_navigation_library
+        preset = get_navigation_library().get_active_preset()
+        return preset.show_info if preset else True
+
+    def _refresh_compass_hud(self):
+        # Shown purely by the "Info" checkbox, independent of whether the
+        # compass face itself is expanded/collapsed — tying it to expanded
+        # meant checking the box silently did nothing unless the compass
+        # had *also* been separately double-clicked open first.
+        allowed = self._hud_allowed()
+        self.compass_hud.setVisible(allowed)
+        if not allowed:
+            return
+        viewport = self.canvas.engine.viewport
+        center = viewport.mapToScene(viewport.viewport().rect().center())
+        self.compass_hud.update_info(
+            self.terrain_panel.selected_terrain_name,
+            float(self.terrain_panel.map_width), float(self.terrain_panel.map_height),
+            center.x(), center.y(),
+        )
 
     # ─── Logs ───
 
@@ -855,7 +908,8 @@ class MainLayout(QWidget):
             self.canvas_toolbar, self.brush_panel, self.asset_browser_panel,
             self.grid_panel, self.terrain_panel, self.region_panel, self.select_panel,
             self.text_panel,
-            self._left_container, self._right_scroll, self.progression, self.compass, self.minimap,
+            self._left_container, self._right_scroll, self.progression, self.compass,
+            self.compass_hud, self.minimap,
         ]
 
     def _on_menu_view(self, menu_name: str):
@@ -903,7 +957,7 @@ class MainLayout(QWidget):
             panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             panel.closed.connect(self._hide_menu_view)
             panel.project_opened.connect(self._on_menu_project_opened)
-            panel.new_requested.connect(self._on_menu_new_project)
+            panel.project_created.connect(self._on_menu_project_created)
             panel.delete_requested.connect(self._on_menu_delete_project)
             layout.addWidget(panel)
         elif menu_name == "Mobs":
@@ -946,9 +1000,13 @@ class MainLayout(QWidget):
 
         for w in self._canvas_widgets():
             if w in (self.brush_panel, self.asset_browser_panel, self.grid_panel,
-                     self.terrain_panel, self.region_panel, self.select_panel, self.text_panel):
+                     self.terrain_panel, self.region_panel, self.select_panel, self.text_panel,
+                     self.compass_hud):
                 continue
             w.show()
+        # Not part of the blanket show() above — its visibility rule is
+        # "Info" checkbox state, not plain show/hide (see _refresh_compass_hud).
+        self._refresh_compass_hud()
         self._reposition()
 
     def _on_menu_project_opened(self, proj):
@@ -957,11 +1015,12 @@ class MainLayout(QWidget):
             window._on_panel_project_opened(proj)
         self._hide_menu_view()
 
-    def _on_menu_new_project(self):
+    def _on_menu_project_created(self, proj):
+        # Unlike opening an existing project, keep the Projetos view open —
+        # the new card is shown in edit mode so the user can type its name.
         window = self.window()
-        if window and hasattr(window, 'new_project'):
-            window.new_project()
-        self._hide_menu_view()
+        if window and hasattr(window, '_load_project'):
+            window._load_project(proj)
 
     def _on_menu_delete_project(self, path: str):
         from pathlib import Path as P

@@ -68,7 +68,7 @@ class Project:
     @classmethod
     def create(cls, directory: Path, name: str) -> Project:
         """Create a new project folder with all subdirectories."""
-        project_dir = directory / f"{name}{cls.EXTENSION}"
+        project_dir = cls._unique_dir(directory, name)
         project_dir.mkdir(parents=True, exist_ok=True)
 
         for d in cls.DIRS:
@@ -78,6 +78,22 @@ class Project:
         project = cls(project_dir, meta)
         project._write_meta()
         return project
+
+    @classmethod
+    def _unique_dir(cls, directory: Path, name: str) -> Path:
+        """Pick a folder for `name` that doesn't collide with an existing project.
+
+        Project folders are named after the project, so two creations with the
+        same name (e.g. the auto-generated "Projeto_<timestamp>" when the new-project
+        button is clicked twice within the same second) would otherwise both resolve
+        to the same directory and silently merge into one project.
+        """
+        candidate = directory / f"{name}{cls.EXTENSION}"
+        n = 2
+        while candidate.exists():
+            candidate = directory / f"{name} ({n}){cls.EXTENSION}"
+            n += 1
+        return candidate
 
     @classmethod
     def open(cls, project_dir: Path) -> Project:

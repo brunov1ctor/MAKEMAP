@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import TYPE_CHECKING
 
@@ -150,11 +151,24 @@ class TerrainMediator:
         rect = boundary._item.mapToScene(boundary._item.boundingRect()).boundingRect()
         padding = 80
         rect.adjust(-padding, -padding, padding, padding)
-        self._l.canvas.engine.viewport.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
-        new_zoom = self._l.canvas.engine.viewport.transform().m11()
-        self._l.canvas.engine.viewport._zoom = new_zoom
-        self._l.canvas.engine.viewport.zoom_changed.emit(new_zoom)
-        self._l.canvas.engine.viewport.view_changed.emit()
+        viewport = self._l.canvas.engine.viewport
+        viewport.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        # m11() alone is only pure scale when there's no rotation — once the
+        # view can be rotated (the compass ring), it also picks up part of
+        # the rotation component and reads wrong. hypot(m11, m12) is the
+        # length of the transformed unit X vector, i.e. the real scale
+        # factor regardless of rotation.
+        t = viewport.transform()
+        new_zoom = math.hypot(t.m11(), t.m12())
+        viewport._zoom = new_zoom
+        # fitInView also builds a fresh axis-aligned transform, discarding
+        # any rotation — resync the viewport's tracked rotation state to
+        # match (same reasoning as Viewport.fit_to_content).
+        if viewport._rotation_deg != 0.0:
+            viewport._rotation_deg = 0.0
+            viewport.rotation_changed.emit(0.0)
+        viewport.zoom_changed.emit(new_zoom)
+        viewport.view_changed.emit()
 
     def on_selected(self, terrain_id: str):
         boundary = self._boundaries.get(terrain_id)
