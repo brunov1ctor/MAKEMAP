@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QCheckBox, QSizePolicy,
+    QScrollArea, QWidget,
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -36,11 +37,34 @@ class SelectToolPanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedWidth(self.PANEL_WIDTH)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Maximum)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
 
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Same scroll-wrapped-container pattern as every other toolbar
+        # panel (Brush/Terrain/Text/Grid): grows with its content and only
+        # shows a scrollbar when the window is too short to fit it.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{ width: 4px; background: transparent; }}
+            QScrollBar::handle:vertical {{ background: {Colors.TEXT_MUTED}; border-radius: 2px; min-height: 20px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+        """)
+        outer.addWidget(scroll)
+
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(10, 6, 10, 8)
         layout.setSpacing(6)
 
@@ -99,6 +123,8 @@ class SelectToolPanel(QFrame):
             cb.toggled.connect(self._on_toggle)
             layout.addWidget(cb)
             self._checks[key] = cb
+
+        scroll.setWidget(container)
 
     def _on_toggle(self, _checked: bool):
         allowed = {key for key, cb in self._checks.items() if cb.isChecked()}

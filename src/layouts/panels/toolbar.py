@@ -240,6 +240,18 @@ class CanvasToolbar(QFrame):
                 btn.setChecked(n == name and btn.isChecked())
         self.action_triggered.emit(name)
 
+    def sync_active(self, name: str):
+        """Reflect a tool activated programmatically (not via a button
+        click) in the button states, without re-emitting tool_selected —
+        e.g. TextTool switching back to Pan once a placed label's first
+        edit commits."""
+        for n, btn, is_tool, is_toggle in self._tool_buttons:
+            if is_tool:
+                members = getattr(btn, "_member_names", None) or {n}
+                btn.blockSignals(True)
+                btn.setChecked(name in members)
+                btn.blockSignals(False)
+
     def uncheck_action(self, name: str):
         """Programmatically uncheck a toggle action button."""
         for n, btn, is_tool, is_toggle in self._tool_buttons:

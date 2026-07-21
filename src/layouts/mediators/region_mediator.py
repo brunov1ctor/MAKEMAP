@@ -192,6 +192,15 @@ class RegionMediator:
         self._is_creating = False
         self._open_edit(zone)
 
+    def zones_list(self) -> list[tuple[str, str]]:
+        """(zone_id, name) for every painted região — feeds the "Região"
+        dropdown in other modules (e.g. Mobs) that tag entities by zone."""
+        return [(z.id, z.name) for z in self._zones.values()]
+
+    def zone_name(self, zone_id: str) -> str:
+        zone = self._zones.get(zone_id)
+        return zone.name if zone else ""
+
     def _terrain_options(self) -> list[tuple[str, str]]:
         """(terrain_id, name) for every terrain that currently exists —
         feeds the "Pintando em" dropdown."""

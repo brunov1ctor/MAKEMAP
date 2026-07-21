@@ -13,6 +13,7 @@ from src.canvas.pan_controller import KeyboardPanController, PAN_KEYS
 from src.canvas.tools.base import ToolManager
 from src.canvas.tools.defaults import SelectTool, PanTool
 from src.canvas.tools.brush_tool import BrushTool, RegionTool, RoadTool, RiverTool, RegionBrushTool
+from src.canvas.tools.text_tool import TextTool
 from src.engines.map.region_layer import RegionLayer
 from src.canvas.map_boundary import MovableBoundaryItem
 from src.engines.map.brush import BrushEngine
@@ -24,7 +25,9 @@ from src.engines.core.clipboard import ClipboardEngine
 from src.engines.core.history import HistoryEngine
 from src.engines.procedural import ProceduralEngine, GeneratorParams, GeneratorType
 from src.engines.audio import SoundEngine
-from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsPathItem, QGraphicsSimpleTextItem
+from PySide6.QtWidgets import (
+    QGraphicsPixmapItem, QGraphicsPathItem, QGraphicsSimpleTextItem, QGraphicsTextItem,
+)
 from PySide6.QtGui import QPainterPath, QBrush, QPen, QColor, QPolygonF
 from src.canvas.item_utils import suppress_selection_decoration
 
@@ -35,6 +38,7 @@ class CanvasEngine(QWidget):
     zoom_changed = Signal(int)  # percent
     cursor_moved = Signal(float, float)
     tool_changed = Signal(str)
+    text_committed = Signal()  # a just-placed text object finished its first edit
     selection_changed = Signal(list)  # list of selected IDs
     grid_toggled = Signal(bool)  # grid visible state
     zone_region_finalized = Signal(QPolygonF, str)  # (polygon, category_key) — RegionMediator owns id/card creation
@@ -135,8 +139,14 @@ class CanvasEngine(QWidget):
         self._map_bounds: dict | None = None  # {width, height, shape}
 
     def _register_default_tools(self):
-        self.tool_manager.register(SelectTool(self.viewport, self.selection))
+        self.tool_manager.register(
+            SelectTool(self.viewport, self.selection, self.transform, self.history)
+        )
         self.tool_manager.register(PanTool(self.viewport))
+        self.tool_manager.register(TextTool(
+            self.viewport, self.tool_manager, self.history, self.selection, self.transform,
+            on_committed=self.text_committed.emit,
+        ))
 
         # Brush (asset painting)
         self.brush_engine = BrushEngine(self)
@@ -377,6 +387,20 @@ class CanvasEngine(QWidget):
         scene_pos = self.viewport.mapToScene(int(event.position().x()), int(event.position().y()))
         self.viewport.cursor_moved.emit(scene_pos.x(), scene_pos.y())
 
+        # Mouse events are monkey-patched to route through tools instead of
+        # QGraphicsView's own dispatch (see _on_mouse_press) — which also
+        # silently disabled Qt's hover machinery (hoverEnterEvent/
+        # hoverLeaveEvent, and QGraphicsItem.cursor() applying automatically
+        # on hover) scene-wide, since that's normally driven by
+        # QGraphicsView.mouseMoveEvent. Replaying it here — only when no
+        # button is held, so it never fights an active drag/pan/paint — is
+        # side-effect-free (no button down means Qt's default handler does
+        # nothing but hover-testing) and restores hover highlights/cursors
+        # for every item, not just text.
+        if event.buttons() == Qt.MouseButton.NoButton:
+            from PySide6.QtWidgets import QGraphicsView
+            QGraphicsView.mouseMoveEvent(self.viewport, event)
+
         if self.viewport._panning:
             delta = event.position() - self.viewport._pan_start
             self.viewport._pan_start = event.position()
@@ -430,6 +454,18 @@ class CanvasEngine(QWidget):
         self.tool_manager.mouse_release(event, scene_pos)
 
     def _on_key_press(self, event: QKeyEvent):
+        # An in-place text editor (e.g. TextItem's inline QGraphicsTextItem)
+        # is currently focused — every key must reach it as actual typed
+        # text, not get intercepted by WASD pan / global shortcuts below.
+        # Both mouse AND key events on the viewport are monkey-patched to
+        # route through tools instead of QGraphicsView's own dispatch, so
+        # without this the scene's focused item never sees keystrokes at
+        # all (not just WASD — typing wouldn't work for any key).
+        if isinstance(self.viewport.scene().focusItem(), QGraphicsTextItem):
+            from PySide6.QtWidgets import QGraphicsView
+            QGraphicsView.keyPressEvent(self.viewport, event)
+            return
+
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self.viewport._space_held = True
             self.viewport.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -471,6 +507,11 @@ class CanvasEngine(QWidget):
         self.input_manager.handle_key_press(event)
 
     def _on_key_release(self, event: QKeyEvent):
+        if isinstance(self.viewport.scene().focusItem(), QGraphicsTextItem):
+            from PySide6.QtWidgets import QGraphicsView
+            QGraphicsView.keyReleaseEvent(self.viewport, event)
+            return
+
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self.viewport._space_held = False
             if not self.viewport._panning:

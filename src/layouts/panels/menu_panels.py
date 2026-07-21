@@ -150,12 +150,6 @@ class NPCsPanel(MenuPanel):
         self.add_empty_state("Gerencie personagens não-jogáveis do seu mundo.")
 
 
-class MobsPanel(MenuPanel):
-    def __init__(self, parent=None):
-        super().__init__("Mobs", "👹", parent)
-        self.add_empty_state("Defina criaturas e inimigos para encontros.")
-
-
 class ItensPanel(MenuPanel):
     def __init__(self, parent=None):
         super().__init__("Itens", "⚔", parent)
@@ -194,7 +188,6 @@ class ConfigPanel(MenuPanel):
 MENU_PANELS = {
     "Quests": QuestsPanel,
     "NPCs": NPCsPanel,
-    "Mobs": MobsPanel,
     "Itens": ItensPanel,
     "Dungeons": DungeonsPanel,
     "Eventos": EventosPanel,

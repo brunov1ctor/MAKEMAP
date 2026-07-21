@@ -8,7 +8,7 @@ on every expand/collapse so the owning panel can re-measure and resize
 from __future__ import annotations
 
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 
 from src.styles.tokens import Colors
 
@@ -64,7 +64,16 @@ class CollapsibleSection(QFrame):
         self._expanded = not self._expanded
         self._content.setVisible(self._expanded)
         self._arrow.setText("▼" if self._expanded else "▶")
-        self.content_changed.emit()
+        # setVisible() invalidates ancestor layouts by POSTING a deferred
+        # LayoutRequest event rather than recomputing synchronously — an
+        # owning panel that re-measures/resizes immediately (same call
+        # stack) reads a stale sizeHint() from before this toggle, one
+        # step behind. Deferring the emit to the next event-loop turn lets
+        # that pending layout pass land first, so the resize sees the
+        # correct post-toggle size (most visible after several toggles:
+        # collapsing the last still-expanded section stops shrinking the
+        # panel back down).
+        QTimer.singleShot(0, self.content_changed.emit)
 
     def set_expanded(self, expanded: bool):
         if expanded == self._expanded:

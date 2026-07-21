@@ -25,13 +25,31 @@ class GridSettingsPanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedWidth(self.PANEL_WIDTH)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Maximum)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+
+        # Same scroll-wrapped-container pattern as every other toolbar
+        # panel (Brush/Terrain/Text): grows with its content and only
+        # shows a scrollbar when the window is too short to fit it, instead
+        # of silently clipping.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{ width: 4px; background: transparent; }}
+            QScrollBar::handle:vertical {{ background: {Colors.TEXT_MUTED}; border-radius: 2px; min-height: 20px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+        """)
+        outer.addWidget(scroll)
 
         container = QWidget()
         container.setStyleSheet("background: transparent;")
@@ -145,7 +163,7 @@ class GridSettingsPanel(QFrame):
         layout.addWidget(self.subdivisions_slider)
         layout.addWidget(self.opacity_slider)
 
-        outer.addWidget(container)
+        scroll.setWidget(container)
 
     def _sync_snap_visibility(self, shape_name: str):
         self.snap_check.setVisible(shape_name != "Nenhum")

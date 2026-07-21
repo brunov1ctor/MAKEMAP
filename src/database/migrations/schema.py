@@ -446,6 +446,41 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         );
         CREATE INDEX IF NOT EXISTS idx_painted_zones_map ON painted_zones(map_id);
     """),
+    (3, "Mobs panel — extended creature fields", """
+        ALTER TABLE mobs ADD COLUMN category TEXT DEFAULT 'outros';
+        ALTER TABLE mobs ADD COLUMN subcategory TEXT DEFAULT '';
+        ALTER TABLE mobs ADD COLUMN tier INTEGER DEFAULT 1;
+        ALTER TABLE mobs ADD COLUMN rarity TEXT DEFAULT 'normal';
+        ALTER TABLE mobs ADD COLUMN zone_id TEXT DEFAULT '';
+        ALTER TABLE mobs ADD COLUMN mana INTEGER DEFAULT 50;
+        ALTER TABLE mobs ADD COLUMN velocidade REAL DEFAULT 100;
+        ALTER TABLE mobs ADD COLUMN critico REAL DEFAULT 5;
+        ALTER TABLE mobs ADD COLUMN esquiva REAL DEFAULT 5;
+        ALTER TABLE mobs ADD COLUMN precisao REAL DEFAULT 90;
+        ALTER TABLE mobs ADD COLUMN ai_type TEXT DEFAULT 'Agressivo';
+        ALTER TABLE mobs ADD COLUMN comportamento TEXT DEFAULT 'Territorial';
+        ALTER TABLE mobs ADD COLUMN alinhamento TEXT DEFAULT 'Neutro';
+        ALTER TABLE mobs ADD COLUMN resistances TEXT DEFAULT '{}';
+        ALTER TABLE mobs ADD COLUMN abilities_notes TEXT DEFAULT '';
+        ALTER TABLE mobs ADD COLUMN spawn_notes TEXT DEFAULT '';
+        ALTER TABLE mobs ADD COLUMN animation_notes TEXT DEFAULT '';
+        ALTER TABLE mobs ADD COLUMN effect_notes TEXT DEFAULT '';
+        ALTER TABLE mobs ADD COLUMN notes TEXT DEFAULT '';
+        ALTER TABLE mobs ADD COLUMN drops_json TEXT DEFAULT '[]';
+        ALTER TABLE mobs ADD COLUMN image_path TEXT DEFAULT '';
+        ALTER TABLE mobs ADD COLUMN favorite INTEGER DEFAULT 0;
+        CREATE INDEX IF NOT EXISTS idx_mobs_category ON mobs(category);
+        CREATE INDEX IF NOT EXISTS idx_mobs_zone ON mobs(zone_id);
+    """),
+    (4, "Mobs panel — status, economy and physical/magic resist fields", """
+        ALTER TABLE mobs ADD COLUMN status TEXT DEFAULT 'ativo';
+        ALTER TABLE mobs ADD COLUMN peso REAL DEFAULT 0;
+        ALTER TABLE mobs ADD COLUMN xp INTEGER DEFAULT 0;
+        ALTER TABLE mobs ADD COLUMN ouro INTEGER DEFAULT 0;
+        ALTER TABLE mobs ADD COLUMN tamanho TEXT DEFAULT 'Médio';
+        ALTER TABLE mobs ADD COLUMN resist_fisica REAL DEFAULT 0;
+        ALTER TABLE mobs ADD COLUMN resist_magica REAL DEFAULT 0;
+    """),
 ]
 
 

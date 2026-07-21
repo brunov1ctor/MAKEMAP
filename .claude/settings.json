@@ -10,7 +10,16 @@
       "Bash(py -3 -m py_compile src/layouts/panels/brush/panel.py src/layouts/panels/brush/asset_browser.py src/layouts/mediator.py src/layouts/main_layout.py src/layouts/panels/toolbar.py)",
       "Bash(py -3 -m py_compile src/layouts/panels/select_panel.py)",
       "Bash(py -3 -m py_compile src/canvas/viewport.py)",
-      "Bash(QT_QPA_PLATFORM=offscreen py -3 -c ' *)"
+      "Bash(QT_QPA_PLATFORM=offscreen py -3 -c ' *)",
+      "PowerShell(if \\($?\\) { \"OK\" })",
+      "PowerShell(py -3 -m py_compile src/layouts/panels/grid_panel.py src/layouts/panels/select_panel.py)",
+      "Bash(python -c ' *)",
+      "Bash(rm -f /tmp/smoke_mobs.py)",
+      "Bash(py -c ' *)",
+      "Read(//c/Users/bruno/AppData/Local/Temp/claude/**)"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
     ]
   }
 }

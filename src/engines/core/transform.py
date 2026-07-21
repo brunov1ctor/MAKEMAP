@@ -5,9 +5,26 @@ from __future__ import annotations
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Signal, QPointF, QRectF
-from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem
-from PySide6.QtGui import QPen, QColor, QTransform
+from PySide6.QtCore import Qt, QObject, Signal, QPointF, QRectF
+from PySide6.QtWidgets import (
+    QGraphicsItem, QGraphicsEllipseItem,
+    QGraphicsPathItem, QGraphicsSimpleTextItem,
+)
+from PySide6.QtGui import QPen, QColor, QTransform, QPainterPath
+
+from src.styles.tokens import Colors
+
+
+class _SelectionBorder(QGraphicsPathItem):
+    """Purely decorative selection outline. QGraphicsPathItem's default
+    shape() adds the raw (closed) path back on top of the stroke outline —
+    meant to keep a filled shape clickable across its whole interior even
+    with no brush — which made this border, sitting above everything else
+    at z=9999, swallow every click meant for the handles/object beneath it.
+    It should never be hit-tested at all."""
+
+    def shape(self) -> QPainterPath:
+        return QPainterPath()
 
 
 class HandleType(Enum):
@@ -20,6 +37,34 @@ class HandleType(Enum):
     BOTTOM_CENTER = auto()
     BOTTOM_RIGHT = auto()
     ROTATION = auto()
+    DUPLICATE_ACTION = auto()
+    DELETE_ACTION = auto()
+
+
+CORNER_HANDLES = {
+    HandleType.TOP_LEFT, HandleType.TOP_RIGHT,
+    HandleType.BOTTOM_LEFT, HandleType.BOTTOM_RIGHT,
+}
+HORIZONTAL_HANDLES = {HandleType.MIDDLE_LEFT, HandleType.MIDDLE_RIGHT}
+VERTICAL_HANDLES = {HandleType.TOP_CENTER, HandleType.BOTTOM_CENTER}
+
+# Cursor shown while hovering each handle/action button — matches how a
+# professional editor (Figma/Illustrator) hints the interaction: diagonal
+# resize on corners, axis-locked resize on edge midpoints, a pointing hand
+# for the one-click action buttons (no native Qt "rotate" cursor exists).
+_HANDLE_CURSORS = {
+    HandleType.TOP_LEFT: Qt.CursorShape.SizeFDiagCursor,
+    HandleType.BOTTOM_RIGHT: Qt.CursorShape.SizeFDiagCursor,
+    HandleType.TOP_RIGHT: Qt.CursorShape.SizeBDiagCursor,
+    HandleType.BOTTOM_LEFT: Qt.CursorShape.SizeBDiagCursor,
+    HandleType.TOP_CENTER: Qt.CursorShape.SizeVerCursor,
+    HandleType.BOTTOM_CENTER: Qt.CursorShape.SizeVerCursor,
+    HandleType.MIDDLE_LEFT: Qt.CursorShape.SizeHorCursor,
+    HandleType.MIDDLE_RIGHT: Qt.CursorShape.SizeHorCursor,
+    HandleType.ROTATION: Qt.CursorShape.PointingHandCursor,
+    HandleType.DUPLICATE_ACTION: Qt.CursorShape.PointingHandCursor,
+    HandleType.DELETE_ACTION: Qt.CursorShape.PointingHandCursor,
+}
 
 
 class AlignMode(Enum):
@@ -43,13 +88,16 @@ class TransformEngine(QObject):
     transform_finished = Signal()
     items_moved = Signal(list, float, float)  # items, dx, dy
 
-    HANDLE_SIZE = 8
+    HANDLE_SIZE = 10
+    ACTION_SIZE = 20
+    ACTION_GAP = 14  # space between the selection border and the action bar
+    ACTION_SPACING = 26
 
     def __init__(self, scene, parent=None):
         super().__init__(parent)
         self._scene = scene
-        self._handles: list[QGraphicsRectItem] = []
-        self._rotation_handle: QGraphicsEllipseItem | None = None
+        self._handles: list[QGraphicsItem] = []
+        self._border: QGraphicsPathItem | None = None
         self._active_handle: HandleType | None = None
         self._transform_origin = QPointF()
         self._initial_positions: dict[QGraphicsItem, QPointF] = {}
@@ -210,16 +258,28 @@ class TransformEngine(QObject):
     # --- Handles ---
 
     def show_handles(self, items: list[QGraphicsItem]):
-        """Show transform handles around the selection bounding rect."""
+        """Show a rounded selection border, circular resize/rotate handles,
+        and a bottom action bar (rotate / duplicate / delete) around the
+        selection bounding rect."""
         self.hide_handles()
         if not items:
             return
 
         bounds = self._get_bounds(items)
-        s = self.HANDLE_SIZE
-        pen = QPen(QColor(79, 195, 247), 1.5)
-        brush = QColor(79, 195, 247, 200)
+        accent = QColor(Colors.PURPLE)
+        pen = QPen(accent, 1.5)
+        pen.setCosmetic(True)
 
+        border_path = QPainterPath()
+        border_path.addRoundedRect(bounds, 4, 4)
+        border = _SelectionBorder(border_path)
+        border.setPen(pen)
+        border.setBrush(Qt.BrushStyle.NoBrush)
+        border.setZValue(9999)
+        self._scene.addItem(border)
+        self._border = border
+
+        s = self.HANDLE_SIZE
         positions = {
             HandleType.TOP_LEFT: bounds.topLeft(),
             HandleType.TOP_CENTER: QPointF(bounds.center().x(), bounds.top()),
@@ -230,45 +290,63 @@ class TransformEngine(QObject):
             HandleType.BOTTOM_CENTER: QPointF(bounds.center().x(), bounds.bottom()),
             HandleType.BOTTOM_RIGHT: bounds.bottomRight(),
         }
-
         for handle_type, pos in positions.items():
-            handle = QGraphicsRectItem(pos.x() - s / 2, pos.y() - s / 2, s, s)
+            handle = QGraphicsEllipseItem(pos.x() - s / 2, pos.y() - s / 2, s, s)
             handle.setPen(pen)
-            handle.setBrush(brush)
+            handle.setBrush(QColor("#FFFFFF"))
             handle.setZValue(10000)
             handle.setData(1, handle_type)
+            handle.setCursor(_HANDLE_CURSORS[handle_type])
             self._scene.addItem(handle)
             self._handles.append(handle)
 
-        # Rotation handle (circle above top center)
-        rot_pos = QPointF(bounds.center().x(), bounds.top() - 20)
-        rot_handle = QGraphicsEllipseItem(rot_pos.x() - s / 2, rot_pos.y() - s / 2, s, s)
-        rot_handle.setPen(pen)
-        rot_handle.setBrush(QColor(255, 167, 38, 200))
-        rot_handle.setZValue(10000)
-        rot_handle.setData(1, HandleType.ROTATION)
-        self._scene.addItem(rot_handle)
-        self._rotation_handle = rot_handle
+        # Bottom action bar — rotate (drag-initiator, same as the handles
+        # above) / duplicate / delete (instant actions on click).
+        bar_y = bounds.bottom() + self.ACTION_GAP
+        d = self.ACTION_SIZE
+        actions = [
+            (HandleType.ROTATION, "↻"),
+            (HandleType.DUPLICATE_ACTION, "⧉"),
+            (HandleType.DELETE_ACTION, "\U0001F5D1"),
+        ]
+        total_w = (len(actions) - 1) * self.ACTION_SPACING
+        start_x = bounds.center().x() - total_w / 2
+        for i, (handle_type, glyph) in enumerate(actions):
+            cx = start_x + i * self.ACTION_SPACING
+            btn = QGraphicsEllipseItem(0, 0, d, d)
+            btn.setPos(cx - d / 2, bar_y)
+            btn.setPen(pen)
+            btn.setBrush(QColor(255, 255, 255, 235))
+            btn.setZValue(10000)
+            btn.setData(1, handle_type)
+            btn.setCursor(_HANDLE_CURSORS[handle_type])
+            self._scene.addItem(btn)
+            self._handles.append(btn)
+
+            label = QGraphicsSimpleTextItem(glyph, btn)
+            label.setBrush(QColor("#2C2C2C"))
+            font = label.font()
+            font.setPointSize(9)
+            label.setFont(font)
+            lb = label.boundingRect()
+            label.setPos(d / 2 - lb.width() / 2, d / 2 - lb.height() / 2)
+            label.setZValue(10001)
 
     def hide_handles(self):
-        """Remove all transform handles from the scene."""
+        """Remove the selection border and all handles/action buttons."""
         for handle in self._handles:
             self._scene.removeItem(handle)
         self._handles.clear()
 
-        if self._rotation_handle:
-            self._scene.removeItem(self._rotation_handle)
-            self._rotation_handle = None
+        if self._border:
+            self._scene.removeItem(self._border)
+            self._border = None
 
     def handle_at(self, scene_pos: QPointF) -> HandleType | None:
-        """Check if a position hits a transform handle."""
+        """Check if a position hits a transform handle or action button."""
         for handle in self._handles:
             if handle.contains(handle.mapFromScene(scene_pos)):
                 return handle.data(1)
-        if self._rotation_handle and self._rotation_handle.contains(
-            self._rotation_handle.mapFromScene(scene_pos)
-        ):
-            return HandleType.ROTATION
         return None
 
     # --- Begin/End transform (for undo/redo integration) ---
@@ -302,7 +380,17 @@ class TransformEngine(QObject):
 
     @staticmethod
     def _get_bounds(items: list[QGraphicsItem]) -> QRectF:
+        """Union of each item's scene bounds for the selection border/
+        handles. Prefers an item's own selection_bounding_rect() (item-local
+        coords) over sceneBoundingRect() when present — some items pad their
+        boundingRect() beyond what's actually drawn (e.g. TextItem adds a
+        hover margin), which would otherwise draw the purple selection
+        border visibly larger than the object itself."""
         bounds = QRectF()
         for item in items:
-            bounds = bounds.united(item.sceneBoundingRect())
+            rect_fn = getattr(item, "selection_bounding_rect", None)
+            if rect_fn:
+                bounds = bounds.united(item.mapRectToScene(rect_fn()))
+            else:
+                bounds = bounds.united(item.sceneBoundingRect())
         return bounds

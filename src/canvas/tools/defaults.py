@@ -9,6 +9,7 @@ from PySide6.QtGui import QMouseEvent, QPen, QColor, QPainterPath
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsPathItem
 
 from src.canvas.tools.base import BaseTool
+from src.canvas.tools.interaction import ItemInteraction
 
 if TYPE_CHECKING:
     from src.engines.core.selection import SelectionEngine
@@ -18,15 +19,27 @@ if TYPE_CHECKING:
 
 
 class SelectTool(BaseTool):
-    """Selection tool with box and lasso modes."""
+    """Selection tool with box/lasso modes that also drags whatever item is
+    clicked directly (move), or drags a handle of the current selection
+    (rotate/resize) — a single tool covering select/move/rotate/resize like
+    a standard design app, instead of requiring a separate "Mover" tool."""
 
     name = "Selecionar"
     shortcut = "V"
     cursor = Qt.CursorShape.ArrowCursor
 
-    def __init__(self, viewport: Viewport, selection_engine: SelectionEngine):
+    def __init__(
+        self,
+        viewport: Viewport,
+        selection_engine: SelectionEngine,
+        transform_engine: TransformEngine | None = None,
+        history_engine: HistoryEngine | None = None,
+    ):
         super().__init__(viewport)
         self._selection = selection_engine
+        self._transform = transform_engine
+        self._history = history_engine
+        self._interaction = ItemInteraction(viewport, selection_engine, transform_engine, history_engine)
         self._rubber_band: QGraphicsRectItem | None = None
         self._lasso_path: QGraphicsPathItem | None = None
         self._lasso_points: list[QPointF] = []
@@ -37,8 +50,13 @@ class SelectTool(BaseTool):
         if event.button() != Qt.MouseButton.LeftButton:
             return
 
-        self._start = scene_pos
         self._lasso_mode = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        add = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+
+        if not self._lasso_mode and self._interaction.try_begin(scene_pos, add):
+            return
+
+        self._start = scene_pos
 
         if self._lasso_mode:
             # Start lasso
@@ -57,6 +75,9 @@ class SelectTool(BaseTool):
             self.viewport.scene().addItem(self._rubber_band)
 
     def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
+        if self._interaction.move(scene_pos):
+            return
+
         if self._lasso_mode and self._lasso_path:
             self._lasso_points.append(scene_pos)
             path = QPainterPath()
@@ -71,6 +92,9 @@ class SelectTool(BaseTool):
 
     def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
         add = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+
+        if self._interaction.release(scene_pos):
+            return
 
         if self._lasso_mode and self._lasso_path:
             # Lasso selection

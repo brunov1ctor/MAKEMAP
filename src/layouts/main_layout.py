@@ -17,6 +17,8 @@ from src.layouts.panels.terrain.panel import TerrainSettingsPanel
 from src.layouts.panels.region.panel import RegionSettingsPanel
 from src.layouts.panels.region.region_edit_panel import RegionEditPanel
 from src.layouts.panels.select_panel import SelectToolPanel
+from src.layouts.panels.text_panel import TextToolPanel, radius_from_percent
+from src.layouts.panels.color_customize_panel import ColorCustomizePanel
 from src.layouts.panels.explorer import ExplorerPanel, FilterPanel
 from src.layouts.panels.canvas_area import CanvasArea
 from src.layouts.panels.inspector import InspectorPanel, QuestPanel, LayersPanel
@@ -61,6 +63,68 @@ class MainLayout(QWidget):
         self.select_panel.hide()
         self.select_panel.close_requested.connect(self._close_select_panel)
         self.select_panel.layers_changed.connect(self.canvas.engine.selection.set_layer_filter)
+
+        self.text_panel = TextToolPanel(self)
+        self.text_panel.hide()
+        self.text_panel.close_requested.connect(self._close_text_panel)
+        self.text_panel.content_changed.connect(self._reposition)
+        self.text_panel.font_family_changed.connect(self._on_text_family)
+        self.text_panel.font_weight_changed.connect(self._on_text_weight)
+        self.text_panel.font_size_changed.connect(self._on_text_font_size)
+        self.text_panel.bold_changed.connect(self._on_text_bold)
+        self.text_panel.italic_changed.connect(self._on_text_italic)
+        self.text_panel.color_changed.connect(self._on_text_color)
+        self.text_panel.align_changed.connect(self._on_text_align)
+        self.text_panel.line_height_changed.connect(self._on_text_line_height)
+        self.text_panel.letter_spacing_changed.connect(self._on_text_letter_spacing)
+        self.text_panel.shadow_toggled.connect(self._on_text_shadow_toggled)
+        self.text_panel.shadow_color_changed.connect(self._on_text_shadow_color)
+        self.text_panel.shadow_opacity_changed.connect(self._on_text_shadow_opacity)
+        self.text_panel.shadow_x_changed.connect(self._on_text_shadow_x)
+        self.text_panel.shadow_y_changed.connect(self._on_text_shadow_y)
+        self.text_panel.shadow_blur_changed.connect(self._on_text_shadow_blur)
+        self.text_panel.outline_toggled.connect(self._on_text_outline_toggled)
+        self.text_panel.outline_color_changed.connect(self._on_text_outline_color)
+        self.text_panel.outline_width_changed.connect(self._on_text_outline_width)
+        self.text_panel.glow_toggled.connect(self._on_text_glow_toggled)
+        self.text_panel.glow_color_changed.connect(self._on_text_glow_color)
+        self.text_panel.glow_blur_changed.connect(self._on_text_glow_blur)
+        self.text_panel.curvature_changed.connect(self._on_text_curvature)
+        self.text_panel.opacity_changed.connect(self._on_text_opacity)
+        self.text_panel.strikethrough_toggled.connect(self._on_text_strikethrough)
+        self.text_panel.overline_toggled.connect(self._on_text_overline)
+        self.text_panel.underline_toggled.connect(self._on_text_underline)
+        self.text_panel.double_underline_toggled.connect(self._on_text_double_underline)
+        self.text_panel.box_toggled.connect(self._on_text_box)
+        self.text_panel.cloud_toggled.connect(self._on_text_cloud)
+        self.text_panel.serif_toggled.connect(self._on_text_serif)
+
+        # Single shared "Personalizar" picker sub-panel, reused for whichever
+        # ColorField (text color, shadow, outline, glow) opens it — same
+        # single-instance-reused pattern as RegionEditPanel across zone cards.
+        # Rides beside text_panel like RegionEditPanel does beside
+        # RegionSettingsPanel — positioned manually in resizeEvent, not
+        # through PanelManager's single-slot layout.
+        self.color_customize_panel = ColorCustomizePanel(self)
+        self.color_customize_panel.hide()
+        self._active_color_field = None
+        self._active_pattern_key = None
+        self.color_customize_panel.close_requested.connect(self._close_color_customize)
+        self.color_customize_panel.pattern_changed.connect(self._on_color_customize_pattern_changed)
+        self.text_panel.color_field.customize_requested.connect(
+            lambda: self._open_color_customize("text", self.text_panel.color_field)
+        )
+        self.text_panel.shadow_color.customize_requested.connect(
+            lambda: self._open_color_customize("shadow", self.text_panel.shadow_color)
+        )
+        self.text_panel.outline_color.customize_requested.connect(
+            lambda: self._open_color_customize("outline", self.text_panel.outline_color)
+        )
+        self.text_panel.glow_color.customize_requested.connect(
+            lambda: self._open_color_customize("glow", self.text_panel.glow_color)
+        )
+
+        self.canvas.engine.selection.selection_changed.connect(self._on_selection_for_text_panel)
 
         # Asset browser (category tabs + search + grid), positioned right
         # next to Brush. Opens only via the texture preview click — NOT
@@ -122,6 +186,9 @@ class MainLayout(QWidget):
         # *together*, the opposite of mutual exclusivity.
         self._panel_mgr.register(
             "Select", self.select_panel,
+        )
+        self._panel_mgr.register(
+            "Text", self.text_panel, on_hide=self._close_color_customize,
         )
 
         # Terrain panel signals → mediator
@@ -226,6 +293,7 @@ class MainLayout(QWidget):
         self.floating.register("terrain_panel", self.terrain_panel)
         self.floating.register("region_panel", self.region_panel)
         self.floating.register("select_panel", self.select_panel)
+        self.floating.register("text_panel", self.text_panel)
         self.minimap.moved.connect(lambda: self.floating.push_clear("minimap"))
 
         # ═══ Conexões ═══
@@ -238,6 +306,8 @@ class MainLayout(QWidget):
         self.canvas.engine.tool_changed.connect(
             lambda t: self.status_bar.tool_label.setText(f"🔧 {t}")
         )
+        self.canvas.engine.tool_changed.connect(self.canvas_toolbar.sync_active)
+        self.canvas.engine.text_committed.connect(self._close_text_panel)
         self.status_bar.zoom_in_clicked.connect(self.canvas.engine.zoom_in)
         self.status_bar.zoom_out_clicked.connect(self.canvas.engine.zoom_out)
         self.minimap.zoom_changed.connect(self._on_zoom_slider)
@@ -317,6 +387,16 @@ class MainLayout(QWidget):
             tp = self.terrain_panel.geometry()
             tp_h = min(self.terrain_panel.content_height(), avail.height())
             self.terrain_panel.setGeometry(tp.x(), tp.y(), tp.width(), tp_h)
+
+        # Personalizar rides next to Texto (not through PanelManager — see
+        # where it's created), sized to its own content.
+        if self.text_panel.isVisible() and self.color_customize_panel.isVisible():
+            tp_rect = self.text_panel.geometry()
+            cc_x = tp_rect.right() + 8
+            cc_w = min(self.color_customize_panel.PANEL_WIDTH, max(0, avail.right() - cc_x))
+            cc_h = min(PanelManager._content_height(self.color_customize_panel), avail.height())
+            self.color_customize_panel.setGeometry(cc_x, tp_rect.y(), cc_w, cc_h)
+            self.color_customize_panel.raise_()
 
         # Asset browser rides next to Brush (not through PanelManager — see
         # the comment where it's created) whenever both are visible.
@@ -407,11 +487,261 @@ class MainLayout(QWidget):
             self._panel_mgr.show("Select")
         else:
             self._panel_mgr.hide("Select")
+        if tool_name == "Texto":
+            self._panel_mgr.show("Text")
+        elif not self._text_selected_items():
+            self._panel_mgr.hide("Text")
+            self._close_color_customize()
         self._reposition()
 
     def _close_select_panel(self):
         self._panel_mgr.hide("Select")
         self._reposition()
+
+    # ─── Text Panel ───
+
+    def _text_selected_items(self) -> list:
+        from src.canvas.text_item import TextItem
+        return [it for it in self.canvas.engine.selection.selected_items if isinstance(it, TextItem)]
+
+    def _on_selection_for_text_panel(self, _ids):
+        items = self._text_selected_items()
+        if items:
+            it = items[0]
+            self.text_panel.set_values(it.props)
+            self._panel_mgr.show("Text")
+        elif self.canvas.engine.tool_manager.active_name != "Texto":
+            self._panel_mgr.hide("Text")
+            self._close_color_customize()
+        self._reposition()
+
+    def _close_text_panel(self):
+        self._panel_mgr.hide("Text")
+        self._close_color_customize()
+        self._reposition()
+
+    # ─── "Personalizar" paint picker ───
+
+    @staticmethod
+    def _pattern_target(props, key: str):
+        """(object, base-color-attr) pair for a Personalizar key — obj.pattern
+        is the PaintGrid, getattr(obj, attr) is the plain fallback hex."""
+        return {
+            "text": (props, "color"),
+            "shadow": (props.shadow, "color"),
+            "outline": (props.outline, "color"),
+            "glow": (props.glow, "color"),
+        }[key]
+
+    def _open_color_customize(self, key: str, field):
+        self._active_color_field = field
+        self._active_pattern_key = key
+        cells = None
+        items = self._text_selected_items()
+        if items:
+            obj, attr = self._pattern_target(items[0].props, key)
+            obj.pattern.ensure(getattr(obj, attr))
+            cells = obj.pattern.cells
+        self.color_customize_panel.load_pattern(cells, field.color())
+        self.color_customize_panel.show()
+        self._reposition()
+
+    def _on_color_customize_pattern_changed(self, cells: list):
+        if not self._active_pattern_key:
+            return
+        dominant = cells[0] if cells else self._active_color_field.color()
+        for it in self._text_selected_items():
+            obj, attr = self._pattern_target(it.props, self._active_pattern_key)
+            obj.pattern.cells = list(cells)
+            setattr(obj, attr, dominant)
+            it.prepareGeometryChange()
+            it.update()
+        self._active_color_field.set_color(dominant)
+
+    def _close_color_customize(self):
+        self.color_customize_panel.hide()
+        self._active_color_field = None
+        self._active_pattern_key = None
+        self._reposition()
+
+    def _on_text_family(self, family: str):
+        for it in self._text_selected_items():
+            it.props.font_family = family
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_weight(self, weight: int):
+        for it in self._text_selected_items():
+            it.props.font_weight = weight
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_font_size(self, value: float):
+        for it in self._text_selected_items():
+            it.props.font_size = value
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_bold(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.font_weight = 700 if checked else 400
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_italic(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.italic = checked
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_color(self, color: str):
+        for it in self._text_selected_items():
+            it.props.color = color
+            it.props.pattern.fill(color)
+            it.update()
+
+    def _on_text_align(self, align):
+        for it in self._text_selected_items():
+            it.props.align = align
+            it.update()
+
+    def _on_text_line_height(self, value: float):
+        for it in self._text_selected_items():
+            it.props.spacing.line_height = value
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_letter_spacing(self, value: float):
+        for it in self._text_selected_items():
+            it.props.spacing.letter_spacing = value
+            it.prepareGeometryChange()
+            it.update()
+
+    # ─── Estilo Panel ───
+
+    def _on_text_shadow_toggled(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.shadow.enabled = checked
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_shadow_color(self, color: str):
+        for it in self._text_selected_items():
+            it.props.shadow.color = color
+            it.props.shadow.pattern.fill(color)
+            it.update()
+
+    def _on_text_shadow_opacity(self, percent: float):
+        for it in self._text_selected_items():
+            it.props.shadow.opacity = percent / 100.0
+            it.update()
+
+    def _on_text_shadow_x(self, value: float):
+        for it in self._text_selected_items():
+            it.props.shadow.offset_x = value
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_shadow_y(self, value: float):
+        for it in self._text_selected_items():
+            it.props.shadow.offset_y = value
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_shadow_blur(self, value: float):
+        for it in self._text_selected_items():
+            it.props.shadow.blur = value
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_outline_toggled(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.outline.enabled = checked
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_outline_color(self, color: str):
+        for it in self._text_selected_items():
+            it.props.outline.color = color
+            it.props.outline.pattern.fill(color)
+            it.update()
+
+    def _on_text_outline_width(self, value: float):
+        for it in self._text_selected_items():
+            it.props.outline.width = value
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_glow_toggled(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.glow.enabled = checked
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_glow_color(self, color: str):
+        for it in self._text_selected_items():
+            it.props.glow.color = color
+            it.props.glow.pattern.fill(color)
+            it.update()
+
+    def _on_text_glow_blur(self, value: float):
+        for it in self._text_selected_items():
+            it.props.glow.radius = value
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_curvature(self, percent: float):
+        for it in self._text_selected_items():
+            it.props.curve.enabled = percent > 0
+            it.props.curve.radius = radius_from_percent(percent)
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_opacity(self, percent: float):
+        for it in self._text_selected_items():
+            it.props.opacity = percent / 100.0
+            it.update()
+
+    # ─── Enfeites ───
+
+    def _on_text_strikethrough(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.strikethrough = checked
+            it.update()
+
+    def _on_text_overline(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.overline = checked
+            it.update()
+
+    def _on_text_underline(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.underline = checked
+            it.update()
+
+    def _on_text_double_underline(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.double_underline = checked
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_box(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.ribbon.enabled = checked
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_cloud(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.cloud = checked
+            it.prepareGeometryChange()
+            it.update()
+
+    def _on_text_serif(self, checked: bool):
+        for it in self._text_selected_items():
+            it.props.serif = checked
+            it.prepareGeometryChange()
+            it.update()
 
     def _toggle_asset_browser(self):
         """Texture preview clicked — open/close the Assets browser next to Brush."""
@@ -524,6 +854,7 @@ class MainLayout(QWidget):
         return [
             self.canvas_toolbar, self.brush_panel, self.asset_browser_panel,
             self.grid_panel, self.terrain_panel, self.region_panel, self.select_panel,
+            self.text_panel,
             self._left_container, self._right_scroll, self.progression, self.compass, self.minimap,
         ]
 
@@ -575,6 +906,13 @@ class MainLayout(QWidget):
             panel.new_requested.connect(self._on_menu_new_project)
             panel.delete_requested.connect(self._on_menu_delete_project)
             layout.addWidget(panel)
+        elif menu_name == "Mobs":
+            from src.layouts.panels.mobs.panel import MobsPanel
+            window = self.window()
+            uow = window.uow if window and hasattr(window, 'uow') else None
+            panel = MobsPanel(uow, zones_provider=self._region_med.zones_list, parent=container)
+            panel.closed.connect(self._hide_menu_view)
+            layout.addWidget(panel)
         elif menu_name in MENU_PANELS:
             panel_class = MENU_PANELS[menu_name]
             panel = panel_class(container)
@@ -608,7 +946,7 @@ class MainLayout(QWidget):
 
         for w in self._canvas_widgets():
             if w in (self.brush_panel, self.asset_browser_panel, self.grid_panel,
-                     self.terrain_panel, self.region_panel, self.select_panel):
+                     self.terrain_panel, self.region_panel, self.select_panel, self.text_panel):
                 continue
             w.show()
         self._reposition()

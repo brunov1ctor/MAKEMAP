@@ -10,7 +10,14 @@ from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QFontMetrics, QPen, QBrush,
     QPainterPath, QLinearGradient, QRadialGradient, QTransform,
+    QImage, QPixmap,
 )
+
+# Resolution of the freehand-painted color grid (the "Personalizar" picker's
+# paintable preview) — small enough to paint comfortably, big enough that
+# stretching it over a text object's bounding box doesn't look blocky.
+PAINT_GRID_COLS = 12
+PAINT_GRID_ROWS = 6
 
 
 # ─── Enums ──────────────────────────────────────────────────────────────────
@@ -34,6 +41,34 @@ class TextStyle(Enum):
 # ─── Data Models ────────────────────────────────────────────────────────────
 
 @dataclass
+class PaintGrid:
+    """A small freehand-painted color grid — the alternate fill a fill/
+    shadow/outline/glow color can take on when the user paints more than
+    one color into the Personalizar picker's preview (e.g. a striped
+    "Napolitano" look) instead of picking a single solid color. Empty
+    (never painted) means "just use the plain color string instead"."""
+    cells: list[str] = field(default_factory=list)
+
+    def ensure(self, base_color: str):
+        """Lazily fill to a uniform grid of base_color the first time this
+        target is painted on, without touching an already-painted grid."""
+        n = PAINT_GRID_COLS * PAINT_GRID_ROWS
+        if len(self.cells) != n:
+            self.cells = [base_color] * n
+
+    def fill(self, color: str):
+        """Reset to a uniform grid of `color` — used when a quick solid
+        pick (native color dialog) should override any painted stripes."""
+        self.cells = [color] * (PAINT_GRID_COLS * PAINT_GRID_ROWS)
+
+    def is_uniform(self) -> bool:
+        return len(set(self.cells)) <= 1
+
+    def dominant(self, fallback: str) -> str:
+        return self.cells[0] if self.cells else fallback
+
+
+@dataclass
 class TextShadow:
     enabled: bool = True
     color: str = "#000000"
@@ -41,6 +76,7 @@ class TextShadow:
     offset_y: float = 2.0
     blur: float = 4.0
     opacity: float = 0.6
+    pattern: PaintGrid = field(default_factory=PaintGrid)
 
 
 @dataclass
@@ -49,6 +85,7 @@ class TextOutline:
     color: str = "#000000"
     width: float = 2.0
     opacity: float = 1.0
+    pattern: PaintGrid = field(default_factory=PaintGrid)
 
 
 @dataclass
@@ -57,6 +94,7 @@ class TextGlow:
     color: str = "#4FC3F7"
     radius: float = 8.0
     opacity: float = 0.5
+    pattern: PaintGrid = field(default_factory=PaintGrid)
 
 
 @dataclass
@@ -101,7 +139,17 @@ class TextProperties:
     shadow: TextShadow = field(default_factory=lambda: TextShadow(enabled=False))
     glow: TextGlow = field(default_factory=lambda: TextGlow(enabled=False))
     curve: TextCurve = field(default_factory=TextCurve)
+    pattern: PaintGrid = field(default_factory=PaintGrid)
     ribbon: TextRibbon = field(default_factory=TextRibbon)
+
+    # Efeitos (quick-toggle decorations) — Contorno/Caixa reuse the
+    # outline/ribbon fields above; these are the ones with no other home.
+    strikethrough: bool = False
+    overline: bool = False
+    underline: bool = False
+    double_underline: bool = False
+    cloud: bool = False
+    serif: bool = False
 
 
 # ─── Typography Renderer ───────────────────────────────────────────────────
@@ -109,9 +157,11 @@ class TextProperties:
 class TypographyRenderer:
     """Renderiza texto com todos os efeitos aplicados."""
 
-    @staticmethod
-    def build_font(props: TextProperties) -> QFont:
-        font = QFont(props.font_family)
+    SERIF_FALLBACK = "Georgia"
+
+    @classmethod
+    def build_font(cls, props: TextProperties) -> QFont:
+        font = QFont(cls.SERIF_FALLBACK if props.serif else props.font_family)
         font.setPointSizeF(max(1.0, props.font_size))
         font.setWeight(QFont.Weight(props.font_weight))
         font.setItalic(props.italic)
@@ -173,9 +223,11 @@ class TypographyRenderer:
         font = cls.build_font(props)
         text_path = cls.build_path(props, font)
 
-        # 1. Ribbon (background decorativo)
+        # 1. Ribbon / Cloud (background decorativo)
         if props.ribbon.enabled:
             cls._render_ribbon(painter, text_path, props)
+        if props.cloud:
+            cls._render_cloud(painter, text_path, props)
 
         # 2. Shadow
         if props.shadow.enabled:
@@ -190,35 +242,65 @@ class TypographyRenderer:
             cls._render_outline(painter, text_path, props.outline)
 
         # 5. Fill
-        color = QColor(props.color)
-        painter.fillPath(text_path, QBrush(color))
+        brush = cls._pattern_brush(props.pattern, props.color, text_path.boundingRect())
+        painter.fillPath(text_path, brush)
+
+        # 6. Line decorations (skipped on curved text — a straight line
+        # under an arced baseline doesn't read as an underline/strikeout)
+        if not props.curve.enabled:
+            cls._render_decorations(painter, font, props)
 
         painter.restore()
 
     @staticmethod
-    def _render_shadow(painter: QPainter, path: QPainterPath, shadow: TextShadow):
-        color = QColor(shadow.color)
-        color.setAlphaF(shadow.opacity)
+    def _pattern_brush(pattern: PaintGrid, base_color: str, rect: QRectF) -> QBrush:
+        """A flat QBrush(color) unless the user has freehand-painted more
+        than one color into this target's grid — then a QBrush built from
+        the painted pixels, stretched to cover `rect` (the fill area)."""
+        pattern.ensure(base_color)
+        if pattern.is_uniform():
+            return QBrush(QColor(pattern.dominant(base_color)))
+
+        img = QImage(PAINT_GRID_COLS, PAINT_GRID_ROWS, QImage.Format.Format_ARGB32)
+        for y in range(PAINT_GRID_ROWS):
+            for x in range(PAINT_GRID_COLS):
+                img.setPixelColor(x, y, QColor(pattern.cells[y * PAINT_GRID_COLS + x]))
+        brush = QBrush(QPixmap.fromImage(img))
+        if rect.width() > 0 and rect.height() > 0:
+            t = QTransform()
+            t.translate(rect.left(), rect.top())
+            t.scale(rect.width() / PAINT_GRID_COLS, rect.height() / PAINT_GRID_ROWS)
+            brush.setTransform(t)
+        return brush
+
+    @classmethod
+    def _render_shadow(cls, painter: QPainter, path: QPainterPath, shadow: TextShadow):
+        brush = cls._pattern_brush(shadow.pattern, shadow.color, path.boundingRect())
         painter.save()
         painter.translate(shadow.offset_x, shadow.offset_y)
-        painter.fillPath(path, QBrush(color))
+        painter.setOpacity(shadow.opacity)
+        painter.fillPath(path, brush)
         painter.restore()
 
-    @staticmethod
-    def _render_glow(painter: QPainter, path: QPainterPath, glow: TextGlow):
-        color = QColor(glow.color)
-        color.setAlphaF(glow.opacity * 0.3)
-        pen = QPen(color, glow.radius)
+    @classmethod
+    def _render_glow(cls, painter: QPainter, path: QPainterPath, glow: TextGlow):
+        brush = cls._pattern_brush(glow.pattern, glow.color, path.boundingRect())
+        pen = QPen(brush, glow.radius)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.save()
+        painter.setOpacity(glow.opacity * 0.3)
         painter.strokePath(path, pen)
+        painter.restore()
 
-    @staticmethod
-    def _render_outline(painter: QPainter, path: QPainterPath, outline: TextOutline):
-        color = QColor(outline.color)
-        color.setAlphaF(outline.opacity)
-        pen = QPen(color, outline.width)
+    @classmethod
+    def _render_outline(cls, painter: QPainter, path: QPainterPath, outline: TextOutline):
+        brush = cls._pattern_brush(outline.pattern, outline.color, path.boundingRect())
+        pen = QPen(brush, outline.width)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.save()
+        painter.setOpacity(outline.opacity)
         painter.strokePath(path, pen)
+        painter.restore()
 
     @staticmethod
     def _render_ribbon(painter: QPainter, path: QPainterPath, props: TextProperties):
@@ -235,6 +317,83 @@ class TypographyRenderer:
         painter.fillPath(ribbon_path, QBrush(color))
 
     @staticmethod
+    def _render_cloud(painter: QPainter, path: QPainterPath, props: TextProperties):
+        """A speech-bubble/cloud backdrop — same styling knobs as Ribbon
+        (color/opacity/padding), but a bumpy comic-cloud outline instead of
+        a plain rounded rect."""
+        ribbon = props.ribbon
+        color = QColor(ribbon.color)
+        color.setAlphaF(ribbon.opacity)
+        rect = path.boundingRect().adjusted(
+            -ribbon.padding_x, -ribbon.padding_y,
+            ribbon.padding_x, ribbon.padding_y,
+        )
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+
+        bumps_x = max(3, round(rect.width() / 22))
+        bumps_y = max(2, round(rect.height() / 22))
+        rx = rect.width() / bumps_x * 0.62
+        ry = rect.height() / bumps_y * 0.62
+
+        cloud_path = QPainterPath()
+        cloud_path.addRoundedRect(rect.adjusted(rx * 0.5, ry * 0.5, -rx * 0.5, -ry * 0.5), rx * 0.4, ry * 0.4)
+        for i in range(bumps_x):
+            t = i / max(1, bumps_x - 1)
+            cx = rect.left() + t * rect.width()
+            bump = QPainterPath()
+            bump.addEllipse(QPointF(cx, rect.top()), rx, ry)
+            cloud_path = cloud_path.united(bump)
+            bump = QPainterPath()
+            bump.addEllipse(QPointF(cx, rect.bottom()), rx, ry)
+            cloud_path = cloud_path.united(bump)
+        for j in range(bumps_y):
+            t = j / max(1, bumps_y - 1)
+            cy = rect.top() + t * rect.height()
+            bump = QPainterPath()
+            bump.addEllipse(QPointF(rect.left(), cy), rx, ry)
+            cloud_path = cloud_path.united(bump)
+            bump = QPainterPath()
+            bump.addEllipse(QPointF(rect.right(), cy), rx, ry)
+            cloud_path = cloud_path.united(bump)
+
+        painter.fillPath(cloud_path.simplified(), QBrush(color))
+
+    @classmethod
+    def _render_decorations(cls, painter: QPainter, font: QFont, props: TextProperties):
+        """Underline / double underline / overline / strikethrough — drawn
+        from font metrics rather than baked into the glyph path, since they
+        span the full text width as simple straight lines."""
+        if not (props.underline or props.double_underline or props.overline or props.strikethrough):
+            return
+
+        fm = QFontMetrics(font)
+        width = fm.horizontalAdvance(props.text)
+        if width <= 0:
+            return
+        baseline = fm.ascent()
+        brush = cls._pattern_brush(props.pattern, props.color, QRectF(0, 0, width, fm.height()))
+        pen = QPen(brush, max(1.0, fm.lineWidth()))
+
+        painter.save()
+        painter.setPen(pen)
+        if props.underline:
+            y = baseline + fm.underlinePos()
+            painter.drawLine(QPointF(0, y), QPointF(width, y))
+        if props.double_underline:
+            y1 = baseline + fm.underlinePos()
+            y2 = y1 + pen.widthF() * 2.5
+            painter.drawLine(QPointF(0, y1), QPointF(width, y1))
+            painter.drawLine(QPointF(0, y2), QPointF(width, y2))
+        if props.overline:
+            y = 0.0
+            painter.drawLine(QPointF(0, y), QPointF(width, y))
+        if props.strikethrough:
+            y = baseline - fm.strikeOutPos()
+            painter.drawLine(QPointF(0, y), QPointF(width, y))
+        painter.restore()
+
+    @staticmethod
     def bounding_rect(props: TextProperties) -> QRectF:
         """Calcula o bounding rect do texto com efeitos."""
         font = TypographyRenderer.build_font(props)
@@ -249,8 +408,12 @@ class TypographyRenderer:
             expand = max(expand, props.glow.radius)
         if props.outline.enabled:
             expand = max(expand, props.outline.width)
-        if props.ribbon.enabled:
-            expand = max(expand, max(props.ribbon.padding_x, props.ribbon.padding_y))
+        if props.ribbon.enabled or props.cloud:
+            # Cloud's bumps extend a bit further than Ribbon's plain edge.
+            bump_extra = 1.6 if props.cloud else 1.0
+            expand = max(expand, max(props.ribbon.padding_x, props.ribbon.padding_y) * bump_extra)
+        if props.double_underline:
+            expand = max(expand, 6.0)
 
         return rect.adjusted(-expand, -expand, expand, expand)
 
