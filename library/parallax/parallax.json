@@ -5,43 +5,59 @@
       "name": "infinito",
       "layers": [
         {
+          "image_path": "infinito\\Campos estelares e nebulosas distantes.png",
+          "name": "5 - Campos estelares e nebulosas distantes",
+          "speed_x": 0.03,
+          "speed_y": 0.0,
+          "opacity": 1.0,
+          "order": 0,
+          "tile_mode": "repeat",
+          "motion_mode": "scroll",
+          "orbit_radius": 0.0,
+          "orbit_period": 60.0,
+          "opacity_pulse": false,
+          "opacity_min": 1.0,
+          "opacity_max": 1.0,
+          "opacity_period": 20.0,
+          "scale_pulse": false,
+          "scale_min": 100.0,
+          "scale_max": 100.0,
+          "scale_period": 20.0,
+          "rotation_pulse": false,
+          "rotation_amplitude": 0.0,
+          "rotation_period": 30.0,
+          "phase_offset": 0.13506620885916307,
+          "effects": []
+        },
+        {
           "image_path": "infinito\\1.png",
           "name": "1 - Poeira estelar próxima",
           "speed_x": 0.42,
-          "speed_y": 0.16,
+          "speed_y": 0.12,
           "opacity": 0.58,
           "order": 1,
           "tile_mode": "fade",
-          "motion_mode": "orbit",
-          "orbit_radius": 34.0,
-          "orbit_period": 18.0,
-          "opacity_pulse": true,
-          "opacity_min": 0.38,
-          "opacity_max": 0.66,
-          "opacity_period": 9.0,
-          "scale_pulse": true,
-          "scale_min": 101.0,
-          "scale_max": 106.0,
-          "scale_period": 14.0,
-          "rotation_pulse": true,
-          "rotation_amplitude": 0.8,
-          "rotation_period": 22.0,
+          "motion_mode": "scroll",
+          "orbit_radius": 0.0,
+          "orbit_period": 60.0,
+          "opacity_pulse": false,
+          "opacity_min": 1.0,
+          "opacity_max": 1.0,
+          "opacity_period": 20.0,
+          "scale_pulse": false,
+          "scale_min": 100.0,
+          "scale_max": 100.0,
+          "scale_period": 20.0,
+          "rotation_pulse": false,
+          "rotation_amplitude": 0.0,
+          "rotation_period": 30.0,
           "phase_offset": 1.6953293882145017,
           "effects": [
             {
               "kind": "chromatic",
               "enabled": true,
               "params": {
-                "offset_px": 0.7
-              }
-            },
-            {
-              "kind": "wave",
-              "enabled": true,
-              "params": {
-                "amplitude": 1.2,
-                "frequency": 0.003,
-                "speed": 0.08
+                "offset_px": 0.35
               }
             }
           ]
@@ -50,24 +66,24 @@
           "image_path": "infinito\\2.png",
           "name": "2 - Poeira e nebulosa próxima",
           "speed_x": 0.28,
-          "speed_y": 0.09,
+          "speed_y": 0.07,
           "opacity": 0.48,
           "order": 2,
           "tile_mode": "fade",
           "motion_mode": "scroll",
-          "orbit_radius": 24.0,
-          "orbit_period": 25.0,
-          "opacity_pulse": true,
-          "opacity_min": 0.34,
-          "opacity_max": 0.54,
-          "opacity_period": 13.0,
-          "scale_pulse": true,
+          "orbit_radius": 0.0,
+          "orbit_period": 60.0,
+          "opacity_pulse": false,
+          "opacity_min": 1.0,
+          "opacity_max": 1.0,
+          "opacity_period": 20.0,
+          "scale_pulse": false,
           "scale_min": 100.0,
-          "scale_max": 104.0,
-          "scale_period": 19.0,
-          "rotation_pulse": true,
-          "rotation_amplitude": 0.5,
-          "rotation_period": 29.0,
+          "scale_max": 100.0,
+          "scale_period": 20.0,
+          "rotation_pulse": false,
+          "rotation_amplitude": 0.0,
+          "rotation_period": 30.0,
           "phase_offset": 2.3812697335329447,
           "effects": [
             {
@@ -84,15 +100,6 @@
               "params": {
                 "radius": 0.6
               }
-            },
-            {
-              "kind": "wave",
-              "enabled": true,
-              "params": {
-                "amplitude": 0.8,
-                "frequency": 0.0025,
-                "speed": 0.05
-              }
             }
           ]
         },
@@ -100,24 +107,24 @@
           "image_path": "infinito\\3.png",
           "name": "3 - Filamentos cósmicos intermediários",
           "speed_x": 0.17,
-          "speed_y": 0.05,
+          "speed_y": 0.035,
           "opacity": 0.42,
           "order": 3,
           "tile_mode": "mirror",
           "motion_mode": "scroll",
-          "orbit_radius": 16.0,
-          "orbit_period": 32.0,
-          "opacity_pulse": true,
-          "opacity_min": 0.33,
-          "opacity_max": 0.47,
-          "opacity_period": 18.0,
+          "orbit_radius": 0.0,
+          "orbit_period": 60.0,
+          "opacity_pulse": false,
+          "opacity_min": 1.0,
+          "opacity_max": 1.0,
+          "opacity_period": 20.0,
           "scale_pulse": false,
           "scale_min": 100.0,
-          "scale_max": 102.0,
-          "scale_period": 26.0,
+          "scale_max": 100.0,
+          "scale_period": 20.0,
           "rotation_pulse": false,
-          "rotation_amplitude": 0.3,
-          "rotation_period": 38.0,
+          "rotation_amplitude": 0.0,
+          "rotation_period": 30.0,
           "phase_offset": 0.7187677122763445,
           "effects": [
             {
@@ -134,15 +141,6 @@
               "params": {
                 "radius": 0.9
               }
-            },
-            {
-              "kind": "wave",
-              "enabled": true,
-              "params": {
-                "amplitude": 0.5,
-                "frequency": 0.002,
-                "speed": 0.035
-              }
             }
           ]
         },
@@ -150,24 +148,24 @@
           "image_path": "infinito\\4.png",
           "name": "4 - Nebulosa distante",
           "speed_x": 0.08,
-          "speed_y": 0.02,
+          "speed_y": 0.01,
           "opacity": 0.36,
           "order": 4,
           "tile_mode": "fade",
           "motion_mode": "scroll",
-          "orbit_radius": 10.0,
-          "orbit_period": 42.0,
-          "opacity_pulse": true,
-          "opacity_min": 0.29,
-          "opacity_max": 0.39,
-          "opacity_period": 24.0,
-          "scale_pulse": true,
+          "orbit_radius": 0.0,
+          "orbit_period": 60.0,
+          "opacity_pulse": false,
+          "opacity_min": 1.0,
+          "opacity_max": 1.0,
+          "opacity_period": 20.0,
+          "scale_pulse": false,
           "scale_min": 100.0,
-          "scale_max": 101.8,
-          "scale_period": 34.0,
+          "scale_max": 100.0,
+          "scale_period": 20.0,
           "rotation_pulse": false,
-          "rotation_amplitude": 0.2,
-          "rotation_period": 46.0,
+          "rotation_amplitude": 0.0,
+          "rotation_period": 30.0,
           "phase_offset": 1.4937307817551264,
           "effects": [
             {

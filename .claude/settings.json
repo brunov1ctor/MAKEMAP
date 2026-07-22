@@ -21,7 +21,19 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('src/layouts/panels/mobs/panel.py', encoding='utf-8'\\).read\\(\\)\\)\")",
       "Bash(QT_QPA_PLATFORM=offscreen python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\798169c1-1a91-42ad-b32a-076111b7ccd0\\\\scratchpad\\\\repro_mobs_widths.py\")",
       "Bash(QT_QPA_PLATFORM=offscreen python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\798169c1-1a91-42ad-b32a-076111b7ccd0\\\\scratchpad\\\\measure_summary_height.py\")",
-      "Bash(QT_QPA_PLATFORM=offscreen python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\798169c1-1a91-42ad-b32a-076111b7ccd0\\\\scratchpad\\\\repro_mobs_heights.py\")"
+      "Bash(QT_QPA_PLATFORM=offscreen python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\798169c1-1a91-42ad-b32a-076111b7ccd0\\\\scratchpad\\\\repro_mobs_heights.py\")",
+      "Bash(python -m py_compile src/canvas/overlays/compass.py)",
+      "Bash(python -m py_compile src/layouts/panels/mobs/panel.py src/layouts/panels/mobs/mob_edit_panel.py)",
+      "Bash(QT_QPA_PLATFORM=offscreen python -c ' *)",
+      "Bash(python -m py_compile src/layouts/panels/mobs/panel.py src/layouts/panels/mobs/categories.py src/database/migrations/schema.py src/database/repositories/entities.py src/database/unit_of_work.py)",
+      "Bash(python -m py_compile src/layouts/panels/mobs/mob_edit_panel.py)",
+      "Bash(python -m py_compile src/layouts/panels/mobs/panel.py src/layouts/panels/mobs/mob_edit_panel.py src/layouts/panels/mobs/categories.py src/layouts/panels/mobs/mob_card.py src/database/migrations/schema.py src/database/repositories/entities.py src/database/unit_of_work.py src/layouts/main_layout.py)",
+      "Bash(PYTHONIOENCODING=utf-8 QT_QPA_PLATFORM=offscreen python -c ' *)",
+      "Bash(python -m py_compile src/layouts/panels/mobs/panel.py)",
+      "Bash(python -m py_compile src/layouts/panels/mobs/panel.py src/layouts/panels/mobs/mob_edit_panel.py src/layouts/panels/mobs/categories.py src/database/migrations/schema.py src/database/repositories/entities.py src/database/unit_of_work.py src/layouts/main_layout.py)",
+      "Bash(python -m py_compile src/layouts/panels/mobs/panel.py src/layouts/panels/mobs/mob_edit_panel.py src/layouts/panels/mobs/categories.py)",
+      "Bash(python -m py_compile src/layouts/panels/mobs/mob_edit_panel.py src/layouts/panels/mobs/categories.py src/database/migrations/schema.py)",
+      "Bash(powershell -Command \"Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force\")"
     ],
     "additionalDirectories": [
       "\\tmp"

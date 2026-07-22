@@ -95,4 +95,14 @@ class CompassHUD(QFrame):
         self._area_lbl.setText(f"{format_distance(map_width_m)} × {format_distance(map_height_m)}")
         lat, lon = to_lat_lon(center_x_m, center_y_m)
         self._latlon_lbl.setText(format_lat_lon(lat, lon))
+        # setText() alone leaves the layout's cached size hint stale, so a
+        # bare adjustSize() right after can undersize the frame (and then
+        # every row gets clipped to that stale, narrower column width) —
+        # force a fresh size hint before resizing, then re-activate so
+        # children actually get laid out into the new, bigger rect (a lone
+        # adjustSize() grows the frame but doesn't reposition its children).
+        self.layout().invalidate()
+        self.layout().activate()
         self.adjustSize()
+        self.layout().invalidate()
+        self.layout().activate()

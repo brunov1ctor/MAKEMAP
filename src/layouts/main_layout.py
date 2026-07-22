@@ -299,6 +299,14 @@ class MainLayout(QWidget):
         self.floating.register("text_panel", self.text_panel)
         self.minimap.moved.connect(lambda: self.floating.push_clear("minimap"))
         self.compass.moved.connect(lambda: self.floating.push_clear("compass"))
+        # compass_hud is anchored relative to the compass. position_changed
+        # fires on every real move — including each step of a move-drag, not
+        # just once it ends — so the HUD chip tracks the drag live instead of
+        # jumping to its new spot only after release (moved, above, still
+        # fires once at drag-end for push_clear's obstacle-nudge, which in
+        # turn moves the compass again and re-emits position_changed, so the
+        # HUD re-anchors off its actual final position either way).
+        self.compass.position_changed.connect(self._reposition_compass_hud)
 
         # ═══ Conexões ═══
         self.canvas.engine.cursor_moved.connect(
@@ -347,6 +355,17 @@ class MainLayout(QWidget):
 
     def _reposition(self):
         self.resizeEvent(None)
+
+    def _reposition_compass_hud(self):
+        """Anchors compass_hud to the compass's current spot — split out so
+        Compass.position_changed (fired on every move, mid-drag included)
+        can call just this instead of the full _reposition/resizeEvent, and
+        the HUD tracks the drag live instead of jumping once it ends."""
+        self.compass_hud.move(
+            self.compass.x() + self.compass.width() - self.compass_hud.width(),
+            self.compass.y() + self.compass.height() + 6,
+        )
+        self.compass_hud.raise_()
 
     def resizeEvent(self, event):
         if event:
@@ -448,11 +467,6 @@ class MainLayout(QWidget):
             self.compass.move(cx, cy)
         else:
             self.compass.move(center_x + center_w - self.compass.width() - 16, ov_top + 8)
-        self.compass_hud.move(
-            self.compass.x() + self.compass.width() - self.compass_hud.width(),
-            self.compass.y() + self.compass.height() + 6,
-        )
-        self.compass_hud.raise_()
         if self.minimap.has_custom_position():
             # User dragged it — keep their spot, just clamp to stay reachable on resize.
             mx = min(max(self.minimap.x(), center_x), max(center_x, center_x + center_w - self.minimap.width()))
@@ -465,6 +479,19 @@ class MainLayout(QWidget):
             )
         self.minimap.raise_()
         self.compass.raise_()
+        # Raised last — compass_hud is a readout attached to the compass and
+        # must stay legible even where its card overlaps the minimap (e.g. on
+        # a short/narrow window), not get painted over by whichever of those
+        # two happened to be raised most recently.
+        self._reposition_compass_hud()
+        # Both compass and compass_hud just landed at their default anchor
+        # (top-right of the canvas), which on a short/narrow window can
+        # collide with the minimap's own default anchor (bottom-right) —
+        # nudge minimap clear of them here too, not just on the reactive
+        # drag/visibility-toggle paths above, so this isn't left to whichever
+        # of those happens to fire next.
+        if not self.minimap.has_custom_position():
+            self.floating.push_clear("minimap")
 
         if self._menu_container and self._menu_container.isVisible():
             self._menu_container.setGeometry(0, top_h, w, body_h)
@@ -899,7 +926,13 @@ class MainLayout(QWidget):
     # ─── Logs ───
 
     def _open_logs(self):
+        # Logs is a modal dialog on top of whatever's currently shown, not
+        # a fullscreen menu view — restore whichever nav button was really
+        # active (e.g. "Mobs") once it closes, since top_bar._on_nav_clicked
+        # already switched the top bar to show "Logs" as checked.
+        previous = self._active_menu or "Mapa"
         open_logs_dialog(self, self.log_handler)
+        self.top_bar.set_active_menu(previous)
 
     # ─── Fullscreen Menu Views ───
 
@@ -917,7 +950,10 @@ class MainLayout(QWidget):
             self._hide_menu_view()
             return
         if menu_name == "Logs":
-            self._hide_menu_view()
+            # Logs opens as its own modal dialog (see _open_logs, wired to
+            # top_bar.logs_clicked) — it isn't a fullscreen menu view, so
+            # opening it shouldn't close whatever panel (Mobs, etc.) is
+            # already open underneath.
             return
         if menu_name == self._active_menu:
             self._hide_menu_view()

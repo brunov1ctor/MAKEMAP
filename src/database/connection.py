@@ -57,3 +57,11 @@ class Database:
 
     def fetchall(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
         return self.conn.execute(sql, params).fetchall()
+
+    def table_columns(self, table: str) -> list[str]:
+        """Column names for `table` via PRAGMA table_info — lets callers
+        validate/filter a payload (e.g. an imported file) against the real
+        schema without depending on any row already being loaded. `table`
+        must be a trusted literal (e.g. a repository's own TABLE constant)
+        since PRAGMA doesn't support parameter binding for identifiers."""
+        return [row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()]

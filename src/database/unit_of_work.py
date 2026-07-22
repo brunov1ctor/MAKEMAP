@@ -9,7 +9,7 @@ from src.database.migrations.schema import run_migrations
 from src.database.repositories.entities import (
     WorldRepository, ContinentRepository, KingdomRepository,
     RegionRepository, BiomeRepository, CityRepository,
-    NPCRepository, MobRepository, BossRepository,
+    NPCRepository, MobRepository, MobCategoryRepository, MobAssetRepository, BossRepository,
     ItemRepository, ResourceRepository, QuestRepository,
     QuestChainRepository, DungeonRepository, EventRepository,
     FactionRepository, TagRepository, MapRepository,
@@ -36,6 +36,8 @@ class UnitOfWork:
         self.cities = CityRepository(self.db)
         self.npcs = NPCRepository(self.db)
         self.mobs = MobRepository(self.db)
+        self.mob_categories = MobCategoryRepository(self.db)
+        self.mob_assets = MobAssetRepository(self.db)
         self.bosses = BossRepository(self.db)
         self.items = ItemRepository(self.db)
         self.resources = ResourceRepository(self.db)

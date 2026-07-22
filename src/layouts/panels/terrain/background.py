@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QWidget, QScrollArea, QLineEdit, QGridLayout, QTabBar, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal, QSize, QFileSystemWatcher
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QColor, QPixmap, QIcon
 
 from src.styles.tokens import Colors
 from src.layouts.panels.terrain.color_picker import HueBar, SatValSquare, ColorSlider
@@ -40,6 +40,12 @@ class BackgroundSection(QFrame):
         bg_row.setSpacing(6)
         self._bg_buttons: dict[str, QToolButton] = {}
         self._bg_active: str = ""
+        # Which parallax preset is currently applied — _load_parallax_presets
+        # never had any memory of this at all before, so reopening the
+        # picker after choosing one always rendered every button in the
+        # same unselected style. Set in _on_parallax_preset_clicked, read
+        # back in _load_parallax_presets on every rebuild.
+        self._active_parallax_key: str = ""
 
         for key, icon_text, tooltip in [
             ("color", "🎨", "Cor fixa"),
@@ -491,22 +497,63 @@ class BackgroundSection(QFrame):
         presets = get_parallax_library().list_presets()
         self._bg_parallax_hint.setVisible(not presets)
 
+        self._parallax_preset_buttons: dict[str, QToolButton] = {}
         for preset in presets:
             btn = QToolButton()
-            btn.setText(f"🌄 {preset.name}  ({len(preset.layers)} camadas)")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(f"""
-                QToolButton {{
-                    border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;
-                    background: rgba(255,255,255,0.04); color: {Colors.TEXT_PRIMARY};
-                    font-size: 10px; padding: 4px 8px; text-align: left;
-                }}
-                QToolButton:hover {{ background: {Colors.PANEL_HOVER}; border-color: {Colors.ACCENT}; }}
-            """)
+            btn.setStyleSheet(self._parallax_button_style(preset.key == self._active_parallax_key))
+            # Real preview from the topmost layer's own image instead of a
+            # generic "🌄" glyph — same idea as the static-image cards
+            # above (_get_thumbnail), just picking the layer with the
+            # highest `order` (drawn last = frontmost, see ParallaxLayer's
+            # own docstring) as the representative image. Falls back to
+            # the glyph only when there are no layers yet or the image
+            # fails to load, same fallback shape _load_bg_assets uses.
+            pix = self._parallax_preset_thumbnail(preset)
+            if pix is not None:
+                btn.setIcon(QIcon(pix))
+                btn.setIconSize(QSize(28, 28))
+                # QToolButton's default toolButtonStyle is ToolButtonIconOnly
+                # — once an icon is set, that hides the text completely
+                # (confirmed: it isn't specific to this button, it's Qt's
+                # own default). Without this, the name — the whole point of
+                # showing it — disappears the moment a thumbnail loads.
+                btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+                btn.setText(f"{preset.name}  ({len(preset.layers)} camadas)")
+            else:
+                btn.setText(f"🌄 {preset.name}  ({len(preset.layers)} camadas)")
             btn.clicked.connect(lambda checked=False, key=preset.key: self._on_parallax_preset_clicked(key))
             self._bg_parallax_list_layout.addWidget(btn)
+            self._parallax_preset_buttons[preset.key] = btn
+
+    def _parallax_button_style(self, selected: bool) -> str:
+        if selected:
+            return f"""
+                QToolButton {{
+                    border: 2px solid {Colors.ACCENT}; border-radius: 4px;
+                    background: {Colors.ACCENT_DIM}; color: {Colors.TEXT_PRIMARY};
+                    font-size: 10px; font-weight: bold; padding: 3px 7px; text-align: left;
+                }}
+            """
+        return f"""
+            QToolButton {{
+                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;
+                background: rgba(255,255,255,0.04); color: {Colors.TEXT_PRIMARY};
+                font-size: 10px; padding: 4px 8px; text-align: left;
+            }}
+            QToolButton:hover {{ background: {Colors.PANEL_HOVER}; border-color: {Colors.ACCENT}; }}
+        """
+
+    def _parallax_preset_thumbnail(self, preset) -> QPixmap | None:
+        if not preset.layers:
+            return None
+        top_layer = max(preset.layers, key=lambda l: l.order)
+        return self._get_thumbnail(top_layer.image_path)
 
     def _on_parallax_preset_clicked(self, preset_key: str):
+        self._active_parallax_key = preset_key
+        for key, btn in self._parallax_preset_buttons.items():
+            btn.setStyleSheet(self._parallax_button_style(key == preset_key))
         self.background_changed.emit("parallax", preset_key)
         self.close_requested.emit()
 

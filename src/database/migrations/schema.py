@@ -481,6 +481,117 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         ALTER TABLE mobs ADD COLUMN resist_fisica REAL DEFAULT 0;
         ALTER TABLE mobs ADD COLUMN resist_magica REAL DEFAULT 0;
     """),
+    (5, "Mobs panel — category folders (directory-style tree, replaces the flat CATEGORY_DEFS list)", """
+        -- Self-referencing tree: parent_id NULL means a root-level folder.
+        -- No FK from mobs.category into this table on purpose — mobs.category
+        -- was already a loose TEXT tag with no FK (see migration 3), same
+        -- reasoning as painted_zones.map_id in migration 2: a mob whose
+        -- folder gets deleted shouldn't become impossible to load, it just
+        -- falls back to "outros" in the UI.
+        CREATE TABLE IF NOT EXISTS mob_categories (
+            id TEXT PRIMARY KEY,
+            parent_id TEXT REFERENCES mob_categories(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            icon TEXT DEFAULT '📁',
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_mob_categories_parent ON mob_categories(parent_id);
+
+        -- Seed with the old fixed CATEGORY_DEFS list as root folders, using
+        -- the same ids that used to be the flat category keys — every
+        -- existing mob's `category` value keeps resolving to the same
+        -- folder without any data migration on the mobs table itself.
+        INSERT OR IGNORE INTO mob_categories (id, parent_id, name, icon, sort_order) VALUES
+            ('npc_hostil', NULL, 'NPC Hostil', '☠', 0),
+            ('animais', NULL, 'Animais', '🐺', 1),
+            ('mortos_vivos', NULL, 'Mortos-vivos', '🧟', 2),
+            ('maquinas', NULL, 'Máquinas', '🤖', 3),
+            ('humanoides', NULL, 'Humanoides', '🧑‍🤝‍🧑', 4),
+            ('dragoes', NULL, 'Dragões', '🐉', 5),
+            ('insetos', NULL, 'Insetos', '🐛', 6),
+            ('aquaticos', NULL, 'Aquáticos', '🐊', 7),
+            ('elementais', NULL, 'Elementais', '🔥', 8),
+            ('plantas', NULL, 'Plantas', '🌿', 9),
+            ('demoniacos', NULL, 'Demoníacos', '👹', 10),
+            ('outros', NULL, 'Outros', '❔', 11);
+    """),
+    (6, "Mobs panel — Tipo (relação com o jogador) and Ambiente (bioma) fields", """
+        ALTER TABLE mobs ADD COLUMN tipo TEXT DEFAULT 'Inimigo';
+        ALTER TABLE mobs ADD COLUMN ambiente TEXT DEFAULT '';
+    """),
+    (7, "Mobs panel — Chefes (Boss) and Elite become real navigable category folders instead of computed-rarity smart filters; drops the previous fixed creature-family seed categories", """
+        -- The 12 creature-family categories from migration 5 are gone —
+        -- the user hadn't created any mobs yet, so nothing references
+        -- them, and they want to build their own category tree from
+        -- scratch starting with just Chefes (Boss) and Elite as roots
+        -- (matching Favoritos/Chefes/Elite in the explorer's reference
+        -- design). ON DELETE CASCADE (migration 5) takes any subfolders
+        -- created under them along too.
+        DELETE FROM mob_categories WHERE id IN (
+            'npc_hostil', 'animais', 'mortos_vivos', 'maquinas', 'humanoides',
+            'dragoes', 'insetos', 'aquaticos', 'elementais', 'plantas',
+            'demoniacos', 'outros'
+        );
+        -- Chefes (Boss) and Elite move from SMART_FILTERS (categories.py,
+        -- computed from mobs.rarity) into the folder tree proper — a mob
+        -- filed under one is now assigned via its Categoria field like
+        -- any other folder, not automatically via Raridade. Todos and
+        -- Favoritos stay pinned smart filters (not folders): "Todos" is
+        -- just the root view, and "favorite" is a per-mob flag, not a
+        -- hierarchical grouping.
+        INSERT OR IGNORE INTO mob_categories (id, parent_id, name, icon, sort_order) VALUES
+            ('chefes_boss', NULL, 'Chefes (Boss)', '👑', 0),
+            ('elite', NULL, 'Elite', '💠', 1);
+    """),
+    (8, "Mobs panel — Informações Extras redesign: Drops link to the Item catalog, Habilidades becomes a structured list, and mobs get a real Assets list (map-stamp source, see mob_assets)", """
+        -- Drops Principais now reference a real items row (icon/rarity
+        -- come from there) instead of a bare typed-in name — drops_json
+        -- entries become {item_id, rate, qty} at the application level;
+        -- no schema change needed for that column itself since it was
+        -- already free-form JSON TEXT.
+        ALTER TABLE items ADD COLUMN image_path TEXT DEFAULT '';
+
+        -- Habilidades moves from one free-text notes box to a structured
+        -- list (name/description/rarity per entry) — abilities_notes
+        -- stays in place (harmless, unread by the new UI) rather than
+        -- being dropped, since SQLite can't cheaply drop a column and
+        -- nothing depends on it being gone.
+        ALTER TABLE mobs ADD COLUMN abilities_json TEXT DEFAULT '[]';
+
+        -- One mob can have several stamp assets (e.g. alternate
+        -- skins/poses) — a real table rather than a JSON blob on mobs
+        -- because each entry needs its own identity (the eventual
+        -- toolbar "Mobs" placement tool will reference a specific
+        -- mob_assets.id, not just "this mob"). No FK into the separate
+        -- asset-library SQLite database (library/library.sqlite) — that
+        -- store is intentionally project-independent, same reasoning as
+        -- mobs.category having no FK to mob_categories.
+        CREATE TABLE IF NOT EXISTS mob_assets (
+            id TEXT PRIMARY KEY,
+            mob_id TEXT NOT NULL REFERENCES mobs(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            asset_type TEXT DEFAULT 'Modelo 3D',
+            file_path TEXT DEFAULT '',
+            file_size INTEGER DEFAULT 0,
+            rarity TEXT DEFAULT 'common',
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_mob_assets_mob ON mob_assets(mob_id);
+    """),
+    (9, "Mobs panel — drop the example category folders (Chefes (Boss) / Elite) seeded by migration 7", """
+        -- Those two were only ever meant as a starting example; the user
+        -- wants the category tree empty by default and to build their
+        -- own from scratch, same reasoning as migration 7 dropping the
+        -- previous 12-folder seed list. Any mob already filed under
+        -- either one keeps its `category` value (no FK — see migration
+        -- 5's comment) and just falls back to the edit panel's
+        -- "Sem categoria" placeholder instead of losing the field.
+        DELETE FROM mob_categories WHERE id IN ('chefes_boss', 'elite');
+    """),
 ]
 
 

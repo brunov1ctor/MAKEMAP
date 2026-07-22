@@ -7,23 +7,22 @@ of a single frame swapping over time. Falls back to the painted needle
 whenever no navigation preset is active or has layers, so existing setups
 keep working until images are added.
 
-Once attached to a Viewport (attach_viewport):
+Once attached to a Viewport (attach_viewport), everything lives on the
+left button — where the press lands decides what it does:
 
-- Right-button drag, anywhere on the widget, moves the whole compass
-  (mirrors MiniMap's plain-drag-to-move — but the left button is already
-  busy with rotate/reset below, so moving needed its own button instead of
-  a dedicated grip widget/glyph).
-- Left-button drag rotates the whole map view (like turning a physical
-  board) — but only when the press actually lands on an opaque pixel of
-  the active "Anel de rotação" layer (role="ring_degrees"), not just
-  anywhere in the annular ring band by distance from center. Hovering that
-  same spot (without pressing) draws a soft highlight on the ring so it
-  reads as interactive. Falls back to the old distance-based check when no
-  such layer is configured (there's no graphic shape to test against).
-- A plain left click (or a left-drag on the ring that didn't actually
-  move) resets the rotation to north-up; double-clicking expands/collapses
-  the compass face, since a single click there is busy being the
-  "reset to north" button.
+- Left-button drag starting on an opaque pixel of the active "Anel de
+  rotação" layer (role="ring_degrees") rotates the whole map view (like
+  turning a physical board), not just anywhere in the annular ring band by
+  distance from center. Hovering that same spot (without pressing) draws a
+  soft highlight on the ring so it reads as interactive. Falls back to the
+  old distance-based check when no such layer is configured (there's no
+  graphic shape to test against).
+- Left-button press-and-drag starting anywhere else on the widget moves
+  the whole compass (mirrors MiniMap's plain-drag-to-move).
+- A plain left click with no real movement — whether it started on the
+  ring or off it — resets the rotation to north-up instead; double-
+  clicking expands/collapses the compass face, since a single click there
+  is busy being the "reset to north" button.
 
 Without an attached viewport the widget behaves exactly as before (no
 ring, single left click expands/collapses, no rotation/move drag).
@@ -70,6 +69,12 @@ _RING_HIT_ALPHA = 20
 # under the cursor would make grabbing it frustratingly precise, so a
 # small neighborhood around the point counts too.
 _RING_HIT_TOLERANCE = 10
+
+# Pixels of global-mouse travel below which a left-button press off the
+# ring still counts as "just a click" (reset to north) rather than a
+# move-drag — matches the same idea as the rotation drag's own
+# delta > 1.0 check, just in linear screen pixels instead of degrees.
+_MOVE_DRAG_THRESHOLD = 3
 
 
 @dataclass
@@ -118,13 +123,15 @@ def _layer_angle_opacity(layer: "_LayerRender", t: float, viewport) -> tuple[flo
 
 class Compass(QFrame):
     """Rosa dos ventos / pilha de camadas animadas. Sem Viewport conectado:
-    clique único expande/recolhe. Com Viewport conectado: botão direito
-    arrasta pra mover; clique/arrasto esquerdo no anel (pixel de verdade da
-    camada "Anel de rotação") gira o mapa; clique esquerdo fora do anel
-    reseta pro norte; duplo-clique no núcleo expande/recolhe."""
+    clique único expande/recolhe. Com Viewport conectado, tudo no botão
+    esquerdo: arrasto no anel (pixel de verdade da camada "Anel de
+    rotação") gira o mapa; arrasto fora do anel move a bússola; clique
+    simples (sem arrasto, dentro ou fora do anel) reseta pro norte;
+    duplo-clique no núcleo expande/recolhe."""
 
     expanded_changed = Signal(bool)
     moved = Signal()  # emitted once a right-button move-drag ends — mirrors MiniMap.moved
+    position_changed = Signal()  # emitted on every actual move, mid-drag included — see moveEvent
 
     COLLAPSED_SIZE = 104
     EXPANDED_SIZE = 240
@@ -149,6 +156,7 @@ class Compass(QFrame):
         self._rotation_drag_start_rotation = 0.0
 
         self._move_drag = False
+        self._move_drag_moved = False  # past _MOVE_DRAG_THRESHOLD => a real move, not a click
         self._move_drag_start_global = QPointF()
         self._move_drag_start_pos = None
 
@@ -275,8 +283,8 @@ class Compass(QFrame):
         return self._expanded
 
     def has_custom_position(self) -> bool:
-        """Whether the user has dragged this compass (right-button drag) —
-        mirrors MiniMap.has_custom_position(), so main_layout.py's
+        """Whether the user has dragged this compass (left-button drag off
+        the ring) — mirrors MiniMap.has_custom_position(), so main_layout.py's
         resizeEvent can clamp a user-chosen spot instead of overriding it
         with the default top-right anchor."""
         return self._user_positioned
@@ -342,12 +350,6 @@ class Compass(QFrame):
     def mousePressEvent(self, event):
         pos = event.position()
 
-        if event.button() == Qt.MouseButton.RightButton and self._viewport is not None:
-            self._move_drag = True
-            self._move_drag_start_global = event.globalPosition().toPoint()
-            self._move_drag_start_pos = self.pos()
-            return
-
         if event.button() != Qt.MouseButton.LeftButton:
             return
 
@@ -360,10 +362,16 @@ class Compass(QFrame):
             return
 
         if self._viewport is not None:
-            # Click's job outside the ring is "back to north" — expand/
-            # collapse moved to double-click (see mouseDoubleClickEvent) so
-            # it doesn't fight this on every single click.
-            self._viewport.set_rotation(0.0)
+            # Off the ring: could still turn into a move-drag (see
+            # mouseMoveEvent) — resolved on release (see
+            # mouseReleaseEvent): no real movement means it was just a
+            # click, whose job is "back to north". Expand/collapse moved
+            # to double-click (see mouseDoubleClickEvent) so it doesn't
+            # fight this on every single click.
+            self._move_drag = True
+            self._move_drag_moved = False
+            self._move_drag_start_global = event.globalPosition().toPoint()
+            self._move_drag_start_pos = self.pos()
         else:
             # No viewport attached (ring disabled) — behave exactly like
             # before the ring existed.
@@ -374,8 +382,11 @@ class Compass(QFrame):
 
         if self._move_drag:
             delta = event.globalPosition().toPoint() - self._move_drag_start_global
-            self.move(self._move_drag_start_pos + delta)
-            self._user_positioned = True
+            if delta.manhattanLength() > _MOVE_DRAG_THRESHOLD:
+                self._move_drag_moved = True
+            if self._move_drag_moved:
+                self.move(self._move_drag_start_pos + delta)
+                self._user_positioned = True
             return
 
         if self._rotation_drag and self._viewport is not None:
@@ -396,8 +407,14 @@ class Compass(QFrame):
 
     def mouseReleaseEvent(self, event):
         if self._move_drag:
+            moved = self._move_drag_moved
             self._move_drag = False
-            self.moved.emit()
+            if moved:
+                self.moved.emit()
+            elif self._viewport is not None:
+                # Press-release off the ring with no real movement is just
+                # a click, not a drag — its job is "back to north".
+                self._viewport.set_rotation(0.0)
             return
 
         # A press-release on the ring with no real movement is just a
@@ -414,6 +431,14 @@ class Compass(QFrame):
             self._viewport.set_rotation(0.0)
         else:
             self._toggle_expanded()
+
+    def moveEvent(self, event):
+        """Fires on every self.move() — including each intermediate step of
+        a move-drag, not just once it ends (that's `moved`, below) — so
+        anything anchored to this widget (e.g. CompassHUD) can track it
+        live instead of jumping to the final spot only after release."""
+        super().moveEvent(event)
+        self.position_changed.emit()
 
     def enterEvent(self, event):
         self._widget_hover = True

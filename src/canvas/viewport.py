@@ -66,22 +66,29 @@ def _apply_blur(pixmap: QPixmap, params: dict) -> QPixmap:
 
 
 def _apply_chromatic(pixmap: QPixmap, params: dict) -> QPixmap:
-    """Fakes chromatic aberration by ghosting two offset copies with additive
-    blending under the sharp original — not a true per-channel split, but
-    visually close and far cheaper."""
+    """Fakes chromatic aberration by ghosting two offset, red/cyan-tinted
+    copies additively over the sharp original — not a true per-channel
+    split, but visually close and far cheaper.
+
+    Two bugs fixed here: (1) the previous version drew the sharp original
+    on top LAST at full opacity, which — for any ordinary opaque layer —
+    completely overwrote the ghost copies underneath, making the whole
+    effect invisible outside of translucent edge pixels. The sharp copy
+    now goes down FIRST, with the tinted ghosts layered on top instead.
+    (2) both ghost copies were the exact same unmodified pixmap, just
+    offset — no actual color separation, so even where it *was* visible
+    it read as double-exposure blur rather than color fringing. They're
+    now tinted red/cyan (SourceAtop, same technique as _apply_tint) before
+    being ghosted."""
     offset = float(params.get("offset_px", 2.0))
     if offset <= 0:
         return pixmap
-    result = QPixmap(pixmap.size())
-    result.fill(Qt.GlobalColor.transparent)
+    result = QPixmap(pixmap)  # sharp base, drawn first so it isn't erased
     painter = QPainter(result)
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-    painter.setOpacity(0.5)
-    painter.drawPixmap(QPointF(-offset, 0), pixmap)
-    painter.drawPixmap(QPointF(offset, 0), pixmap)
-    painter.setOpacity(1.0)
-    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-    painter.drawPixmap(0, 0, pixmap)
+    painter.setOpacity(0.55)
+    painter.drawPixmap(QPointF(-offset, 0), _apply_tint(pixmap, {"color": "#FF3B30", "strength": 0.9}))
+    painter.drawPixmap(QPointF(offset, 0), _apply_tint(pixmap, {"color": "#00E5FF", "strength": 0.9}))
     painter.end()
     return result
 
@@ -314,13 +321,18 @@ class Viewport(QGraphicsView):
             painter.scale(scale, scale)
             painter.translate(-cx, -cy)
 
-            # Python's % always returns a result in [0, tile) for a
-            # positive divisor, even when the offset itself is negative
-            # (negative speed) — exactly the wrap-around we want.
-            offset_x = (view_rect.left() * layer.speed_x) % tile_w
-            offset_y = (view_rect.top() * layer.speed_y) % tile_h
-            x0 = view_rect.left() - offset_x
-            y0 = view_rect.top() - offset_y
+            # Parallax layers are pure background decoration — they must
+            # NOT track the camera pan (dragging/panning the canvas used
+            # to shift each layer by view_rect.left()/top() * speed_x/y,
+            # which read as "the background reacts to the mouse"). Tiling
+            # from the view's own current edge with no pan-derived offset
+            # keeps every layer visually pinned to the screen regardless
+            # of where the camera pans to; speed_x/speed_y are kept on
+            # ParallaxLayer (old presets still load fine) but are no
+            # longer consulted here — orbit drift/wave/pulses are the
+            # only motion left, and none of those read mouse input either.
+            x0 = view_rect.left()
+            y0 = view_rect.top()
 
             if layer.tile_mode == "fade" and render_layer.faded is not None:
                 step = tile_w * 0.85  # slight overlap so the faded edges blend

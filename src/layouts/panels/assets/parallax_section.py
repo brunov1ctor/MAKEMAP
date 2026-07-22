@@ -22,6 +22,18 @@ from src.engines.map.parallax import get_parallax_library, LayerEffect, EFFECT_K
 
 _EFFECT_LABELS = dict(EFFECT_KINDS)
 
+# Shown on each effect's checkbox — none of the 4 kinds had any explanation
+# in the UI itself before (only the JSON-template help text documented
+# them, invisible unless that panel happened to be open), which is exactly
+# why "tingir cor" read as unclear to a user just clicking through the
+# per-layer effects list.
+_EFFECT_TOOLTIPS = {
+    "tint": "Tinge a camada com a Cor escolhida, na intensidade de Força — 0% não altera nada, 100% substitui a cor original inteiramente.",
+    "blur": "Desfoca a camada (efeito de profundidade/distância) — Raio maior = mais desfocado.",
+    "chromatic": "Aberração cromática: separa levemente as cores (vermelho/ciano) nas bordas, como uma lente com distorção óptica — Desloc. maior = franja mais visível.",
+    "wave": "Ondula a camada horizontalmente ao longo do tempo — Amplit. controla o quanto desloca, Freq. quantas ondas cabem na imagem, Veloc. a rapidez da animação.",
+}
+
 _IMG_FILTER = "Imagens (*.png *.jpg *.jpeg *.webp *.bmp)"
 
 
@@ -41,6 +53,36 @@ def _has_transparency(image_path: str) -> bool:
             if small.pixelColor(x, y).alpha() < 250:
                 return True
     return False
+
+
+def _reorder_hides_layer(layers, source_index: int, target_index: int) -> bool:
+    """Would moving `source_index` to `target_index` place a transparent
+    layer behind an opaque one, or an opaque one in front of a
+    transparent one? Lower list index = drawn first = further back (see
+    ParallaxLayer.order / Viewport.drawBackground's paint loop) — a
+    no-alpha layer fully covers whatever was painted before it, so any
+    layer sitting behind one (at a lower index) becomes invisible. Used
+    to reject drags that would silently hide a layer instead of letting
+    it happen and leaving the user hunting for why an effect vanished
+    (the "sem alfa" badge/tooltip on each row already warns about this,
+    but doesn't stop it)."""
+    n = len(layers)
+    if not (0 <= source_index < n) or not (0 <= target_index < n) or source_index == target_index:
+        return False
+    order = list(layers)
+    order.insert(target_index, order.pop(source_index))
+    opaque_indices = [i for i, l in enumerate(order) if not _has_transparency(l.image_path)]
+    transparent_indices = [i for i, l in enumerate(order) if _has_transparency(l.image_path)]
+    if not opaque_indices or not transparent_indices:
+        return False  # nothing to protect either way
+    return max(opaque_indices) > min(transparent_indices)
+
+
+def _divider() -> QFrame:
+    line = QFrame()
+    line.setFixedHeight(1)
+    line.setStyleSheet(f"background: {Colors.BORDER_SUBTLE}; border: none;")
+    return line
 
 
 def _parse_layers_json(text: str) -> list[dict]:
@@ -864,16 +906,17 @@ class ParallaxPresetSection(QFrame):
             orbit_period_stepper.value_changed.connect(lambda v, i=index: self._on_param_changed(i, "orbit_period", v))
             params_row.addWidget(orbit_period_stepper)
         else:
-            # Fine precision (down to 0.001) and negative range, so a layer can
-            # drift opposite the pan or barely move at all — matches typical
-            # multi-layer starfield/space parallax configs (e.g. speedX: -0.005).
-            speed_x_stepper = NumberStepper("Vel. X", "↔", -2.0, 2.0, layer.speed_x, step=0.001, decimals=3)
-            speed_x_stepper.value_changed.connect(lambda v, i=index: self._on_param_changed(i, "speed_x", v))
-            params_row.addWidget(speed_x_stepper)
-
-            speed_y_stepper = NumberStepper("Vel. Y", "↕", -2.0, 2.0, layer.speed_y, step=0.001, decimals=3)
-            speed_y_stepper.value_changed.connect(lambda v, i=index: self._on_param_changed(i, "speed_y", v))
-            params_row.addWidget(speed_y_stepper)
+            # Vel. X/Vel. Y (speed_x/speed_y) used to live here, but parallax
+            # layers no longer track the camera pan at all (see Viewport.
+            # _draw_parallax_layer) — they're pure background decoration, not
+            # something that should shift when you drag/pan the canvas.
+            # "Scroll" now just means "static tiled background"; the old
+            # speed fields stay on ParallaxLayer (so existing presets still
+            # load) but nothing reads them anymore, so there's no control
+            # for them here either.
+            fixed_lbl = QLabel("Fixo na tela — não se move com o pan do mapa")
+            fixed_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 8pt; font-style: italic; background: transparent; border: none;")
+            params_row.addWidget(fixed_lbl)
 
         opacity_stepper = NumberStepper("Opac.", "👁", 0, 100, layer.opacity * 100, step=1, decimals=0, suffix="%")
         opacity_stepper.setToolTip(
@@ -906,39 +949,58 @@ class ParallaxPresetSection(QFrame):
 
         effects_widget = QWidget()
         effects_widget.setVisible(False)
-        effects_lay = QVBoxLayout(effects_widget)
-        effects_lay.setContentsMargins(4, 4, 4, 4)
-        effects_lay.setSpacing(6)
+        effects_outer = QVBoxLayout(effects_widget)
+        effects_outer.setContentsMargins(0, 4, 0, 0)
+        effects_outer.setSpacing(0)
 
-        opacity_pulse_block = self._build_minmax_pulse_block(
+        # One shared card for the whole "Efeitos" section instead of 4
+        # separately-bordered/padded frames stacked on top of each other —
+        # that used to cost 4x the frame margin/border overhead plus a
+        # dedicated full-width checkbox row above each pulse's steppers.
+        # Checkbox now sits inline with its steppers (same row), matching
+        # the shader-effects rows below, which already did this correctly.
+        effects_card = QFrame()
+        effects_card.setStyleSheet(f"QFrame {{ background: rgba(255,255,255,0.02); border-radius: 4px; }}")
+        effects_lay = QVBoxLayout(effects_card)
+        effects_lay.setContentsMargins(6, 6, 6, 6)
+        effects_lay.setSpacing(4)
+
+        opacity_pulse_row = self._build_minmax_pulse_row(
             index=index, title="Pulsar opacidade",
             enabled=layer.opacity_pulse,
             min_display=layer.opacity_min * 100, max_display=layer.opacity_max * 100,
             period=layer.opacity_period,
             enabled_key="opacity_pulse", min_key="opacity_min", max_key="opacity_max",
             period_key="opacity_period", write_scale=100.0, suffix="%", val_range=(0, 100),
+            tooltip=(
+                "Min./Máx. são uma fração da opacidade base (\"Opac.\" acima) — não um valor absoluto. "
+                "Ex.: Opac. 80% + faixa 60%-100% oscila entre 48% e 80% de opacidade visível."
+            ),
         )
-        opacity_pulse_block.setToolTip(
-            "Min./Máx. são uma fração da opacidade base (\"Opac.\" acima) — não um valor absoluto. "
-            "Ex.: Opac. 80% + faixa 60%-100% oscila entre 48% e 80% de opacidade visível."
-        )
-        effects_lay.addWidget(opacity_pulse_block)
-        effects_lay.addWidget(self._build_minmax_pulse_block(
+        effects_lay.addLayout(opacity_pulse_row)
+        effects_lay.addWidget(_divider())
+        effects_lay.addLayout(self._build_minmax_pulse_row(
             index=index, title="Escala",
             enabled=layer.scale_pulse,
             min_display=layer.scale_min, max_display=layer.scale_max,
             period=layer.scale_period,
             enabled_key="scale_pulse", min_key="scale_min", max_key="scale_max",
             period_key="scale_period", write_scale=1.0, suffix="%", val_range=(10, 300),
+            tooltip="Faz a camada crescer/encolher periodicamente entre Mín. e Máx. (em % do tamanho original).",
         ))
-        effects_lay.addWidget(self._build_amplitude_pulse_block(
+        effects_lay.addWidget(_divider())
+        effects_lay.addLayout(self._build_amplitude_pulse_row(
             index=index, title="Rotação",
             enabled=layer.rotation_pulse, amplitude=layer.rotation_amplitude,
             period=layer.rotation_period,
             enabled_key="rotation_pulse", amplitude_key="rotation_amplitude",
             period_key="rotation_period",
+            tooltip="Balança a camada de um lado a outro entre -Amplitude e +Amplitude graus.",
         ))
-        effects_lay.addWidget(self._build_shader_effects_block(index, layer))
+        effects_lay.addWidget(_divider())
+        effects_lay.addLayout(self._build_shader_effects_section(index, layer))
+
+        effects_outer.addWidget(effects_card)
 
         def _toggle_effects(checked, btn=effects_btn, widget=effects_widget):
             widget.setVisible(checked)
@@ -995,88 +1057,79 @@ class ParallaxPresetSection(QFrame):
             }}
         """
 
-    def _build_minmax_pulse_block(
+    def _build_minmax_pulse_row(
         self, index: int, title: str, enabled: bool, min_display: float, max_display: float,
         period: float, enabled_key: str, min_key: str, max_key: str, period_key: str,
-        write_scale: float, suffix: str, val_range: tuple,
-    ) -> QWidget:
-        block = QFrame()
-        block.setStyleSheet(
-            f"QFrame {{ background: rgba(255,255,255,0.02); border-radius: 4px; }}"
-        )
-        lay = QVBoxLayout(block)
-        lay.setContentsMargins(6, 4, 6, 4)
-        lay.setSpacing(4)
+        write_scale: float, suffix: str, val_range: tuple, tooltip: str = "",
+    ) -> QHBoxLayout:
+        """Checkbox inline with its steppers in one row instead of a
+        dedicated full-width checkbox row above them — same shape as
+        _build_shader_effect_row, just with a fixed (not free-form) set of
+        steppers. Saves a whole row per pulse type."""
+        row = QHBoxLayout()
+        row.setSpacing(6)
 
         check = QCheckBox(title)
         check.setChecked(enabled)
         check.setStyleSheet(f"QCheckBox {{ color: {Colors.TEXT_PRIMARY}; font-size: 9pt; background: transparent; spacing: 6px; }}")
         check.toggled.connect(lambda v, i=index, k=enabled_key: self._on_param_changed(i, k, v))
-        lay.addWidget(check)
+        if tooltip:
+            check.setToolTip(tooltip)
+        row.addWidget(check)
 
-        steppers_row = QHBoxLayout()
-        steppers_row.setSpacing(6)
         lo, hi = val_range
 
         min_stepper = NumberStepper("Mín.", "▽", lo, hi, min_display, step=1, decimals=0, suffix=suffix)
         min_stepper.value_changed.connect(
             lambda v, i=index, k=min_key, s=write_scale: self._on_param_changed(i, k, v / s)
         )
-        steppers_row.addWidget(min_stepper)
+        row.addWidget(min_stepper)
 
         max_stepper = NumberStepper("Máx.", "△", lo, hi, max_display, step=1, decimals=0, suffix=suffix)
         max_stepper.value_changed.connect(
             lambda v, i=index, k=max_key, s=write_scale: self._on_param_changed(i, k, v / s)
         )
-        steppers_row.addWidget(max_stepper)
+        row.addWidget(max_stepper)
 
         period_stepper = NumberStepper("Período", "⏱", 0.5, 60, period, step=0.5, decimals=1, suffix="s")
         period_stepper.value_changed.connect(lambda v, i=index, k=period_key: self._on_param_changed(i, k, v))
-        steppers_row.addWidget(period_stepper)
+        row.addWidget(period_stepper)
 
-        lay.addLayout(steppers_row)
-        return block
+        return row
 
-    def _build_amplitude_pulse_block(
+    def _build_amplitude_pulse_row(
         self, index: int, title: str, enabled: bool, amplitude: float, period: float,
-        enabled_key: str, amplitude_key: str, period_key: str,
-    ) -> QWidget:
-        block = QFrame()
-        block.setStyleSheet(
-            f"QFrame {{ background: rgba(255,255,255,0.02); border-radius: 4px; }}"
-        )
-        lay = QVBoxLayout(block)
-        lay.setContentsMargins(6, 4, 6, 4)
-        lay.setSpacing(4)
+        enabled_key: str, amplitude_key: str, period_key: str, tooltip: str = "",
+    ) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(6)
 
         check = QCheckBox(title)
         check.setChecked(enabled)
         check.setStyleSheet(f"QCheckBox {{ color: {Colors.TEXT_PRIMARY}; font-size: 9pt; background: transparent; spacing: 6px; }}")
         check.toggled.connect(lambda v, i=index, k=enabled_key: self._on_param_changed(i, k, v))
-        lay.addWidget(check)
-
-        steppers_row = QHBoxLayout()
-        steppers_row.setSpacing(6)
+        if tooltip:
+            check.setToolTip(tooltip)
+        row.addWidget(check)
 
         amp_stepper = NumberStepper("Amplitude", "↻", 0, 45, amplitude, step=0.5, decimals=1, suffix="°")
         amp_stepper.value_changed.connect(lambda v, i=index, k=amplitude_key: self._on_param_changed(i, k, v))
-        steppers_row.addWidget(amp_stepper)
+        row.addWidget(amp_stepper)
 
         period_stepper = NumberStepper("Período", "⏱", 0.5, 60, period, step=0.5, decimals=1, suffix="s")
         period_stepper.value_changed.connect(lambda v, i=index, k=period_key: self._on_param_changed(i, k, v))
-        steppers_row.addWidget(period_stepper)
+        row.addWidget(period_stepper)
 
-        lay.addLayout(steppers_row)
-        return block
+        return row
 
-    def _build_shader_effects_block(self, index: int, layer) -> QWidget:
+    def _build_shader_effects_section(self, index: int, layer) -> QVBoxLayout:
         """Lightweight CPU 'shaders' (tint/blur/chromatic/wave) — a free-form
         list, unlike the fixed opacity/scale/rotation pulses above, since a
-        layer can have zero, one, or several of these stacked."""
-        block = QFrame()
-        block.setStyleSheet(f"QFrame {{ background: rgba(255,255,255,0.02); border-radius: 4px; }}")
-        lay = QVBoxLayout(block)
-        lay.setContentsMargins(6, 4, 6, 4)
+        layer can have zero, one, or several of these stacked. No frame of
+        its own anymore — it shares the one "Efeitos" card built by the
+        caller (_build_layer_row) instead of stacking a 4th bordered box."""
+        lay = QVBoxLayout()
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
         header = QHBoxLayout()
@@ -1091,6 +1144,11 @@ class ParallaxPresetSection(QFrame):
         kind_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         for kind, label in EFFECT_KINDS:
             kind_combo.addItem(label, kind)
+        # Explains each option before it's even added — the checkbox row
+        # created after "+ Efeito" repeats the same tooltip, but a user
+        # deciding WHICH effect to add couldn't see this at all before.
+        for i, (kind, _label) in enumerate(EFFECT_KINDS):
+            kind_combo.setItemData(i, _EFFECT_TOOLTIPS.get(kind, ""), Qt.ItemDataRole.ToolTipRole)
         header.addWidget(kind_combo)
 
         add_btn = QToolButton()
@@ -1108,7 +1166,7 @@ class ParallaxPresetSection(QFrame):
         for effect_index, effect in enumerate(layer.effects):
             lay.addWidget(self._build_shader_effect_row(index, effect_index, effect))
 
-        return block
+        return lay
 
     def _build_shader_effect_row(self, index: int, effect_index: int, effect) -> QWidget:
         row = QFrame()
@@ -1123,6 +1181,10 @@ class ParallaxPresetSection(QFrame):
         check.setChecked(effect.enabled)
         check.setStyleSheet(f"QCheckBox {{ color: {Colors.TEXT_PRIMARY}; font-size: 8pt; background: transparent; spacing: 4px; }}")
         check.toggled.connect(lambda v, i=index, ei=effect_index: self._on_effect_param_changed(i, ei, enabled=v))
+        tooltip = _EFFECT_TOOLTIPS.get(effect.kind, "")
+        if tooltip:
+            check.setToolTip(tooltip)
+            row.setToolTip(tooltip)
         lay.addWidget(check)
 
         def _param_stepper(label, icon, lo, hi, value, step, decimals, suffix, key, scale=1.0):
@@ -1197,6 +1259,13 @@ class ParallaxPresetSection(QFrame):
         self._refresh_json_template_if_open()
 
     def _on_reorder_layer(self, source_index: int, target_index: int):
+        preset = get_parallax_library().get_preset(self.preset_key)
+        if preset and _reorder_hides_layer(preset.layers, source_index, target_index):
+            # Rejected — see _reorder_hides_layer. Still rebuild so the
+            # dragged row snaps back to its real (unchanged) position
+            # instead of appearing stuck wherever the ghost was dropped.
+            self._refresh_layers()
+            return
         get_parallax_library().reorder_layer(self.preset_key, source_index, target_index)
         # Full rebuild: the "#N" position labels and every row's captured
         # `index` closure need to reflect the new order.

@@ -60,6 +60,37 @@ class MobRepository(BaseRepository):
         return self.get_all(region_id=region_id)
 
 
+class MobCategoryRepository(BaseRepository):
+    """Directory-style tree for the Mobs panel's category sidebar — see
+    migration 5 in schema.py. parent_id NULL means a root-level folder."""
+    TABLE = "mob_categories"
+
+    def get_children(self, parent_id: str | None) -> list[dict]:
+        sql = f"SELECT * FROM {self.TABLE} WHERE parent_id IS ? ORDER BY sort_order, name"
+        return [dict(r) for r in self.db.fetchall(sql, (parent_id,))]
+
+    def get_path(self, category_id: str | None) -> list[dict]:
+        """Root-to-leaf breadcrumb chain for `category_id` — empty list at
+        the root or if the id no longer exists (folder was deleted)."""
+        path = []
+        current = self.get(category_id) if category_id else None
+        while current:
+            path.append(current)
+            current = self.get(current["parent_id"]) if current.get("parent_id") else None
+        return list(reversed(path))
+
+
+class MobAssetRepository(BaseRepository):
+    """Stamp assets attached to a mob (see migration 8) — the eventual
+    canvas "Mobs" placement tool will place one of these, same idea as
+    BrushTool's object-stamp mode but tied to a specific mob record."""
+    TABLE = "mob_assets"
+
+    def get_by_mob(self, mob_id: str) -> list[dict]:
+        sql = f"SELECT * FROM {self.TABLE} WHERE mob_id = ? ORDER BY sort_order, created_at"
+        return [dict(r) for r in self.db.fetchall(sql, (mob_id,))]
+
+
 class BossRepository(BaseRepository):
     TABLE = "bosses"
 

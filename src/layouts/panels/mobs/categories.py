@@ -3,7 +3,12 @@ edit widgets — kept in one place so labels/icons never drift between them."""
 
 from __future__ import annotations
 
-# Real creature families — stored verbatim in mobs.category.
+# Original fixed creature families — now just the seed data migration 5
+# (src/database/migrations/schema.py) inserts as root folders in
+# mob_categories on first run. Categories are a persisted directory tree
+# from that point on (see MobCategoryRepository); this list is kept only
+# as a record of what the seed contains; nothing reads it at runtime
+# anymore.
 CATEGORY_DEFS: list[tuple[str, str, str]] = [
     ("npc_hostil", "☠", "NPC Hostil"),
     ("animais", "🐺", "Animais"),
@@ -18,16 +23,32 @@ CATEGORY_DEFS: list[tuple[str, str, str]] = [
     ("demoniacos", "👹", "Demoníacos"),
     ("outros", "❔", "Outros"),
 ]
-CATEGORY_LABELS = {key: label for key, _icon, label in CATEGORY_DEFS}
-CATEGORY_ICONS = {key: icon for key, icon, _label in CATEGORY_DEFS}
 
-# Smart filters — computed over other columns (favorite/rarity), not a
-# distinct category value of their own.
+# Runtime lookup — refreshed by MobsPanel every time it (re)loads the
+# category folder tree from the DB (see MobsPanel._reload_categories), so
+# code that only has a mob's category id (MobCard's icon badge, etc.) can
+# resolve an icon/name without needing DB access of its own. Seeded from
+# the fixed list above so lookups aren't empty before the first reload.
+_category_lookup: dict[str, dict] = {key: {"icon": icon, "name": label} for key, icon, label in CATEGORY_DEFS}
+
+
+def set_category_lookup(categories: list[dict]):
+    """`categories` is every row of mob_categories (any depth) — each dict
+    needs at least "id", "name", "icon"."""
+    global _category_lookup
+    _category_lookup = {c["id"]: c for c in categories}
+
+
+# Smart filters — computed over other columns (favorite), not a distinct
+# category value of their own. Chefes (Boss) and Elite used to live here
+# too (computed from mobs.rarity) but became real navigable folders in
+# the category tree instead (see migration 7) — Todos and Favoritos stay
+# pinned smart filters since neither makes sense as an assignable folder
+# ("Todos" is just the root view; favorite is a per-mob flag, not a
+# hierarchical grouping).
 SMART_FILTERS: list[tuple[str, str, str]] = [
     ("todos", "📋", "Todos"),
     ("favoritos", "⭐", "Favoritos"),
-    ("chefes", "👑", "Chefes (Boss)"),
-    ("elite", "💠", "Elite"),
 ]
 
 RARITY_DEFS: list[tuple[str, str, str]] = [
@@ -40,7 +61,25 @@ RARITY_DEFS: list[tuple[str, str, str]] = [
 RARITY_LABELS = {key: label for key, _color, label in RARITY_DEFS}
 RARITY_COLORS = {key: color for key, color, _label in RARITY_DEFS}
 
+# Separate loot-tier scale (items.rarity, mobs.abilities_json entries,
+# mob_assets.rarity) — items already existed with this DEFAULT 'common'
+# before the Mobs panel's Informações Extras started referencing them, so
+# this mirrors that scale/convention (common/uncommon/rare/epic/legendary)
+# rather than reusing RARITY_DEFS above, which is mob-difficulty specific
+# (Normal/Raro/Elite/Chefe/Mítico) and has no "Épico" tier at all.
+ITEM_RARITY_DEFS: list[tuple[str, str, str]] = [
+    ("common", "#9AA5B1", "Comum"),
+    ("uncommon", "#66BB6A", "Incomum"),
+    ("rare", "#4FC3F7", "Raro"),
+    ("epic", "#AB47BC", "Épico"),
+    ("legendary", "#FFA726", "Lendário"),
+]
+ITEM_RARITY_LABELS = {key: label for key, _color, label in ITEM_RARITY_DEFS}
+ITEM_RARITY_COLORS = {key: color for key, color, _label in ITEM_RARITY_DEFS}
+
+TIPO_OPTIONS = ["Inimigo", "Aliado", "Neutro", "Chefe"]
 ELEMENT_OPTIONS = ["", "Fogo", "Gelo", "Raio", "Terra", "Água", "Vento", "Sagrado", "Sombrio", "Veneno"]
+EFFECT_OPTIONS = ["", "Aura", "Brilho", "Fumaça", "Chamas", "Partículas", "Névoa"]
 AI_TYPE_OPTIONS = ["Agressivo", "Defensivo", "Passivo", "Covarde", "Territorial"]
 BEHAVIOR_OPTIONS = ["Territorial", "Errante", "Em Bando", "Solitário", "Emboscada"]
 ALIGNMENT_OPTIONS = ["Hostil", "Neutro", "Cauteloso"]
@@ -62,11 +101,11 @@ RESISTANCE_KEYS = [
 
 
 def category_label(key: str) -> str:
-    return CATEGORY_LABELS.get(key, "Outros")
+    return _category_lookup.get(key, {}).get("name", "Outros")
 
 
 def category_icon(key: str) -> str:
-    return CATEGORY_ICONS.get(key, "❔")
+    return _category_lookup.get(key, {}).get("icon", "❔")
 
 
 def rarity_label(key: str) -> str:
@@ -75,3 +114,11 @@ def rarity_label(key: str) -> str:
 
 def rarity_color(key: str) -> str:
     return RARITY_COLORS.get(key, "#9AA5B1")
+
+
+def item_rarity_label(key: str) -> str:
+    return ITEM_RARITY_LABELS.get(key, "Comum")
+
+
+def item_rarity_color(key: str) -> str:
+    return ITEM_RARITY_COLORS.get(key, "#9AA5B1")
