@@ -74,9 +74,10 @@ class MobsPanel(
     _LEFT_MIN_W = 264
     _LEFT_MAX_W = 320
 
-    def __init__(self, uow, zones_provider=None, parent=None):
+    def __init__(self, uow, zones_provider=None, project_dir=None, parent=None):
         super().__init__(parent)
         self._uow = uow
+        self._project_dir = project_dir
         self._zones_provider = zones_provider or (lambda: [])
         self._mobs: list[dict] = []
         self._selected_id = ""
@@ -103,6 +104,12 @@ class MobsPanel(
         self._ui_ready = True
         self._reload()
         self._apply_responsive_layout()
+        # Open the panel with a blank draft already staged in the edit
+        # column instead of the "Nenhum mob selecionado" empty state — same
+        # draft _on_new_mob() prepares on click, just fired once up front so
+        # the user doesn't have to click "+ Novo Mob" for the common case of
+        # opening the panel to create something.
+        self._on_new_mob()
 
     # ─── UI construction ───
 

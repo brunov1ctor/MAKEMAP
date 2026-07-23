@@ -677,6 +677,184 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         -- association silently reset on every reload.
         ALTER TABLE painted_zones ADD COLUMN terrain_id TEXT DEFAULT '';
     """),
+    (12, "Itens e Habilidades panel — extend items with editor fields, add skills + skill_trees", """
+        -- The Itens/Habilidades screen (ItemsSkillsPanel) needs a handful
+        -- of first-class columns the old `items` row didn't carry. Most of
+        -- the editor's numeric fields (peso, valor, durabilidade, dano,
+        -- flags, tags, …) live in the free-form `stats` JSON blob that was
+        -- always there; only the ones worth filtering/sorting by in the
+        -- list column get real columns here. `code` is the human-facing id
+        -- shown in the editor header ("ITM_1001") — distinct from the uuid
+        -- primary key, same split skills use below.
+        ALTER TABLE items ADD COLUMN code TEXT DEFAULT '';
+        ALTER TABLE items ADD COLUMN subcategory TEXT DEFAULT '';
+        ALTER TABLE items ADD COLUMN favorite INTEGER DEFAULT 0;
+
+        -- Skills (Habilidades) — brand new. Mirrors the items shape: a few
+        -- real columns for the list/filters, everything else (área, alcance,
+        -- durações, custos secundários, flags) in the `stats` JSON blob so
+        -- the editor's tabs can grow without a migration each time.
+        CREATE TABLE IF NOT EXISTS skills (
+            id TEXT PRIMARY KEY,
+            code TEXT DEFAULT '',
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            category TEXT DEFAULT 'Ataque',
+            rarity TEXT DEFAULT 'common',
+            level INTEGER DEFAULT 1,
+            cooldown REAL DEFAULT 0,
+            mana_cost INTEGER DEFAULT 0,
+            element TEXT DEFAULT '',
+            stats TEXT DEFAULT '{}',
+            icon TEXT DEFAULT '',
+            image_path TEXT DEFAULT '',
+            favorite INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(category);
+
+        -- Árvore de Habilidades — one row per element tab (Fogo/Terra/Água/…).
+        -- The whole node graph for that tab (nodes with positions, ranks and
+        -- their connections) is stored as a single JSON document in `data`,
+        -- same loose-tag philosophy painted_zones/canvas_items use: the tree
+        -- is a UI layout artifact, not something other tables FK into, so a
+        -- self-contained blob keyed by tab is the least-friction store.
+        CREATE TABLE IF NOT EXISTS skill_trees (
+            tree_key TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            icon TEXT DEFAULT '🔥',
+            sort_order INTEGER DEFAULT 0,
+            data TEXT DEFAULT '{\"nodes\": [], \"edges\": []}',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+    """),
+    (13, "Dungeons e Construções panel — buildings (base) table + dungeon editor fields", """
+        -- Construções da base. Mesma divisão que items/skills usam: colunas
+        -- reais só para o que a lista filtra/ordena e para o que a árvore de
+        -- progressão precisa ler (tier/parent_id/status); o resto — custos,
+        -- requisitos, produção, imagens de destaque — vai em blobs JSON, para
+        -- as seções do editor crescerem sem uma migration a cada campo novo.
+        CREATE TABLE IF NOT EXISTS buildings (
+            id TEXT PRIMARY KEY,
+            code TEXT DEFAULT '',
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            category TEXT DEFAULT 'Produção',
+            subcategory TEXT DEFAULT '',
+            icon TEXT DEFAULT '',
+            image TEXT DEFAULT '',
+            level INTEGER DEFAULT 1,
+            max_level INTEGER DEFAULT 5,
+            build_time TEXT DEFAULT '00:00:00',
+            structure TEXT DEFAULT 'Simples',
+            -- Posição na árvore de progressão: o tier é a linha, parent_id a
+            -- aresta que liga esta construção à que a destrava.
+            tier INTEGER DEFAULT 1,
+            parent_id TEXT REFERENCES buildings(id) ON DELETE SET NULL,
+            status TEXT DEFAULT 'disponivel',
+            sort_order INTEGER DEFAULT 0,
+            costs TEXT DEFAULT '[]',
+            requirements TEXT DEFAULT '[]',
+            visuals TEXT DEFAULT '[]',
+            production TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_buildings_parent ON buildings(parent_id);
+
+        -- Dungeons já existiam desde a migration 1 com o mínimo (nome,
+        -- faixa de nível, dificuldade, salas). O editor da tela nova pede
+        -- bastante coisa a mais; mesma regra de blob para listas.
+        ALTER TABLE dungeons ADD COLUMN code TEXT DEFAULT '';
+        ALTER TABLE dungeons ADD COLUMN dungeon_type TEXT DEFAULT 'Exploração';
+        ALTER TABLE dungeons ADD COLUMN image TEXT DEFAULT '';
+        ALTER TABLE dungeons ADD COLUMN est_time TEXT DEFAULT '00:00';
+        ALTER TABLE dungeons ADD COLUMN group_min INTEGER DEFAULT 1;
+        ALTER TABLE dungeons ADD COLUMN group_max INTEGER DEFAULT 4;
+        ALTER TABLE dungeons ADD COLUMN biome TEXT DEFAULT '';
+        ALTER TABLE dungeons ADD COLUMN floors INTEGER DEFAULT 1;
+        ALTER TABLE dungeons ADD COLUMN generation TEXT DEFAULT 'Linear';
+        ALTER TABLE dungeons ADD COLUMN checkpoints INTEGER DEFAULT 0;
+        ALTER TABLE dungeons ADD COLUMN secret_rooms INTEGER DEFAULT 0;
+        ALTER TABLE dungeons ADD COLUMN rewards TEXT DEFAULT '[]';
+        ALTER TABLE dungeons ADD COLUMN encounters TEXT DEFAULT '[]';
+        ALTER TABLE dungeons ADD COLUMN bosses TEXT DEFAULT '[]';
+        ALTER TABLE dungeons ADD COLUMN modifiers TEXT DEFAULT '{}';
+        ALTER TABLE dungeons ADD COLUMN req_level INTEGER DEFAULT 1;
+        ALTER TABLE dungeons ADD COLUMN req_quest TEXT DEFAULT '';
+        ALTER TABLE dungeons ADD COLUMN req_item TEXT DEFAULT '';
+        ALTER TABLE dungeons ADD COLUMN active INTEGER DEFAULT 1;
+        ALTER TABLE dungeons ADD COLUMN visible_on_map INTEGER DEFAULT 1;
+        ALTER TABLE dungeons ADD COLUMN group_available INTEGER DEFAULT 0;
+        -- Telemetria exibida em "Informações Adicionais" — preenchida por
+        -- quem integrar o jogo; a tela só lê.
+        ALTER TABLE dungeons ADD COLUMN success_rate REAL DEFAULT 0;
+        ALTER TABLE dungeons ADD COLUMN completions INTEGER DEFAULT 0;
+        ALTER TABLE dungeons ADD COLUMN best_time TEXT DEFAULT '';
+        ALTER TABLE dungeons ADD COLUMN attempts INTEGER DEFAULT 0;
+    """),
+    (14, "Dungeons e Construções panel — customizable category/type tabs", """
+        -- Abas editáveis (criar/renomear/excluir) para o filtro de
+        -- Categoria (Construções) e Tipo (Dungeons), substituindo as
+        -- listas fixas que viviam só no código. Flat (sem parent_id) —
+        -- ao contrário de mob_categories, aqui não há necessidade de
+        -- pastas aninhadas, só uma fileira de abas.
+        --
+        -- buildings.category / dungeons.dungeon_type continuam TEXT livre
+        -- (sem FK) guardando o NOME da aba, não um id — mesma filosofia
+        -- que mobs.category já usa: renomear faz um UPDATE em cascata
+        -- pelo nome antigo, excluir uma aba não apaga nem desvincula
+        -- construções/dungeons já existentes, elas só ficam com um nome
+        -- que não corresponde a nenhuma aba atual (mesmo comportamento
+        -- que uma categoria de mob excluída já tem).
+        CREATE TABLE IF NOT EXISTS building_categories (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            icon TEXT DEFAULT '🏛',
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS dungeon_types (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            icon TEXT DEFAULT '🕳',
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        -- Seed com as mesmas categorias/tipos que o painel já semeava via
+        -- Templates, para quem já tem construções/dungeons continuar
+        -- vendo as mesmas abas depois da migração.
+        INSERT OR IGNORE INTO building_categories (id, name, icon, sort_order) VALUES
+            ('producao', 'Produção', '⚒', 0),
+            ('defesa', 'Defesa', '🛡', 1),
+            ('militar', 'Militar', '⚔', 2),
+            ('pesquisa', 'Pesquisa', '🔬', 3),
+            ('armazenamento', 'Armazenamento', '📦', 4),
+            ('social', 'Social', '🏘', 5),
+            ('especial', 'Especial', '🌟', 6);
+        INSERT OR IGNORE INTO dungeon_types (id, name, icon, sort_order) VALUES
+            ('exploracao', 'Exploração', '🗺', 0),
+            ('confronto', 'Confronto', '⚔', 1),
+            ('enigma', 'Enigma', '🧩', 2),
+            ('sobrevivencia', 'Sobrevivência', '🔥', 3),
+            ('raide', 'Raide', '🐉', 4),
+            ('evento', 'Evento', '🎆', 5);
+    """),
+    (15, "Habilidades — campo Evoluir de (progressão), substituindo o '+ Nó' manual da árvore", """
+        -- A Árvore de Habilidades deixou de ser um canvas de posicionamento
+        -- livre (arrastar da lista, clique duplo, "+ Nó — buscar
+        -- habilidade") — os nós agora só existem como visualização do que
+        -- o Editor de Habilidade já descreve. "Evoluir de" é a mesma ideia
+        -- do "Desbloqueada por" das Construções: a própria habilidade
+        -- referencia sua pré-requisito, e o par nó+aresta é derivado disso
+        -- automaticamente.
+        ALTER TABLE skills ADD COLUMN evolves_from TEXT REFERENCES skills(id) ON DELETE SET NULL;
+    """),
 ]
 
 

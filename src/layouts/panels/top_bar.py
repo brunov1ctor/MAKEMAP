@@ -257,7 +257,6 @@ class TopBar(QFrame):
             ("👹", "Mobs", "Mobs", False),
             ("⚔", "Itens", "Itens e Habilidades", True),
             ("🏰", "Dungeons", "Dungeons e Construções", True),
-            ("⚡", "Eventos", "Eventos", False),
             ("📖", "Lore", "Lore", False),
             ("⚙", "Config", "Config", False),
             ("📋", "Logs", "Logs", False),

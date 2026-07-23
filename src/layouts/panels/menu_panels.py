@@ -150,24 +150,6 @@ class NPCsPanel(MenuPanel):
         self.add_empty_state("Gerencie personagens não-jogáveis do seu mundo.")
 
 
-class ItensPanel(MenuPanel):
-    def __init__(self, parent=None):
-        super().__init__("Itens e Habilidades", "⚔", parent)
-        self.add_empty_state("Catalogue armas, armaduras e itens do mundo.")
-
-
-class DungeonsPanel(MenuPanel):
-    def __init__(self, parent=None):
-        super().__init__("Dungeons e Construções", "🏰", parent)
-        self.add_empty_state("Projete masmorras e encontros de combate.")
-
-
-class EventosPanel(MenuPanel):
-    def __init__(self, parent=None):
-        super().__init__("Eventos", "⚡", parent)
-        self.add_empty_state("Configure eventos e triggers do mundo.")
-
-
 class LorePanel(MenuPanel):
     def __init__(self, parent=None):
         super().__init__("Lore", "📖", parent)
@@ -184,13 +166,13 @@ class ConfigPanel(MenuPanel):
         self.content_layout.addWidget(manager)
 
 
-# Registry for easy lookup
+# Registry for easy lookup. "Itens" and "Dungeons" are intentionally absent —
+# they're handled directly in MainLayout._show_menu_view by the full
+# ItemsSkillsPanel / DungeonsPanel (both need the project's UnitOfWork, like
+# Mobs), not by an empty-state placeholder.
 MENU_PANELS = {
     "Quests": QuestsPanel,
     "NPCs": NPCsPanel,
-    "Itens": ItensPanel,
-    "Dungeons": DungeonsPanel,
-    "Eventos": EventosPanel,
     "Lore": LorePanel,
     "Config": ConfigPanel,
 }

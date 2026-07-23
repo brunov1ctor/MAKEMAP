@@ -91,13 +91,12 @@ class StatsDashboard(QFrame):
         self.card_items = _StatCard("⚔", "Itens", "0", Colors.WARNING)
         self.card_quests = _StatCard("📜", "Quests", "0", Colors.PURPLE)
         self.card_bosses = _StatCard("💀", "Bosses", "0", Colors.ORANGE)
-        self.card_events = _StatCard("⚡", "Eventos", "0", Colors.INFO)
         self.card_dungeons = _StatCard("🏰", "Dungeons", "0", "#78909C")
 
         cards = [
             self.card_regions, self.card_subregions, self.card_npcs,
             self.card_mobs, self.card_items, self.card_quests,
-            self.card_bosses, self.card_events, self.card_dungeons,
+            self.card_bosses, self.card_dungeons,
         ]
         for card in cards:
             layout.addWidget(card)
@@ -111,7 +110,6 @@ class StatsDashboard(QFrame):
             "items": self.card_items,
             "quests": self.card_quests,
             "bosses": self.card_bosses,
-            "events": self.card_events,
             "dungeons": self.card_dungeons,
         }
         for key, value in kwargs.items():

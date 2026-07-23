@@ -33,7 +33,11 @@
       "Bash(python -m py_compile src/layouts/panels/mobs/panel.py src/layouts/panels/mobs/mob_edit_panel.py src/layouts/panels/mobs/categories.py src/database/migrations/schema.py src/database/repositories/entities.py src/database/unit_of_work.py src/layouts/main_layout.py)",
       "Bash(python -m py_compile src/layouts/panels/mobs/panel.py src/layouts/panels/mobs/mob_edit_panel.py src/layouts/panels/mobs/categories.py)",
       "Bash(python -m py_compile src/layouts/panels/mobs/mob_edit_panel.py src/layouts/panels/mobs/categories.py src/database/migrations/schema.py)",
-      "Bash(powershell -Command \"Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force\")"
+      "Bash(powershell -Command \"Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force\")",
+      "Bash(python \"C:/Users/BRUNO~1.VDA/AppData/Local/Temp/claude/c--Users-bruno-vdasilva-Documents-MAKEMAP/cffe922a-0825-4e6a-8f4c-a9414ff19074/scratchpad/shot.py\")",
+      "Bash(PYTHONPATH=\"c:/Users/bruno.vdasilva/Documents/MAKEMAP\" python \"C:/Users/BRUNO~1.VDA/AppData/Local/Temp/claude/c--Users-bruno-vdasilva-Documents-MAKEMAP/cffe922a-0825-4e6a-8f4c-a9414ff19074/scratchpad/shot.py\")",
+      "Bash(PYTHONPATH=c:/Users/bruno.vdasilva/Documents/MAKEMAP python -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 120 python \"C:/Users/BRUNO~1.VDA/AppData/Local/Temp/claude/c--Users-bruno-vdasilva-Documents-MAKEMAP/55a2a09d-89fa-4988-b7bf-c5f897786ce8/scratchpad/app_smoke.py\")"
     ],
     "additionalDirectories": [
       "\\tmp"

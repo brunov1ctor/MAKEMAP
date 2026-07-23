@@ -254,6 +254,12 @@ class MobListRow(QFrame):
 
         self._name_label = QLabel("")
         self._name_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 11px; font-weight: bold; background: transparent; border: none;")
+        # Sem word-wrap, o minimumSizeHint de um QLabel é o texto inteiro —
+        # numa linha estreita isso empurra o menu_btn (⋯, com Excluir) para
+        # fora da área visível em vez de ceder espaço. Ignored faz o rótulo
+        # abrir mão do próprio texto na disputa por espaço; só corta
+        # visualmente (sem "…"), mas o menu nunca mais some.
+        self._name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self._name_label, 2)
 
         self._level_label = QLabel("")
@@ -274,6 +280,7 @@ class MobListRow(QFrame):
 
         self._sub_label = QLabel("")
         self._sub_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
+        self._sub_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self._sub_label, 1)
 
         menu_btn = QToolButton()

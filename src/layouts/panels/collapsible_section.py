@@ -13,6 +13,20 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from src.styles.tokens import Colors
 
 
+class _SectionHeader(QFrame):
+    """Clickable header row — a real subclass with mousePressEvent
+    overridden as an actual method, not a lambda monkeypatched onto a
+    plain QFrame() instance. Qt's virtual-call dispatch only reliably
+    routes through Python for classes Python itself subclassed; assigning
+    to `.mousePressEvent` on a stock QFrame() gave no such guarantee."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class CollapsibleSection(QFrame):
     """Header (arrow + title) + content area that show/hides on click."""
 
@@ -27,7 +41,7 @@ class CollapsibleSection(QFrame):
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(4)
 
-        header = QFrame()
+        header = _SectionHeader()
         header.setCursor(Qt.CursorShape.PointingHandCursor)
         header.setStyleSheet(f"""
             QFrame {{ background: rgba(255,255,255,0.03); border-radius: 4px; }}
@@ -49,7 +63,7 @@ class CollapsibleSection(QFrame):
         """)
         h_lay.addWidget(title_lbl)
         h_lay.addStretch()
-        header.mousePressEvent = lambda e: self._toggle()
+        header.clicked.connect(self._toggle)
         main.addWidget(header)
 
         self._content = QFrame()

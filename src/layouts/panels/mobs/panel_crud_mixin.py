@@ -16,6 +16,8 @@ from __future__ import annotations
 import logging
 import uuid
 
+from src.services.project_assets import import_asset
+
 logger = logging.getLogger("MAKEMAP")
 
 
@@ -49,6 +51,9 @@ class MobCrudMixin:
         if not self._uow or not values.get("id"):
             return
         mob_id = values.pop("id")
+        if values.get("image_path"):
+            values["image_path"] = import_asset(
+                self._project_dir, values["image_path"], "assets/mobs", mob_id)
         is_new = self._mob_by_id(mob_id) is None
         if is_new:
             self._uow.mobs.create(id=mob_id, **values)

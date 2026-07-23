@@ -995,7 +995,24 @@ class MainLayout(QWidget):
             from src.layouts.panels.mobs.panel import MobsPanel
             window = self.window()
             uow = window.uow if window and hasattr(window, 'uow') else None
-            panel = MobsPanel(uow, zones_provider=self._region_med.zones_list, parent=container)
+            project_dir = window.project.path if window and getattr(window, 'project', None) else None
+            panel = MobsPanel(uow, zones_provider=self._region_med.zones_list, project_dir=project_dir, parent=container)
+            panel.closed.connect(self._hide_menu_view)
+            layout.addWidget(panel)
+        elif menu_name == "Itens":
+            from src.layouts.panels.items.panel import ItemsSkillsPanel
+            window = self.window()
+            uow = window.uow if window and hasattr(window, 'uow') else None
+            project_dir = window.project.path if window and getattr(window, 'project', None) else None
+            panel = ItemsSkillsPanel(uow, project_dir=project_dir, parent=container)
+            panel.closed.connect(self._hide_menu_view)
+            layout.addWidget(panel)
+        elif menu_name == "Dungeons":
+            from src.layouts.panels.dungeons.panel import DungeonsPanel
+            window = self.window()
+            uow = window.uow if window and hasattr(window, 'uow') else None
+            project_dir = window.project.path if window and getattr(window, 'project', None) else None
+            panel = DungeonsPanel(uow, project_dir=project_dir, parent=container)
             panel.closed.connect(self._hide_menu_view)
             layout.addWidget(panel)
         elif menu_name in MENU_PANELS:

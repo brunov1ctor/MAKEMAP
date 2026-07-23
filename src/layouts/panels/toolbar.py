@@ -62,7 +62,6 @@ class CanvasToolbar(QFrame):
             ("T", "Texto", "T", True),
             ("👾", "Spawn", "", True),
             ("📍", "Marcador", "K", True),
-            ("🎯", "Eventos", "", True),
             ("💡", "Iluminação", "", False, True),  # toggle action
             None,
             ("📐", "Grid", "G", False),

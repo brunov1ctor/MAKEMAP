@@ -2,19 +2,19 @@
 
 import logging
 import time
-import shutil
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QLineEdit, QFrame, QSizePolicy,
+    QScrollArea, QLineEdit, QFrame, QSizePolicy, QToolButton, QFileDialog,
 )
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 
 from src.styles.tokens import Colors, Typography
 from src.services.project import Project
 from src.services.recents import load_recents, add_recent, PROJECTS_DIR
+from src.services.project_assets import import_asset, resolve_asset_path
 
 
 def _btn_style(color, bg="transparent", hover_bg=None):
@@ -32,6 +32,115 @@ def _btn_primary():
         f"font-size: 8pt; border: none; border-radius: 6px; padding: 0 12px; }}"
         f"QPushButton:hover {{ background: {Colors.ACCENT_HOVER}; }}"
     )
+
+
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
+
+
+class _CoverThumb(QToolButton):
+    """Capa quadrada do projeto, ocupando a coluna esquerda do card.
+
+    Clicar abre o explorador de arquivos; uma imagem arrastada do
+    Explorer/Finder pode ser solta direto sobre ela (mesma ideia do
+    _DropImageButton dos Mobs). Emite `picked` com o caminho local — quem
+    é dono do card decide onde copiar o arquivo.
+
+    O lado é ditado de fora (o card mede a própria altura e chama
+    set_side); a imagem é reescalada e cortada no centro a cada mudança,
+    para preencher o quadrado sem distorcer.
+    """
+
+    picked = Signal(str)
+    MIN_SIDE = 56
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._image_path = ""
+        self.setFixedSize(self.MIN_SIDE, self.MIN_SIDE)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAcceptDrops(True)
+        self.setToolTip("Clique para escolher uma imagem — ou arraste uma até aqui")
+        self._paint_style()
+        self.clicked.connect(self._browse)
+
+    def _paint_style(self, drop: bool = False):
+        border = Colors.ACCENT if drop else Colors.BORDER_SUBTLE
+        bg = "rgba(79,195,247,0.15)" if drop else "rgba(255,255,255,0.05)"
+        self.setStyleSheet(
+            f"QToolButton {{ background: {bg}; border: 1px solid {border}; "
+            f"border-radius: 8px; font-size: 22px; color: {Colors.TEXT_MUTED}; }}"
+            f"QToolButton:hover {{ border-color: {Colors.ACCENT}; }}"
+        )
+
+    def set_side(self, side: int):
+        side = max(self.MIN_SIDE, side)
+        if side == self.width():
+            return
+        self.setFixedSize(side, side)
+        self._render()
+
+    def set_image(self, path: str):
+        self._image_path = path or ""
+        self._render()
+
+    def _render(self):
+        pixmap = QPixmap(self._image_path) if self._image_path else QPixmap()
+        if pixmap.isNull():
+            self.setIcon(QPixmap())
+            self.setText("🖼")
+            return
+        # Preenche o quadrado inteiro (menos a borda) cortando o excedente
+        # no centro — KeepAspectRatio sozinho deixaria faixas vazias em
+        # imagens que não são quadradas.
+        side = max(1, min(self.width(), self.height()) - 4)
+        scaled = pixmap.scaled(
+            side, side, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation)
+        x = max(0, (scaled.width() - side) // 2)
+        y = max(0, (scaled.height() - side) // 2)
+        self.setIcon(scaled.copy(x, y, side, side))
+        self.setIconSize(QSize(side, side))
+        self.setText("")
+
+    def _browse(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Escolher imagem do projeto", "",
+            "Imagens (" + " ".join(f"*{e}" for e in IMAGE_EXTS) + ")",
+        )
+        if path:
+            self.set_image(path)
+            self.picked.emit(path)
+
+    # ── drag & drop ──
+
+    def _accepted_path(self, mime) -> str | None:
+        if not mime.hasUrls():
+            return None
+        for url in mime.urls():
+            local = url.toLocalFile()
+            if local and local.lower().endswith(IMAGE_EXTS):
+                return local
+        return None
+
+    def dragEnterEvent(self, event):
+        if self._accepted_path(event.mimeData()):
+            self._paint_style(drop=True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._paint_style(drop=False)
+
+    def dropEvent(self, event):
+        path = self._accepted_path(event.mimeData())
+        self._paint_style(drop=False)
+        if not path:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.set_image(path)
+        self.picked.emit(path)
 
 
 class _ProjectCard(QWidget):
@@ -57,9 +166,24 @@ class _ProjectCard(QWidget):
         self._build(editing)
 
     def _build(self, editing: bool = False):
-        L = QVBoxLayout(self)
-        L.setContentsMargins(12, 10, 12, 10)
+        # A capa ocupa uma coluna à esquerda do tamanho do card inteiro (não
+        # só da linha do nome) — resizeEvent mantém o lado do quadrado igual
+        # à altura real do card a cada mudança de conteúdo.
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setSpacing(10)
+
+        self._cover = _CoverThumb()
+        self._cover.set_image(self._cover_path())
+        self._cover.picked.connect(self._on_cover_picked)
+        outer.addWidget(self._cover, 0, Qt.AlignmentFlag.AlignTop)
+
+        right = QWidget()
+        right.setStyleSheet("background: transparent;")
+        L = QVBoxLayout(right)
+        L.setContentsMargins(0, 0, 0, 0)
         L.setSpacing(4)
+        outer.addWidget(right, 1)
 
         # ── Nome ──
         name_row = QHBoxLayout()
@@ -152,6 +276,42 @@ class _ProjectCard(QWidget):
             self._name_edit.setFocus()
             self._name_edit.selectAll()
             self._btn_rename.setText("Salvar")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # A altura do card varia com o conteúdo (confirmação de delete
+        # aberta, edição de nome, etc.) — o quadrado da capa acompanha para
+        # continuar do tamanho do card, como pedido.
+        margins = self.layout().contentsMargins()
+        self._cover.set_side(self.height() - margins.top() - margins.bottom())
+
+    # ── Capa ──
+
+    def _cover_path(self) -> str:
+        """Caminho absoluto da capa gravada no project.json, ou "" se o
+        projeto não tem capa (ou não pôde ser lido)."""
+        try:
+            proj = Project.open(Path(self._path))
+        except Exception:
+            return ""
+        if not proj.meta.cover:
+            return ""
+        absolute = resolve_asset_path(self._path, proj.meta.cover)
+        return absolute if absolute and Path(absolute).exists() else ""
+
+    def _on_cover_picked(self, source: str):
+        """Copia a imagem escolhida para dentro do projeto e grava o
+        caminho relativo no meta — assim a capa acompanha a pasta do
+        projeto se ela for movida, e não quebra se o arquivo original
+        sumir."""
+        try:
+            proj = Project.open(Path(self._path))
+            relative = import_asset(self._path, source, "thumbnails", "cover")
+            proj.meta.cover = relative
+            proj.save()
+            self._cover.set_image(resolve_asset_path(self._path, relative))
+        except Exception as e:
+            logging.getLogger("MAKEMAP").warning("Cover error: %s", e)
 
     def _on_delete_clicked(self):
         self._confirm_widget.show()

@@ -10,8 +10,9 @@ from src.database.repositories.entities import (
     WorldRepository, ContinentRepository, KingdomRepository,
     RegionRepository, BiomeRepository, CityRepository,
     NPCRepository, MobRepository, MobCategoryRepository, MobAssetRepository, BossRepository,
-    ItemRepository, ResourceRepository, QuestRepository,
-    QuestChainRepository, DungeonRepository, EventRepository,
+    ItemRepository, SkillRepository, SkillTreeRepository, ResourceRepository, QuestRepository,
+    QuestChainRepository, DungeonRepository, BuildingRepository,
+    BuildingCategoryRepository, DungeonTypeRepository, EventRepository,
     FactionRepository, TagRepository, MapRepository,
     LayerRepository, CanvasItemRepository, AssetRepository,
     AssetPackRepository, ZoneRepository, TerrainPaintRepository, TerrainRepository,
@@ -40,10 +41,15 @@ class UnitOfWork:
         self.mob_assets = MobAssetRepository(self.db)
         self.bosses = BossRepository(self.db)
         self.items = ItemRepository(self.db)
+        self.skills = SkillRepository(self.db)
+        self.skill_trees = SkillTreeRepository(self.db)
         self.resources = ResourceRepository(self.db)
         self.quests = QuestRepository(self.db)
         self.quest_chains = QuestChainRepository(self.db)
         self.dungeons = DungeonRepository(self.db)
+        self.buildings = BuildingRepository(self.db)
+        self.building_categories = BuildingCategoryRepository(self.db)
+        self.dungeon_types = DungeonTypeRepository(self.db)
         self.events = EventRepository(self.db)
         self.factions = FactionRepository(self.db)
         self.tags = TagRepository(self.db)

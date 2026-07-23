@@ -16,6 +16,9 @@ class ProjectMeta:
     description: str = ""
     version: str = "1.0.0"
     author: str = ""
+    # Capa do projeto — caminho relativo à pasta do projeto (ex.
+    # "thumbnails/cover.png"), vazio quando nenhuma imagem foi escolhida.
+    cover: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 

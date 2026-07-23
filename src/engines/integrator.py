@@ -176,7 +176,6 @@ class EngineIntegrator(QObject):
             dungeons=len(entities.get_entities_by_type(EntityType.DUNGEON)),
             bosses=len(entities.get_entities_by_type(EntityType.BOSS)),
             items=self.rendering.cache.size if hasattr(self.rendering, 'cache') else 0,
-            events=0,
         )
 
     def validate_project(self) -> dict:

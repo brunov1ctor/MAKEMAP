@@ -104,8 +104,8 @@ class FilterPanel(CollapsiblePanel):
         categories = [
             ("👹", "Mobs", "Mobs"), ("🧙", "NPCs", "NPCs"),
             ("📜", "Quests", "Quests"), ("⚔", "Itens", "Itens"),
-            ("💀", "Bosses", "Bosses"), ("⚡", "Eventos", "Eventos"),
-            ("💎", "Recursos", "Recursos"), ("🌿", "Vegetação", "Vegetação"),
+            ("💀", "Bosses", "Bosses"), ("💎", "Recursos", "Recursos"),
+            ("🌿", "Vegetação", "Vegetação"),
             ("⛏", "Minérios", "Minérios"), ("🏴", "PvP", "PvP"),
         ]
 

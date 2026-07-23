@@ -6,6 +6,7 @@ attributes MobsPanel owns; not meant to be instantiated on its own.
 from __future__ import annotations
 
 import logging
+import uuid
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from src.styles.tokens import Colors
+from src.services.project_assets import import_asset, resolve_asset_path
 from src.layouts.panels.brush.flow_layout import FlowLayout
 from src.layouts.panels.mobs.categories import ELEMENT_OPTIONS
 from src.layouts.panels.mobs.mob_card import MobCard
@@ -267,7 +269,7 @@ class GridFilterMixin:
                 card.set_data(
                     m.get("name", ""), int(m.get("level", 1) or 1), m.get("category", "outros"),
                     m.get("rarity", "normal"), m.get("element", ""), zones.get(m.get("zone_id", ""), ""),
-                    bool(m.get("favorite", 0)), m.get("image_path", ""),
+                    bool(m.get("favorite", 0)), resolve_asset_path(self._project_dir, m.get("image_path", "")),
                 )
             else:
                 card = self._build_list_row(m, zones)
@@ -304,7 +306,7 @@ class GridFilterMixin:
         row.set_data(
             m.get("name", ""), int(m.get("level", 1) or 1), m.get("category", "outros"),
             m.get("rarity", "normal"), m.get("element", ""), zones.get(m.get("zone_id", ""), ""),
-            bool(m.get("favorite", 0)), m.get("image_path", ""),
+            bool(m.get("favorite", 0)), resolve_asset_path(self._project_dir, m.get("image_path", "")),
         )
         return row
 
@@ -320,18 +322,33 @@ class GridFilterMixin:
                     w.set_selected(w.mob_id == mob_id)
         mob = self._mob_by_id(mob_id)
         if mob:
-            self._edit_panel.load(mob)
-            self._edit_panel.set_assets(self._uow.mob_assets.get_by_mob(mob_id) if self._uow else [])
+            display = dict(mob)
+            display["image_path"] = resolve_asset_path(self._project_dir, mob.get("image_path", ""))
+            self._edit_panel.load(display)
+            self._refresh_assets_display(mob_id)
         logger.info("Mob selecionado: id=%s", mob_id)
+
+    def _refresh_assets_display(self, mob_id: str):
+        assets = self._uow.mob_assets.get_by_mob(mob_id) if self._uow else []
+        resolved = []
+        for asset in assets:
+            display = dict(asset)
+            display["file_path"] = resolve_asset_path(self._project_dir, asset.get("file_path", ""))
+            resolved.append(display)
+        self._edit_panel.set_assets(resolved)
 
     def _on_asset_add(self, mob_id: str, fields: dict):
         if not self._uow:
             return
-        self._uow.mob_assets.create(mob_id=mob_id, **fields)
-        self._edit_panel.set_assets(self._uow.mob_assets.get_by_mob(mob_id))
+        asset_id = str(uuid.uuid4())
+        if fields.get("file_path"):
+            fields["file_path"] = import_asset(
+                self._project_dir, fields["file_path"], "assets/mob_assets", asset_id)
+        self._uow.mob_assets.create(id=asset_id, mob_id=mob_id, **fields)
+        self._refresh_assets_display(mob_id)
 
     def _on_asset_delete(self, mob_id: str, asset_id: str):
         if not self._uow:
             return
         self._uow.mob_assets.delete(asset_id)
-        self._edit_panel.set_assets(self._uow.mob_assets.get_by_mob(mob_id))
+        self._refresh_assets_display(mob_id)
