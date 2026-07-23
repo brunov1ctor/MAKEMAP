@@ -471,14 +471,18 @@ class BrushTool(BaseTool):
         if self._history:
             self._history.begin_group("Pintura de objetos")
 
-    def _on_object_stamp(self, stamp):
-        """Render object stamp as individual QGraphicsPixmapItem."""
-        if not self._asset_engine or not stamp.asset_id:
-            return
+    def place_stamp_item(self, asset_id: str, position: QPointF, rotation: float,
+                          scale: float, opacity: float) -> QGraphicsPixmapItem | None:
+        """Builds+places a single brush-stamped object item — shared by
+        live painting (_on_object_stamp) and BrushMediator's DB-reload on
+        project switch, so both produce identical items. `position` is in
+        scene coordinates regardless of boundary parenting."""
+        if not self._asset_engine or not asset_id:
+            return None
 
-        pixmap = self._asset_engine.get_pixmap(stamp.asset_id)
+        pixmap = self._asset_engine.get_pixmap(asset_id)
         if not pixmap or pixmap.isNull():
-            return
+            return None
 
         # Parent to boundary item so stamp moves with the terrain
         parent_item = None
@@ -491,26 +495,33 @@ class BrushTool(BaseTool):
 
         if parent_item:
             # Convert scene position to parent-local
-            local_pos = parent_item.mapFromScene(stamp.position)
+            local_pos = parent_item.mapFromScene(position)
             item.setPos(
                 local_pos.x() - pixmap.width() / 2,
                 local_pos.y() - pixmap.height() / 2,
             )
         else:
             item.setPos(
-                stamp.position.x() - pixmap.width() / 2,
-                stamp.position.y() - pixmap.height() / 2,
+                position.x() - pixmap.width() / 2,
+                position.y() - pixmap.height() / 2,
             )
             self.viewport.scene().addItem(item)
 
-        item.setScale(stamp.scale)
-        item.setRotation(stamp.rotation)
-        item.setOpacity(stamp.opacity)
+        item.setScale(scale)
+        item.setRotation(rotation)
+        item.setOpacity(opacity)
         item.setZValue(10)
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
         item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
-        item.setData(0, {"item_type": "asset"})
+        item.setData(0, {"item_type": "asset", "asset_id": asset_id})
         suppress_selection_decoration(item)
+        return item
+
+    def _on_object_stamp(self, stamp):
+        """Render object stamp as individual QGraphicsPixmapItem."""
+        item = self.place_stamp_item(stamp.asset_id, stamp.position, stamp.rotation, stamp.scale, stamp.opacity)
+        if item is None:
+            return
         self._stroke_items.append(item)
 
         if self._history:
@@ -807,7 +818,6 @@ class RegionBrushTool(BaseTool):
     def __init__(self, viewport: Viewport, history_engine=None):
         super().__init__(viewport)
         self._history = history_engine
-        self._snap_manager = None
         self._target = None  # RegionLayer | None
         self._active_boundary = None  # MapBoundary | None — constrains painting, like BrushTool
         self._mode = "add"  # "add" | "remove"
@@ -817,15 +827,11 @@ class RegionBrushTool(BaseTool):
         self._painting = False
         self._stroke_button: Qt.MouseButton | None = None
         self._before_state: dict | None = None
-        self._last_filled_cell: tuple[float, float] | None = None
         self._stroke_finished_callbacks: list = []
 
     def on_stroke_finished(self, callback):
         """Registra callback() chamado ao soltar o botão após pintar."""
         self._stroke_finished_callbacks.append(callback)
-
-    def set_snap_manager(self, snap_manager):
-        self._snap_manager = snap_manager
 
     def set_target(self, layer):
         """RegionLayer to paint into, or None to disarm painting."""
@@ -871,19 +877,14 @@ class RegionBrushTool(BaseTool):
         if not self._is_within_bounds(scene_pos):
             return
         params = self._params(erase)
-        if self._snap_manager and self._snap_manager.enabled:
-            grid = self._snap_manager.grid
-            cell = grid.cell_polygon(scene_pos.x(), scene_pos.y()) if grid else None
-            if cell is not None:
-                center = cell.boundingRect().center()
-                key = (round(center.x(), 3), round(center.y(), 3))
-                if key == self._last_filled_cell:
-                    return
-                self._last_filled_cell = key
-                local_poly = self._target.item.mapFromScene(cell)
-                self._target.paint_cell(local_poly, params)
-                self._target.update_live()
-                return
+        # Deliberately always the soft circular stamp, never a grid-cell
+        # fill — a região is a freeform painted area (Cities Skylines
+        # style), not grid-tile placement. Snap/Grid is shared engine-wide
+        # (see CanvasEngine.snap) for the terrain Brush tool's own tile
+        # alignment; this tool never wired into it, precisely so leaving
+        # Snap on from terrain painting doesn't silently turn the next
+        # região stroke into one giant rectangular grid-cell fill instead
+        # of a small soft stamp.
         local = self._target.scene_to_local(scene_pos)
         self._target.paint_at(local, params)
         self._target.update_live()
@@ -897,7 +898,6 @@ class RegionBrushTool(BaseTool):
             return
         self._painting = True
         self._stroke_button = event.button()
-        self._last_filled_cell = None
         if self._history:
             self._before_state = self._target.capture_state()
         self._paint(scene_pos, erase=(self._stroke_button == Qt.MouseButton.RightButton))

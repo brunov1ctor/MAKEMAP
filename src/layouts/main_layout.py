@@ -839,11 +839,6 @@ class MainLayout(QWidget):
 
     # ─── Terrain Panel ───
 
-    def _ensure_project(self):
-        window = self.window()
-        if window and hasattr(window, 'project') and window.project is None:
-            window.new_project()
-
     def _toggle_terrain_panel(self):
         self._panel_mgr.toggle("Terrain")
         self._reposition()

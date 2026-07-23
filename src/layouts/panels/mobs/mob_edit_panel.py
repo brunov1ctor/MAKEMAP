@@ -57,7 +57,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
     PANEL_WIDTH = 520
 
     save_requested = Signal(dict)
-    duplicate_requested = Signal(str)
+    rename_requested = Signal(str, str)  # mob_id, new_name — only reachable via the ⋮ menu once a mob is saved
     delete_requested = Signal(str)
     asset_add_requested = Signal(str, dict)  # mob_id, {name, asset_type, file_path, file_size, rarity}
     asset_delete_requested = Signal(str, str)  # mob_id, asset_id
@@ -76,6 +76,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self.setAttribute(Qt.WA_TranslucentBackground)
         self._mob_id = ""
         self._creating = False
+        self._loaded_name = ""  # last known-good name — see _finish_rename
         self._loading = True
         self._drops: list[dict] = []  # {"item_id","rate","qty"} — see _refresh_drops_display
         self._items_catalog: list[dict] = []  # set_items_catalog() — real Item rows for the drop picker
@@ -107,6 +108,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._footer_layout = self._layout
 
         self._build_ui()
+        self._name_edit.editingFinished.connect(self._finish_rename)
         # Generic pass over every spin/combo box, same findChildren()
         # sweep style as _wire_dirty_tracking below — catches every field
         # regardless of which section builder constructed it, instead of
@@ -177,7 +179,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             QMenu::item {{ padding: 4px 20px 4px 8px; border-radius: 3px; font-size: 10px; }}
             QMenu::item:selected {{ background: {Colors.ACCENT_DIM}; }}
         """)
-        menu.addAction("📋 Duplicar", lambda: self.duplicate_requested.emit(self._mob_id))
+        menu.addAction("✏ Renomear", self._begin_rename)
         menu.addAction("🗑 Excluir", lambda: self.delete_requested.emit(self._mob_id))
         menu_btn.setMenu(menu)
         header.addWidget(menu_btn)
@@ -267,6 +269,50 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._save_status_label.setText("Salvo")
         self._save_status_label.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: 9px; font-weight: bold; background: transparent; border: none;")
 
+    # ─── Nome — editable only while creating a brand-new (unsaved) mob;
+    # a plain read-only label once the mob is actually saved, at which
+    # point "✏ Renomear" in the ⋮ menu is the only way to change it (see
+    # _begin_rename/_finish_rename) — renaming an existing mob shouldn't
+    # be lumped in with "Salvar Alterações" for every other field. ───
+
+    _NAME_STYLE_EDITABLE = """
+        QLineEdit {{ background: rgba(255,255,255,0.05); border: 1px solid {border};
+            border-radius: 6px; padding: 6px 10px; color: {text}; font-size: 13px; font-weight: bold; }}
+        QLineEdit:focus {{ border-color: {accent}; }}
+    """
+    _NAME_STYLE_LABEL = """
+        QLineEdit {{ background: transparent; border: none;
+            padding: 6px 10px; color: {text}; font-size: 13px; font-weight: bold; }}
+    """
+
+    def _set_name_editable(self, editable: bool):
+        self._name_edit.setReadOnly(not editable)
+        style = self._NAME_STYLE_EDITABLE if editable else self._NAME_STYLE_LABEL
+        self._name_edit.setStyleSheet(style.format(
+            border=Colors.BORDER_SUBTLE, text=Colors.TEXT_PRIMARY, accent=Colors.ACCENT,
+        ))
+
+    def _begin_rename(self):
+        if not self._mob_id:
+            return
+        self._set_name_editable(True)
+        self._name_edit.setFocus()
+        self._name_edit.selectAll()
+
+    def _finish_rename(self):
+        if not self._creating:
+            self._set_name_editable(False)
+        new_name = self._name_edit.text().strip()
+        if self._creating:
+            return  # still just editing the draft's initial name, not a rename
+        if new_name and new_name != self._loaded_name and self._mob_id:
+            self._loaded_name = new_name
+            self._title_label.setText(new_name)
+            self.rename_requested.emit(self._mob_id, new_name)
+            self._mark_saved()
+        else:
+            self._name_edit.setText(self._loaded_name)
+
     # ─── Core data plumbing (touches all 3 sections' fields directly) ───
 
     def set_empty(self, empty: bool):
@@ -279,6 +325,8 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         if empty:
             self._mob_id = ""
             self._creating = False
+            self._loaded_name = ""
+            self._set_name_editable(False)
             self._title_label.setText("Nenhum mob selecionado")
             self._id_label.setText("")
             self._mark_saved()
@@ -349,6 +397,8 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         )
         self._fav_btn.setChecked(bool(mob.get("favorite", 0)))
 
+        self._loaded_name = mob.get("name", "") or "Novo Mob"
+        self._set_name_editable(creating)
         self._name_edit.setText(mob.get("name", ""))
         self._desc_edit.setPlainText(mob.get("description", ""))
 

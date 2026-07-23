@@ -79,8 +79,6 @@ class MobsPanel(
         self._uow = uow
         self._zones_provider = zones_provider or (lambda: [])
         self._mobs: list[dict] = []
-        self._sidebar_rows: dict = {}  # SMART_FILTERS only — categories are folder cards now
-        self._active_filter = "todos"
         self._selected_id = ""
         # Category folder explorer state — mirrors a simple browser history
         # (list + index) so back/forward can revisit without recomputing
@@ -239,7 +237,7 @@ class MobsPanel(
 
         self._edit_panel = MobEditPanel()
         self._edit_panel.save_requested.connect(self._on_save)
-        self._edit_panel.duplicate_requested.connect(self._on_duplicate)
+        self._edit_panel.rename_requested.connect(self._on_rename)
         self._edit_panel.delete_requested.connect(self._on_delete)
         self._edit_panel.asset_add_requested.connect(self._on_asset_add)
         self._edit_panel.asset_delete_requested.connect(self._on_asset_delete)

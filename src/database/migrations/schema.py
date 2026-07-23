@@ -592,6 +592,91 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         -- "Sem categoria" placeholder instead of losing the field.
         DELETE FROM mob_categories WHERE id IN ('chefes_boss', 'elite');
     """),
+    (10, "Brush tool persistence — painted terrain masks + reusable canvas_items for object stamps", """
+        -- Terrain material painting (BrushTool, distinct from the Região
+        -- panel's own painted_zones) had no persistence at all — strokes
+        -- only ever lived in the live QGraphicsScene, so switching
+        -- projects left the previous project's painting visible in the
+        -- new one. Mirrors painted_zones: map_id is a plain tag, not a FK
+        -- (same reasoning — the maps/worlds hierarchy isn't wired up).
+        CREATE TABLE IF NOT EXISTS painted_terrain (
+            id TEXT PRIMARY KEY,
+            map_id TEXT DEFAULT 'default',
+            asset_id TEXT NOT NULL,
+            mask_png TEXT NOT NULL DEFAULT '',
+            mask_x REAL DEFAULT 0,
+            mask_y REAL DEFAULT 0,
+            texture_scale REAL DEFAULT 1,
+            texture_rotation REAL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_painted_terrain_map ON painted_terrain(map_id);
+
+        -- canvas_items (migration 1) has sat completely unused since it
+        -- was first created — no code anywhere ever inserted into it —
+        -- because its hard FKs to maps(id)/layers(id) require a
+        -- maps/layers hierarchy that was never wired up (same gap
+        -- painted_zones already worked around). Recreating it here is
+        -- safe (nothing to migrate out of it) and lets brush-tool object
+        -- stamps use it the same loose-tag way painted_zones/
+        -- painted_terrain do.
+        DROP TABLE IF EXISTS canvas_items;
+        CREATE TABLE canvas_items (
+            id TEXT PRIMARY KEY,
+            map_id TEXT NOT NULL DEFAULT 'default',
+            layer_id TEXT NOT NULL DEFAULT 'default',
+            item_type TEXT NOT NULL,
+            entity_id TEXT,
+            entity_type TEXT,
+            asset_id TEXT,
+            name TEXT DEFAULT '',
+            position_x REAL DEFAULT 0,
+            position_y REAL DEFAULT 0,
+            rotation REAL DEFAULT 0,
+            scale_x REAL DEFAULT 1,
+            scale_y REAL DEFAULT 1,
+            opacity REAL DEFAULT 1,
+            z_index INTEGER DEFAULT 0,
+            locked INTEGER DEFAULT 0,
+            visible INTEGER DEFAULT 1,
+            metadata TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_canvas_items_map ON canvas_items(map_id);
+        CREATE INDEX IF NOT EXISTS idx_canvas_items_layer ON canvas_items(layer_id);
+    """),
+    (11, "Terrain panel persistence — map boundaries (shape/size/position/visibility) per project", """
+        -- TerrainMediator kept every terrain boundary only in memory
+        -- (self._boundaries), so switching projects left the previous
+        -- project's terrains visible in the new one — same class of bug
+        -- migration 10 fixed for Brush painting, and worse here since
+        -- Região/Brush both resolve a terrain_id against these boundaries
+        -- to constrain their own painting. map_id is a plain tag, not a
+        -- FK, same reasoning as painted_zones/painted_terrain.
+        CREATE TABLE IF NOT EXISTS terrains (
+            id TEXT PRIMARY KEY,
+            map_id TEXT DEFAULT 'default',
+            name TEXT NOT NULL,
+            shape TEXT DEFAULT 'rectangle',
+            width INTEGER DEFAULT 4096,
+            height INTEGER DEFAULT 4096,
+            color TEXT DEFAULT '',
+            position_x REAL DEFAULT 0,
+            position_y REAL DEFAULT 0,
+            visible INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_terrains_map ON terrains(map_id);
+
+        -- painted_zones has tracked "which terrain a região is painted
+        -- within" in memory (RegionMediator._Zone.terrain_id) since it was
+        -- first built, but this column was never added, so the
+        -- association silently reset on every reload.
+        ALTER TABLE painted_zones ADD COLUMN terrain_id TEXT DEFAULT '';
+    """),
 ]
 
 

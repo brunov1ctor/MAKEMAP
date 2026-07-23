@@ -26,7 +26,6 @@ from src.styles.tokens import Colors
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.region.star_rating import StarRating
 from src.layouts.panels.collapsible_section import CollapsibleSection
-from src.engines.map.zones import ZONE_TYPES
 
 ESTILOS = ["Nenhum", "Vapor"]
 
@@ -143,14 +142,11 @@ class RegionEditPanel(QFrame):
         self._name_edit.editingFinished.connect(lambda: self.name_changed.emit(self._name_edit.text().strip()))
         info_section.content_layout.addWidget(self._field_row("Nome", self._name_edit))
 
-        self._type_combo = QComboBox()
-        for key, _icon, label, _color in ZONE_TYPES:
-            self._type_combo.addItem(label, key)
-        self._type_combo.setStyleSheet(self._combo_style())
-        self._type_combo.currentIndexChanged.connect(
-            lambda i: self.category_changed.emit(self._type_combo.itemData(i))
-        )
-        info_section.content_layout.addWidget(self._field_row("Tipo", self._type_combo))
+        self._type_edit = QLineEdit()
+        self._type_edit.setPlaceholderText("Ex: Residencial, Zona Portuária...")
+        self._type_edit.setStyleSheet(self._input_style())
+        self._type_edit.editingFinished.connect(lambda: self.category_changed.emit(self._type_edit.text().strip()))
+        info_section.content_layout.addWidget(self._field_row("Tipo", self._type_edit))
 
         self._color_btn = QToolButton()
         self._color_btn.setFixedHeight(24)
@@ -351,11 +347,9 @@ class RegionEditPanel(QFrame):
         self._terrain_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._terrain_combo.blockSignals(False)
 
-        idx = self._type_combo.findData(category_key)
-        self._type_combo.blockSignals(True)
-        if idx >= 0:
-            self._type_combo.setCurrentIndex(idx)
-        self._type_combo.blockSignals(False)
+        self._type_edit.blockSignals(True)
+        self._type_edit.setText(category_key)
+        self._type_edit.blockSignals(False)
 
         self.set_color(color, emit=False)
 

@@ -11,8 +11,10 @@ solid-color pixmap as its "texture".
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import Qt, QPointF, QRect
-from PySide6.QtGui import QColor, QPixmap, QPainter, QImage
+from PySide6.QtGui import QColor, QPixmap, QPainter, QImage, QBitmap, QRegion, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsScene
 
 from src.engines.map.terrain_layer import TerrainLayer, TerrainBrushParams
@@ -22,7 +24,8 @@ from src.engines.map.terrain_layer import TerrainLayer, TerrainBrushParams
 # a small downsample gives a good-enough estimate at negligible cost.
 _SCAN_SIZE = 64
 _ALPHA_THRESHOLD = 10
-_BORDER_WIDTH = 3  # px — crisp Cities-Skylines-style outline around the painted shape
+_BORDER_WIDTH = 3  # px — stroke width of the traced outline
+_SMOOTH_RADIUS = 30  # px — morphological close radius, see _morphological_close
 
 
 class RegionLayer:
@@ -87,50 +90,79 @@ class RegionLayer:
         self._terrain.item.setPixmap(QPixmap.fromImage(img))
 
     def _bordered_result(self) -> QImage:
-        """Cities-Skylines-style crisp outline: dilate the mask by
-        _BORDER_WIDTH px, subtract the original interior to get a ring,
-        tint that ring with a darker shade of the região's own color, and
-        stamp it onto a copy of the composited result. Restricted to the
-        opaque bounding box (not the full — possibly 4096x4096 — layer),
-        so it stays cheap regardless of the layer's overall size."""
+        """Cities-Skylines-style single closed outline traced around the
+        whole painted shape. A região is painted as many overlapping soft
+        circular stamps — tracing their raw union directly produces a
+        bumpy, spray-paint-looking edge (every stamp's own little bulge
+        stays visible). A morphological close (dilate then erode by the
+        same radius, see _morphological_close) first bridges the gaps/bumps
+        between stamps into one smooth blob, and only THEN gets traced as a
+        single QRegion-derived path and stroked once — one clean contour
+        instead of following every stamp's edge. Restricted to the opaque
+        bounding box (not the full — possibly 4096x4096 — layer), so it
+        stays cheap regardless of the layer's overall size."""
         result = self._terrain._result.copy()
-        bounds = self._opaque_bounds_local()
+        bounds = self._terrain.opaque_bounds_local()
         if bounds is None or bounds.width() <= 0 or bounds.height() <= 0:
             return result
 
-        pad = _BORDER_WIDTH + 2
+        pad = _SMOOTH_RADIUS + _BORDER_WIDTH + 2
         grown = bounds.adjusted(-pad, -pad, pad, pad).intersected(
             QRect(0, 0, self._terrain._mask.width(), self._terrain._mask.height())
         )
         mask_crop = self._terrain._mask.copy(grown)
+        closed = self._morphological_close(mask_crop, _SMOOTH_RADIUS)
 
-        dilated = QImage(mask_crop.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        region = QRegion(QBitmap.fromImage(closed.createAlphaMask()))
+        path = QPainterPath()
+        path.addRegion(region)
+        # addRegion() adds every constituent scanline rectangle as its own
+        # sub-path — stroking that directly shows every internal rectangle
+        # seam as a stray line cutting across the shape. simplified()
+        # merges them into just the outer silhouette before we stroke it.
+        path = path.simplified()
+
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.translate(grown.topLeft())
+        pen = QPen(self._color.darker(160), _BORDER_WIDTH)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+        painter.end()
+        return result
+
+    @staticmethod
+    def _morphological_close(img: QImage, radius: int, steps: int = 16) -> QImage:
+        """Dilate then erode by `radius` px — fills small gaps/bumps between
+        overlapping brush stamps and rounds the union into one smooth blob,
+        without changing its overall size or position. `steps` directional
+        composites approximate a circular structuring element (cheap vs a
+        true per-pixel circular dilate/erode); dilate unions them
+        (Lighten), erode intersects them (repeated DestinationIn)."""
+        offsets = [
+            (round(radius * math.cos(2 * math.pi * i / steps)),
+             round(radius * math.sin(2 * math.pi * i / steps)))
+            for i in range(steps)
+        ]
+
+        dilated = QImage(img.size(), QImage.Format.Format_ARGB32_Premultiplied)
         dilated.fill(QColor(0, 0, 0, 0))
         dp = QPainter(dilated)
         dp.setCompositionMode(QPainter.CompositionMode.CompositionMode_Lighten)
-        for dx, dy in ((-_BORDER_WIDTH, 0), (_BORDER_WIDTH, 0), (0, -_BORDER_WIDTH), (0, _BORDER_WIDTH),
-                       (-_BORDER_WIDTH, -_BORDER_WIDTH), (_BORDER_WIDTH, _BORDER_WIDTH),
-                       (-_BORDER_WIDTH, _BORDER_WIDTH), (_BORDER_WIDTH, -_BORDER_WIDTH)):
-            dp.drawImage(dx, dy, mask_crop)
+        dp.drawImage(0, 0, img)
+        for dx, dy in offsets:
+            dp.drawImage(dx, dy, img)
         dp.end()
 
-        ring = dilated
-        rp = QPainter(ring)
-        rp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
-        rp.drawImage(0, 0, mask_crop)
-        rp.end()
-
-        colored = QImage(ring.size(), QImage.Format.Format_ARGB32_Premultiplied)
-        colored.fill(self._color.darker(160))
-        cp = QPainter(colored)
-        cp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-        cp.drawImage(0, 0, ring)
-        cp.end()
-
-        painter = QPainter(result)
-        painter.drawImage(grown.topLeft(), colored)
-        painter.end()
-        return result
+        eroded = QImage(dilated)
+        ep = QPainter(eroded)
+        ep.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        for dx, dy in offsets:
+            ep.drawImage(-dx, -dy, dilated)
+        ep.end()
+        return eroded
 
     # ─── Painting (delegates straight to TerrainLayer) ────────────────────
 
@@ -195,41 +227,12 @@ class RegionLayer:
         cell_area = (w / small.width()) * (h / small.height())
         return opaque * cell_area
 
-    def _opaque_bounds_local(self) -> QRect | None:
-        """Cheap approximate bounding rect (local coords) of painted pixels,
-        via the same downsampled scan as area_m2 — good enough to crop a
-        thumbnail around, not meant to be pixel-exact."""
-        mask = self._terrain.mask
-        w, h = mask.width(), mask.height()
-        if w == 0 or h == 0:
-            return None
-        small = mask.scaled(_SCAN_SIZE, _SCAN_SIZE, Qt.AspectRatioMode.IgnoreAspectRatio,
-                             Qt.TransformationMode.FastTransformation)
-        min_x = min_y = None
-        max_x = max_y = None
-        for y in range(small.height()):
-            for x in range(small.width()):
-                if small.pixelColor(x, y).alpha() > _ALPHA_THRESHOLD:
-                    min_x = x if min_x is None else min(min_x, x)
-                    max_x = x if max_x is None else max(max_x, x)
-                    min_y = y if min_y is None else min(min_y, y)
-                    max_y = y if max_y is None else max(max_y, y)
-        if min_x is None:
-            return None
-        sx, sy = w / small.width(), h / small.height()
-        pad = 2
-        return QRect(
-            int(max(0, (min_x - pad) * sx)), int(max(0, (min_y - pad) * sy)),
-            int(min(w, (max_x + 1 + pad) * sx) - max(0, (min_x - pad) * sx)),
-            int(min(h, (max_y + 1 + pad) * sy) - max(0, (min_y - pad) * sy)),
-        )
-
     def thumbnail(self, size: int = 48) -> QPixmap:
         """Small preview pixmap of the painted shape, cropped to its
         approximate bounds and letterboxed into a size x size square."""
         result = QPixmap(size, size)
         result.fill(Qt.GlobalColor.transparent)
-        bounds = self._opaque_bounds_local()
+        bounds = self._terrain.opaque_bounds_local()
         if bounds is None or bounds.width() <= 0 or bounds.height() <= 0:
             return result
         cropped = self._terrain._result.copy(bounds)
@@ -243,46 +246,13 @@ class RegionLayer:
         painter.end()
         return result
 
-    # ─── Serialization ──────────────────────────────────────────────────────
+    # ─── Serialization (delegates straight to TerrainLayer) ───────────────
 
     def export_mask_png_base64(self) -> tuple[str, float, float]:
-        """PNG-encode the cropped raw paint mask (base64 text, alpha only —
-        NOT the color-composited result, so reloading + recompositing with
-        whatever color is set at the time reproduces the tint correctly)
-        plus its local top-left offset, for DB storage. Cropped to opaque
-        bounds so an untouched 4096x4096 mostly-transparent layer doesn't
-        serialize as a multi-megabyte blob."""
-        import base64
-        from PySide6.QtCore import QBuffer, QIODevice
-
-        bounds = self._opaque_bounds_local()
-        if bounds is None:
-            return "", 0.0, 0.0
-        cropped = self._terrain._mask.copy(bounds)
-        buf = QBuffer()
-        buf.open(QIODevice.OpenModeFlag.WriteOnly)
-        cropped.save(buf, "PNG")
-        data = base64.b64encode(bytes(buf.data())).decode("ascii")
-        return data, float(bounds.x()), float(bounds.y())
+        return self._terrain.export_mask_png_base64()
 
     def import_mask_png_base64(self, data: str, offset_x: float, offset_y: float):
-        """Reverse of export_mask_png_base64 — paints the decoded PNG
-        straight into the mask at its saved local offset (SourceOver, no
-        brush falloff — this is a raw restore, not a stroke)."""
-        import base64
-        from PySide6.QtGui import QImage
-
-        if not data:
-            return
-        raw = base64.b64decode(data.encode("ascii"))
-        img = QImage.fromData(raw, "PNG")
-        if img.isNull():
-            return
-        painter = QPainter(self._terrain._mask)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
-        painter.drawImage(QPointF(offset_x, offset_y), img)
-        painter.end()
-        self._terrain._recomposite_full()
+        self._terrain.import_mask_png_base64(data, offset_x, offset_y)
         self._reapply_style()
 
     def remove_from_scene(self):

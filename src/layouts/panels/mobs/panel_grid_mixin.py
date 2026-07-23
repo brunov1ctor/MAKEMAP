@@ -207,8 +207,6 @@ class GridFilterMixin:
         level_band = self._level_combo.currentData() or None
 
         def matches(m: dict) -> bool:
-            if self._active_filter == "favoritos" and not m.get("favorite"):
-                return False
             # Browsing inside a folder (see _navigate_into) restricts to
             # mobs filed directly under it — like a file explorer only
             # showing a directory's own files, not everything nested below.
@@ -269,7 +267,7 @@ class GridFilterMixin:
                 card.set_data(
                     m.get("name", ""), int(m.get("level", 1) or 1), m.get("category", "outros"),
                     m.get("rarity", "normal"), m.get("element", ""), zones.get(m.get("zone_id", ""), ""),
-                    bool(m.get("favorite", 0)),
+                    bool(m.get("favorite", 0)), m.get("image_path", ""),
                 )
             else:
                 card = self._build_list_row(m, zones)
@@ -306,7 +304,7 @@ class GridFilterMixin:
         row.set_data(
             m.get("name", ""), int(m.get("level", 1) or 1), m.get("category", "outros"),
             m.get("rarity", "normal"), m.get("element", ""), zones.get(m.get("zone_id", ""), ""),
-            bool(m.get("favorite", 0)),
+            bool(m.get("favorite", 0)), m.get("image_path", ""),
         )
         return row
 

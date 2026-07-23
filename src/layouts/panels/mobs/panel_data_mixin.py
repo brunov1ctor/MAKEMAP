@@ -94,12 +94,6 @@ class MobDataMixin:
         for key, chip in self._stat_chips.items():
             chip._value_label.setText(f"{values.get(key, 0):,}".replace(",", "."))
 
-        for key, row in self._sidebar_rows.items():
-            if key == "todos":
-                row.set_count(total)
-            elif key == "favoritos":
-                row.set_count(sum(1 for m in self._mobs if m.get("favorite")))
-
         # Resumo rápido — donut + 2-column legend, counts by top-level
         # category (whatever's created in the category explorer), not
         # rarity. A mob nested several folders deep still counts toward

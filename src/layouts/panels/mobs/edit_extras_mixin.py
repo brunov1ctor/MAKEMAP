@@ -12,7 +12,7 @@ import os
 
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit, QComboBox,
-    QPushButton, QToolButton, QWidget, QFileDialog,
+    QPushButton, QToolButton, QWidget, QFileDialog, QScrollArea,
 )
 from PySide6.QtCore import Qt
 
@@ -24,6 +24,13 @@ from src.layouts.panels.mobs.edit_helpers import (
 from src.layouts.panels.mobs.edit_widgets import _DropTile, _AbilityCard, _AssetCard
 
 logger = logging.getLogger("MAKEMAP")
+
+# Drops/Habilidades/Assets are 3 different card shapes (small square tiles
+# vs. full-width detail rows), but all 3 areas share this one fixed height
+# now — each scrolls its own overflow internally instead of Habilidades/
+# Assets growing the whole section taller with every entry added while
+# Drops stayed a fixed strip.
+_CARD_AREA_HEIGHT = 160
 
 
 class ExtrasSectionMixin:
@@ -54,10 +61,9 @@ class ExtrasSectionMixin:
         # whatever height the container happened to have before they
         # existed. A fixed-height scroll strip sidesteps the whole
         # problem: height is constant, only width scrolls.
-        from PySide6.QtWidgets import QScrollArea
         drops_scroll = QScrollArea()
         drops_scroll.setWidgetResizable(True)
-        drops_scroll.setFixedHeight(_DropTile.SIZE + 32)
+        drops_scroll.setFixedHeight(_CARD_AREA_HEIGHT)
         drops_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         drops_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         drops_scroll.setStyleSheet(f"""
@@ -117,9 +123,22 @@ class ExtrasSectionMixin:
         # instead of popping a separate window, same reasoning as every
         # other inline editor in this app (_InlineNameEdit etc). ───
         outer.addLayout(_extra_header_row("HABILIDADES", "+ Nova Habilidade", self._on_new_ability_clicked))
-        self._abilities_container = QVBoxLayout()
+        abilities_scroll = QScrollArea()
+        abilities_scroll.setWidgetResizable(True)
+        abilities_scroll.setFixedHeight(_CARD_AREA_HEIGHT)
+        abilities_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        abilities_scroll.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{ width: 4px; background: transparent; }}
+            QScrollBar::handle:vertical {{ background: {Colors.TEXT_MUTED}; border-radius: 2px; min-height: 20px; }}
+        """)
+        abilities_widget = QWidget()
+        self._abilities_container = QVBoxLayout(abilities_widget)
+        self._abilities_container.setContentsMargins(0, 0, 0, 0)
         self._abilities_container.setSpacing(6)
-        outer.addLayout(self._abilities_container)
+        abilities_scroll.setWidget(abilities_widget)
+        outer.addWidget(abilities_scroll)
         self._ability_editor = self._build_ability_editor()
         self._ability_editor.setVisible(False)
         outer.addWidget(self._ability_editor)
@@ -130,9 +149,22 @@ class ExtrasSectionMixin:
         # for Salvar Alterações, same as category CRUD elsewhere in this
         # panel — it's a separate table, not a column on this mob row. ───
         outer.addLayout(_extra_header_row("ASSETS", "+ Novo Asset", self._on_new_asset_clicked))
-        self._assets_container = QVBoxLayout()
+        assets_scroll = QScrollArea()
+        assets_scroll.setWidgetResizable(True)
+        assets_scroll.setFixedHeight(_CARD_AREA_HEIGHT)
+        assets_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        assets_scroll.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{ width: 4px; background: transparent; }}
+            QScrollBar::handle:vertical {{ background: {Colors.TEXT_MUTED}; border-radius: 2px; min-height: 20px; }}
+        """)
+        assets_widget = QWidget()
+        self._assets_container = QVBoxLayout(assets_widget)
+        self._assets_container.setContentsMargins(0, 0, 0, 0)
         self._assets_container.setSpacing(6)
-        outer.addLayout(self._assets_container)
+        assets_scroll.setWidget(assets_widget)
+        outer.addWidget(assets_scroll)
 
         # ─── Spawn — Efeitos moved in here as a compact dropdown (was its
         # own free-text section) to match the reference layout. ───
@@ -292,6 +324,7 @@ class ExtrasSectionMixin:
             card.edit_requested.connect(self._on_edit_ability)
             card.remove_requested.connect(self._on_remove_ability)
             self._abilities_container.addWidget(card)
+        self._abilities_container.addStretch()
 
     def _on_new_ability_clicked(self):
         self._ability_editing_index = None
@@ -354,6 +387,7 @@ class ExtrasSectionMixin:
             card = _AssetCard(asset)
             card.delete_requested.connect(self._on_delete_asset)
             self._assets_container.addWidget(card)
+        self._assets_container.addStretch()
 
     def _on_new_asset_clicked(self):
         if not self._mob_id:

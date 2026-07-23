@@ -223,5 +223,17 @@ class RegionSettingsPanel(QFrame):
         self.region_removed.emit(region_id)
         self.content_changed.emit()
 
+    def clear_regions(self):
+        """Drops every card without emitting region_removed — used when
+        reloading a different project's regiões (RegionMediator._load_from_db),
+        where each one is being replaced, not individually deleted."""
+        for region_id in list(self._cards):
+            card = self._cards.pop(region_id, None)
+            if card:
+                self._list_layout.removeWidget(card)
+                card.deleteLater()
+        self._selected_id = ""
+        self.content_changed.emit()
+
     def paintEvent(self, event):
         paint_glass_panel(self)

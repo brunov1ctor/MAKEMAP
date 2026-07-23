@@ -15,20 +15,17 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from src.styles.tokens import Colors
-from src.layouts.panels.mobs.categories import SMART_FILTERS, set_category_lookup
+from src.layouts.panels.mobs.categories import set_category_lookup
 from src.layouts.panels.mobs.panel_widgets import _SidebarRow, _InlineNameEdit
 
 logger = logging.getLogger("MAKEMAP")
 
 
 class CategoryExplorerMixin:
-    """CATEGORIAS box: the SMART_FILTERS (Todos/Favoritos) stay plain
-    pinned rows since they aren't part of the folder tree — matching the
-    reference: "CATEGORIAS" title alone, then one combined row (back/
-    forward + search + "+ Nova categoria"), then a single continuous list
-    — smart filters first, folder rows for the current directory right
-    after with no separator between them, since clicking a folder row
-    just replaces that same list in place (see _refresh_explorer/
+    """CATEGORIAS box: "CATEGORIAS" title alone, then one combined row
+    (back/forward + search + "+ Nova categoria"), then a single continuous
+    list of folder rows for the current directory — clicking one just
+    replaces that same list in place (see _refresh_explorer/
     _navigate_into) rather than opening anything separate below it."""
 
     def _build_left_column(self) -> QWidget:
@@ -151,16 +148,6 @@ class CategoryExplorerMixin:
         self._folders_layout.setContentsMargins(0, 0, 0, 0)
         self._folders_layout.setSpacing(2)
 
-        # Smart filters are added once here and never touched again —
-        # _refresh_explorer only clears/rebuilds what comes after them
-        # (see self._folder_rows_start_index), so they stay put at the
-        # top of the same list the folder rows appear directly beneath.
-        for key, icon_c, label in SMART_FILTERS:
-            row = _SidebarRow(key, icon_c, label)
-            row.clicked.connect(self._on_filter_selected)
-            self._sidebar_rows[key] = row
-            self._folders_layout.addWidget(row)
-        self._sidebar_rows["todos"].set_selected(True)
         self._folder_rows_start_index = self._folders_layout.count()
 
         scroll.setWidget(self._folders_list_widget)
@@ -226,9 +213,6 @@ class CategoryExplorerMixin:
         self._nav_back_btn.setEnabled(self._nav_index > 0)
         self._nav_forward_btn.setEnabled(self._nav_index < len(self._nav_history) - 1)
 
-        # Only the folder rows get cleared/rebuilt — the smart filters
-        # above them (added once in _build_sidebar) stay put, so this
-        # never touches self._sidebar_rows.
         while self._folders_layout.count() > self._folder_rows_start_index:
             item = self._folders_layout.takeAt(self._folder_rows_start_index)
             if item.widget():
@@ -249,8 +233,7 @@ class CategoryExplorerMixin:
         else:
             # Makes an empty directory (or a search with no matches)
             # unambiguous — otherwise navigating into one looks identical
-            # to nothing having happened at all, since the smart filters
-            # above are the only thing left on screen either way.
+            # to nothing having happened at all.
             empty_lbl = QLabel("Nenhuma categoria encontrada." if search else "Nenhuma subcategoria aqui ainda.")
             empty_lbl.setWordWrap(True)
             empty_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; font-style: italic; "
@@ -330,21 +313,6 @@ class CategoryExplorerMixin:
         idx = self._category_filter_combo.findData(current)
         self._category_filter_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._category_filter_combo.blockSignals(False)
-
-    def _on_filter_selected(self, key: str):
-        self._active_filter = key
-        for k, row in self._sidebar_rows.items():
-            row.set_selected(k == key)
-        if key == "todos" and self._current_dir_id is not None:
-            # "Todos" means show every mob — reset folder browsing back to
-            # the root too, instead of silently staying scoped to whatever
-            # directory happened to be open.
-            self._current_dir_id = None
-            self._nav_history = [None]
-            self._nav_index = 0
-            self._refresh_explorer()
-        self._apply_filters()
-        logger.info("Filtro de categoria selecionado: %s", key)
 
     def _on_new_category_clicked(self):
         self._new_cat_btn.setVisible(False)

@@ -23,31 +23,59 @@ class MobCrudMixin:
     """Create/save/duplicate/delete/favorite a mob."""
 
     def _on_new_mob(self):
+        """Opens a blank draft in the edit panel — no card, no DB row, until
+        "Salvar Alterações" is actually clicked (see _on_save). Previously
+        this created the DB row immediately, so clicking "+ Novo Mob" and
+        then clicking away without saving left an orphaned "Novo Mob N" row
+        behind; now nothing is written until the user actually saves."""
         if not self._uow:
             return
         mob_id = str(uuid.uuid4())
-        name = f"Novo Mob {len(self._mobs) + 1}"
-        fields = {"id": mob_id, "name": name}
+        draft = {"id": mob_id, "name": f"Novo Mob {len(self._mobs) + 1}"}
         # Same "drop it in the folder you're browsing" behavior as import —
         # see ImportExportMixin._import_mob_dicts.
         if self._current_dir_id is not None:
-            fields["category"] = self._current_dir_id
-        self._uow.mobs.create(**fields)
-        self._reload()
-        self._on_card_selected(mob_id)
-        logger.info("Novo mob criado: id=%s nome='%s' categoria=%s", mob_id, name, self._current_dir_id)
+            draft["category"] = self._current_dir_id
+        self._selected_id = ""
+        for layout in (self._grid_layout, self._list_layout):
+            for i in range(layout.count()):
+                w = layout.itemAt(i).widget()
+                if w is not None and hasattr(w, "mob_id"):
+                    w.set_selected(False)
+        self._edit_panel.load(draft, creating=True)
+        logger.info("Novo mob: formulário em branco aberto (id provisório=%s)", mob_id)
 
     def _on_save(self, values: dict):
         if not self._uow or not values.get("id"):
             return
         mob_id = values.pop("id")
-        self._uow.mobs.update(mob_id, **values)
+        is_new = self._mob_by_id(mob_id) is None
+        if is_new:
+            self._uow.mobs.create(id=mob_id, **values)
+        else:
+            self._uow.mobs.update(mob_id, **values)
         self._selected_id = mob_id
         self._reload()
         self._on_card_selected(mob_id)
-        logger.info("Mob salvo: id=%s (%d campos)", mob_id, len(values))
+        logger.info("Mob salvo: id=%s (%d campos, novo=%s)", mob_id, len(values), is_new)
+
+    def _on_rename(self, mob_id: str, new_name: str):
+        """The only way to rename an already-saved mob — its Nome field in
+        the edit panel becomes read-only once saved (see MobEditPanel);
+        this is triggered from the "✏ Renomear" menu action instead."""
+        if not self._uow or not new_name:
+            return
+        self._uow.mobs.update(mob_id, name=new_name)
+        for m in self._mobs:
+            if m["id"] == mob_id:
+                m["name"] = new_name
+        self._reload()
+        logger.info("Mob renomeado: id=%s novo_nome='%s'", mob_id, new_name)
 
     def _on_duplicate(self, mob_id: str):
+        """Quick-duplicate from the card's own right-click menu — distinct
+        from the edit panel's header menu, which dropped Duplicar in favor
+        of Renomear (see _on_rename)."""
         mob = self._mob_by_id(mob_id)
         if not mob or not self._uow:
             return

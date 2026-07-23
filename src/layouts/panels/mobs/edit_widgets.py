@@ -8,11 +8,48 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QWidget, QMenu
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QDragEnterEvent, QDropEvent
 
 from src.styles.tokens import Colors
 from src.layouts.panels.mobs.categories import item_rarity_color
 from src.layouts.panels.mobs.edit_helpers import _rarity_chip_label
+
+
+class _DropImageButton(QToolButton):
+    """The Visão Geral portrait button — click to browse (existing
+    behavior, wired by OverviewSectionMixin) plus drag-and-drop of an image
+    file straight from Explorer/Finder, same idea as the Importar _DropZone
+    (panel_widgets.py) but sized/shaped as the portrait thumbnail itself
+    rather than a standalone big drop target."""
+
+    image_dropped = Signal(str)  # local file path
+
+    _ACCEPTED_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def _first_accepted_path(self, mime_data) -> str | None:
+        for url in mime_data.urls():
+            path = url.toLocalFile()
+            if path and path.lower().endswith(self._ACCEPTED_SUFFIXES):
+                return path
+        return None
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls() and self._first_accepted_path(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        path = self._first_accepted_path(event.mimeData())
+        if path:
+            event.acceptProposedAction()
+            self.image_dropped.emit(path)
+        else:
+            event.ignore()
 
 
 class _CollapsibleSection(QFrame):

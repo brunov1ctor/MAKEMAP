@@ -18,9 +18,11 @@ class TerrainMediator:
 
     _STAGGER_STEP = 120.0
     _STAGGER_WRAP = 8
+    MAP_ID = "default"  # matches Região/Brush — none of these are scoped to the (unimplemented) maps/worlds hierarchy
 
     def __init__(self, layout: MainLayout):
         self._l = layout
+        self._uow = None
         from src.canvas.map_boundary import MapBoundary
         self._boundaries: dict[str, MapBoundary] = {}
         self._preview_boundary: MapBoundary | None = None
@@ -32,6 +34,50 @@ class TerrainMediator:
         self._active_parallax_key: str | None = None
         from src.engines.map.parallax import get_parallax_library
         get_parallax_library().changed.connect(self._on_parallax_library_changed)
+
+        # Only Região/Brush listened to this before (for their own "which
+        # terrain" dropdowns) — TerrainMediator itself needs it too now, to
+        # persist a rename.
+        self._l.terrain_panel.terrain_renamed.connect(self.on_renamed)
+
+    # ─── Persistence wiring (called by application.py on project load) ───
+
+    def set_uow(self, uow):
+        self._uow = uow
+        self._load_from_db()
+
+    def _load_from_db(self):
+        from src.canvas.map_boundary import MapBoundary
+        for boundary in self._boundaries.values():
+            boundary.hide()
+        self._boundaries.clear()
+        self._l.terrain_panel.clear_terrains()
+        if not self._uow:
+            self._sync_all_boundaries()
+            return
+
+        scene = self._l.canvas.engine.viewport.scene()
+        for row in self._uow.terrains.get_by_map(self.MAP_ID):
+            color = QColor(row["color"]) if row["color"] else None
+            boundary = MapBoundary(scene, color)
+            if row["visible"]:
+                boundary.show(row["width"], row["height"], row["shape"] or "rectangle")
+                boundary.set_position(QPointF(row["position_x"], row["position_y"]))
+            terrain_id = row["id"]
+            boundary.set_on_position_changed(
+                lambda pos, tid=terrain_id: self._on_boundary_moved(tid, pos)
+            )
+            self._boundaries[terrain_id] = boundary
+            self._l.terrain_panel.add_terrain(terrain_id, row["name"], color)
+        self._sync_all_boundaries()
+
+    def _on_boundary_moved(self, terrain_id: str, pos: QPointF):
+        if self._uow:
+            self._uow.terrains.update(terrain_id, position_x=pos.x(), position_y=pos.y())
+
+    def on_renamed(self, terrain_id: str, new_name: str):
+        if self._uow:
+            self._uow.terrains.update(terrain_id, name=new_name)
 
     @property
     def boundaries(self):
@@ -106,6 +152,8 @@ class TerrainMediator:
             boundary = self._boundaries.get(sel_id)
             if boundary and boundary.visible:
                 boundary.update_dimensions(width, height)
+                if self._uow:
+                    self._uow.terrains.update(sel_id, width=width, height=height)
         elif not self._l.terrain_panel.is_infinite:
             self._show_preview()
         self._l.canvas.engine._update_grid()
@@ -120,6 +168,8 @@ class TerrainMediator:
             boundary = self._boundaries.get(sel_id)
             if boundary and boundary.visible:
                 boundary.update_shape(shape)
+                if self._uow:
+                    self._uow.terrains.update(sel_id, shape=shape)
         elif not self._l.terrain_panel.is_infinite:
             self._show_preview()
         self._l.canvas.engine._update_grid()
@@ -133,6 +183,7 @@ class TerrainMediator:
         w = self._l.terrain_panel.map_width
         h = self._l.terrain_panel.map_height
         shape = self._l.terrain_panel.map_shape
+        pos_before_hide = boundary.position  # boundary.position resets to (0,0) once hidden
         if visible:
             boundary.show(w, h, shape)
             if boundary.position.isNull():
@@ -143,6 +194,12 @@ class TerrainMediator:
             self._fit_to_boundary(boundary)
         else:
             boundary.hide()
+        if self._uow:
+            pos = boundary.position if visible else pos_before_hide
+            self._uow.terrains.update(
+                terrain_id, visible=int(visible), width=w, height=h, shape=shape,
+                position_x=pos.x(), position_y=pos.y(),
+            )
         self._sync_all_boundaries()
 
     def _fit_to_boundary(self, boundary):
@@ -183,7 +240,6 @@ class TerrainMediator:
         self._l.canvas.engine._update_grid()
 
     def on_added(self, terrain_id: str, name: str):
-        self._l._ensure_project()
         self._hide_preview()
         from src.canvas.map_boundary import MapBoundary
         scene = self._l.canvas.engine.viewport.scene()
@@ -197,6 +253,7 @@ class TerrainMediator:
                 if m:
                     color = QColor(m.group(1))
         boundary = MapBoundary(scene, color)
+        boundary.set_on_position_changed(lambda pos, tid=terrain_id: self._on_boundary_moved(tid, pos))
         w = self._l.terrain_panel.map_width
         h = self._l.terrain_panel.map_height
         shape = self._l.terrain_panel.map_shape
@@ -209,12 +266,21 @@ class TerrainMediator:
         self._boundaries[terrain_id] = boundary
         if self._l.terrain_panel.selected_terrain_id == terrain_id and not self._l.terrain_panel.is_infinite:
             self._l.canvas.engine._brush_tool.set_active_boundary(boundary)
+        if self._uow:
+            pos = boundary.position
+            self._uow.terrains.create(
+                id=terrain_id, map_id=self.MAP_ID, name=name, shape=shape, width=w, height=h,
+                color=color.name() if color else "", position_x=pos.x(), position_y=pos.y(),
+                visible=int(boundary.visible),
+            )
         self._sync_all_boundaries()
 
     def on_removed(self, terrain_id: str):
         boundary = self._boundaries.pop(terrain_id, None)
         if boundary:
             boundary.hide()
+        if self._uow:
+            self._uow.terrains.delete(terrain_id)
         sel_id = self._l.terrain_panel.selected_terrain_id
         if sel_id and not self._l.terrain_panel.is_infinite:
             self._l.canvas.engine._brush_tool.set_active_boundary(self._boundaries.get(sel_id))

@@ -240,6 +240,7 @@ class MainWindow(QMainWindow):
         self.project = None
         self.setWindowTitle(f"{APP_NAME} — v{VERSION}")
         self.layout_widget.top_bar.set_project_name("")
+        self.layout_widget.top_bar.set_modules_enabled(False)
         self._projects_panel.set_active("")
         self._projects_panel.refresh()
 
@@ -262,6 +263,7 @@ class MainWindow(QMainWindow):
         self.project = None
         self.setWindowTitle(f"{APP_NAME} — v{VERSION}")
         self.layout_widget.top_bar.set_project_name("")
+        self.layout_widget.top_bar.set_modules_enabled(False)
         self.layout_widget.status_bar.save_label.setText("")
 
     # --- Helpers ---
@@ -298,11 +300,24 @@ class MainWindow(QMainWindow):
         self.asset_engine.set_uow(self.uow)
         self.asset_engine._project_path = self.project.path
 
+        # Connect project DB to terrains (map boundaries) first — Região and
+        # Brush both resolve a terrain_id against TerrainMediator.boundaries
+        # when reloading their own state, so boundaries must already be
+        # repopulated by the time those run.
+        self.layout_widget._terrain_med.set_uow(self.uow)
+
         # Connect project DB to painted regions (loads any saved zones)
         self.layout_widget._region_med.set_uow(self.uow)
 
+        # Connect project DB to the Brush tool (loads any saved terrain
+        # painting + object stamps, clearing whatever the previous project
+        # had painted) — must run after asset_engine.set_uow() above, since
+        # reloading terrain/stamp textures reads through it.
+        self.layout_widget._brush_med.set_uow(self.uow)
+
         self.setWindowTitle(f"{APP_NAME} \u2014 {self.project.meta.name}")
         self.layout_widget.top_bar.set_project_name(self.project.meta.name)
+        self.layout_widget.top_bar.set_modules_enabled(True)
         self.layout_widget.status_bar.save_label.setText("Salvo")
         self.layout_widget.engines.update_stats()
         self.autosave.start(self.project)
@@ -358,6 +373,14 @@ class Application:
 
     def run(self) -> int:
         self.window.showMaximized()
+        if self.window.project is None:
+            # Force the Projects screen up front instead of landing on Mapa
+            # with nothing to save into — see MainLayout._on_menu_view.
+            self.window.layout_widget._on_menu_view("Projetos")
+            # Fade out every other module button so there's nothing to
+            # click into that would silently no-op every action without a
+            # project loaded yet (re-enabled in _on_project_loaded).
+            self.window.layout_widget.top_bar.set_modules_enabled(False)
         self.logger.info("Janela principal exibida")
         return self.app.exec()
 

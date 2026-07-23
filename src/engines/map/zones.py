@@ -1,21 +1,14 @@
-"""Zone types — Cities Skylines-style colored area tags for the Região tool.
+"""Região tool defaults.
 
-Unlike Bioma (which scatters procedural objects via MapGenerator), a zone is
-just a flat translucent color painted over a user-drawn polygon, tagging that
-area as Residencial/Comercial/etc. No automatic lot subdivision along roads —
-that's a much larger simulation feature, out of scope here.
+Unlike Bioma (which scatters procedural objects via MapGenerator), a região
+is just a flat translucent color painted over a user-drawn/brush-painted
+area. "Tipo" is a free-text field the user fills in themselves (not a fixed
+category), so there's no ZONE_TYPES enum to pick from anymore — just a
+default color for a brand-new região before its own color picker is used.
 """
 
 from __future__ import annotations
 
 from PySide6.QtGui import QColor
 
-# key -> (icon, display label, fill color)
-ZONE_TYPES = [
-    ("residential", "🏠", "Residencial", QColor(120, 200, 120, 90)),
-    ("commercial", "🏬", "Comercial", QColor(90, 160, 230, 90)),
-    ("industrial", "🏭", "Industrial", QColor(230, 190, 60, 90)),
-    ("institutional", "🏛", "Institucional", QColor(150, 130, 220, 90)),
-]
-
-ZONE_COLORS = {key: color for key, _icon, _label, color in ZONE_TYPES}
+DEFAULT_ZONE_COLOR = QColor(120, 200, 120, 90)

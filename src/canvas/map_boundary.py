@@ -108,6 +108,12 @@ class MovableBoundaryItem(QGraphicsPathItem):
         self._drag_start_scene = QPointF()
         self._drag_start_pos = QPointF()
         self._guides: AlignmentGuides | None = None
+        # Plain callback, not a Qt signal — QGraphicsPathItem isn't a
+        # QObject, and a new instance replaces this one on every
+        # show()/update_dimensions()/update_shape() (see MapBoundary._rebuild),
+        # so MapBoundary rewires this each time rather than this item
+        # owning a persistent connection.
+        self.on_moved = None
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
 
@@ -188,6 +194,8 @@ class MovableBoundaryItem(QGraphicsPathItem):
             if self._guides:
                 self._guides.clear()
                 self._guides = None
+            if self.on_moved:
+                self.on_moved(self.pos())
             event.accept()
         else:
             super().mouseReleaseEvent(event)
@@ -220,6 +228,7 @@ class MapBoundary:
         self._height = self.DEFAULT_HEIGHT
         self._color = color or self.BORDER_COLOR_BASE
         self._preview = False
+        self._on_position_changed = None  # set via set_on_position_changed
 
         # Pulse animation state
         self._alpha = self.PULSE_MIN_ALPHA
@@ -253,6 +262,15 @@ class MapBoundary:
     def set_position(self, pos: QPointF):
         if self._item:
             self._item.setPos(pos)
+
+    def set_on_position_changed(self, callback):
+        """`callback(QPointF)` fires when the user finishes dragging this
+        boundary — used by TerrainMediator to persist the new position.
+        Rewired onto the live item every _rebuild() (see there) since
+        show()/update_dimensions()/update_shape() all replace the item."""
+        self._on_position_changed = callback
+        if self._item:
+            self._item.on_moved = callback
 
     def show(self, width: int, height: int, shape: str = "rectangle"):
         self._width = width
@@ -305,6 +323,7 @@ class MapBoundary:
         self._item.setPos(old_pos)
         self._item.setZValue(-500)
         self._item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self._item.on_moved = self._on_position_changed
         self._update_pen()
         self._scene.addItem(self._item)
 

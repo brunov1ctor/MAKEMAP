@@ -152,13 +152,13 @@ class NPCsPanel(MenuPanel):
 
 class ItensPanel(MenuPanel):
     def __init__(self, parent=None):
-        super().__init__("Itens", "⚔", parent)
+        super().__init__("Itens e Habilidades", "⚔", parent)
         self.add_empty_state("Catalogue armas, armaduras e itens do mundo.")
 
 
 class DungeonsPanel(MenuPanel):
     def __init__(self, parent=None):
-        super().__init__("Dungeons", "🏰", parent)
+        super().__init__("Dungeons e Construções", "🏰", parent)
         self.add_empty_state("Projete masmorras e encontros de combate.")
 
 

@@ -119,6 +119,14 @@ class TerrainLayer:
     def item(self) -> QGraphicsPixmapItem:
         return self._item
 
+    @property
+    def texture_scale(self) -> float:
+        return self._texture_scale
+
+    @property
+    def texture_rotation(self) -> float:
+        return self._texture_rotation
+
     def has_texture(self) -> bool:
         return self._texture is not None and not self._texture.isNull()
 
@@ -451,6 +459,84 @@ class TerrainLayer:
         self._height = state["height"]
         self._item.setPos(state["pos"])
         self._result = QImage(self._width, self._height, QImage.Format.Format_ARGB32_Premultiplied)
+        self._recomposite_full()
+
+    # ─── Serialization ───────────────────────────────────────────────────
+    # Moved here from RegionLayer (which now just delegates) so any
+    # TerrainLayer — not only the Região-flavored wrapper — can be
+    # exported/reimported the same way (see BrushMediator, which persists
+    # brush-painted terrain masks the same way RegionMediator already
+    # persisted painted zones).
+
+    _OPAQUE_SCAN_SIZE = 64
+    _OPAQUE_ALPHA_THRESHOLD = 10
+
+    def opaque_bounds_local(self) -> QRect | None:
+        """Bounding box (layer-local coords) of the painted (non-transparent)
+        area, via a cheap downsampled alpha scan — good enough to crop an
+        export/thumbnail around, not meant to be pixel-exact."""
+        w, h = self._mask.width(), self._mask.height()
+        if w == 0 or h == 0:
+            return None
+        small = self._mask.scaled(
+            self._OPAQUE_SCAN_SIZE, self._OPAQUE_SCAN_SIZE,
+            Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation,
+        )
+        min_x = min_y = None
+        max_x = max_y = None
+        for y in range(small.height()):
+            for x in range(small.width()):
+                if small.pixelColor(x, y).alpha() > self._OPAQUE_ALPHA_THRESHOLD:
+                    min_x = x if min_x is None else min(min_x, x)
+                    max_x = x if max_x is None else max(max_x, x)
+                    min_y = y if min_y is None else min(min_y, y)
+                    max_y = y if max_y is None else max(max_y, y)
+        if min_x is None:
+            return None
+        sx, sy = w / small.width(), h / small.height()
+        pad = 2
+        return QRect(
+            int(max(0, (min_x - pad) * sx)), int(max(0, (min_y - pad) * sy)),
+            int(min(w, (max_x + 1 + pad) * sx) - max(0, (min_x - pad) * sx)),
+            int(min(h, (max_y + 1 + pad) * sy) - max(0, (min_y - pad) * sy)),
+        )
+
+    def export_mask_png_base64(self) -> tuple[str, float, float]:
+        """PNG-encode the cropped raw paint mask (base64 text, alpha only —
+        NOT the composited/textured result, so reloading + recompositing
+        with whatever texture is set at the time reproduces it correctly)
+        plus its local top-left offset, for DB storage. Cropped to opaque
+        bounds so an untouched 4096x4096 mostly-transparent layer doesn't
+        serialize as a multi-megabyte blob."""
+        import base64
+        from PySide6.QtCore import QBuffer, QIODevice
+
+        bounds = self.opaque_bounds_local()
+        if bounds is None:
+            return "", 0.0, 0.0
+        cropped = self._mask.copy(bounds)
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        cropped.save(buf, "PNG")
+        data = base64.b64encode(bytes(buf.data())).decode("ascii")
+        return data, float(bounds.x()), float(bounds.y())
+
+    def import_mask_png_base64(self, data: str, offset_x: float, offset_y: float):
+        """Reverse of export_mask_png_base64 — paints the decoded PNG
+        straight into the mask at its saved local offset (SourceOver, no
+        brush falloff — this is a raw restore, not a stroke)."""
+        import base64
+
+        if not data:
+            return
+        raw = base64.b64decode(data.encode("ascii"))
+        img = QImage.fromData(raw, "PNG")
+        if img.isNull():
+            return
+        painter = QPainter(self._mask)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        painter.drawImage(QPointF(offset_x, offset_y), img)
+        painter.end()
         self._recomposite_full()
 
     # ─── Cleanup ─────────────────────────────────────────────────────────

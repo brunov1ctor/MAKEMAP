@@ -186,6 +186,22 @@ class ZoneRepository(BaseRepository):
         return self.get_all(map_id=map_id)
 
 
+class TerrainPaintRepository(BaseRepository):
+    """Brush-tool terrain material masks — one row per (map, asset_id)."""
+    TABLE = "painted_terrain"
+
+    def get_by_map(self, map_id: str) -> list[dict]:
+        return self.get_all(map_id=map_id)
+
+
+class TerrainRepository(BaseRepository):
+    """Terrain panel's map boundaries (shape/size/position/visibility)."""
+    TABLE = "terrains"
+
+    def get_by_map(self, map_id: str) -> list[dict]:
+        return self.get_all(map_id=map_id)
+
+
 class AssetRepository(BaseRepository):
     TABLE = "assets"
 

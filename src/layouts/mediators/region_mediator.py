@@ -20,12 +20,10 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 
 from src.engines.map.region_layer import RegionLayer
-from src.engines.map.zones import ZONE_TYPES
+from src.engines.map.zones import DEFAULT_ZONE_COLOR
 
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
-
-_ZONE_LABELS = {key: label for key, _icon, label, _color in ZONE_TYPES}
 
 
 @dataclass
@@ -105,6 +103,7 @@ class RegionMediator:
         for zone in list(self._zones.values()):
             zone.layer.remove_from_scene()
         self._zones.clear()
+        self._l.region_panel.clear_regions()
         for row in self._uow.zones.get_by_map(self.MAP_ID):
             color = QColor(row["color"])
             layer = self._l.canvas.engine.create_region_layer(color)
@@ -116,11 +115,11 @@ class RegionMediator:
                 layer=layer, stars=row["stars"], estilo=row["estilo"] or "Nenhum",
                 observacao=row["observacao"] or "", visible=bool(row["visible"]),
                 radius=row["brush_radius"], softness=row["brush_softness"],
-                opacity=row["brush_opacity"],
+                opacity=row["brush_opacity"], terrain_id=row["terrain_id"] or "",
             )
             self._zones[zone.id] = zone
             self._l.region_panel.add_region_card(
-                zone.id, zone.name, self._category_label(zone.category_key), zone.color,
+                zone.id, zone.name, zone.category_key, zone.color,
                 area_m2=layer.area_m2(), object_count=self._count_objects_in(zone),
                 visible=zone.visible, thumbnail=layer.thumbnail(),
                 terrain_label=self._terrain_label(zone.terrain_id),
@@ -132,11 +131,10 @@ class RegionMediator:
     # card (like any other) arms the brush — see on_selected/_open_edit.
 
     def on_add_requested(self):
-        category_key, _icon, label, color = ZONE_TYPES[0]
-        layer = self._l.canvas.engine.create_region_layer(color)
+        layer = self._l.canvas.engine.create_region_layer(DEFAULT_ZONE_COLOR)
         region_id = str(uuid.uuid4())
-        name = f"{label} {self._l.region_panel.region_count() + 1}"
-        zone = _Zone(id=region_id, category_key=category_key, name=name, color=QColor(color), layer=layer)
+        name = f"Região {self._l.region_panel.region_count() + 1}"
+        zone = _Zone(id=region_id, category_key="", name=name, color=QColor(DEFAULT_ZONE_COLOR), layer=layer)
         self._zones[region_id] = zone
         self._active_id = region_id
         self._is_creating = True
@@ -162,7 +160,7 @@ class RegionMediator:
         if zone is None:
             return
         self._l.region_panel.add_region_card(
-            zone.id, zone.name, self._category_label(zone.category_key), zone.color,
+            zone.id, zone.name, zone.category_key, zone.color,
             area_m2=0.0, object_count=0, visible=zone.visible, thumbnail=None,
             terrain_label=self._terrain_label(zone.terrain_id),
         )
@@ -227,6 +225,7 @@ class RegionMediator:
         if zone is None:
             return
         zone.terrain_id = terrain_id
+        self._persist_fields(zone, terrain_id=terrain_id)
         if self._active_id == zone.id:
             boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
             self._l.canvas.engine._region_brush_tool.set_active_boundary(boundary)
@@ -246,6 +245,7 @@ class RegionMediator:
         if not zone:
             return
         zone.terrain_id = terrain_id
+        self._persist_fields(zone, terrain_id=terrain_id)
         boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
         self._l.canvas.engine._region_brush_tool.set_active_boundary(boundary)
         card = self._l.region_panel.get_card(zone.id)
@@ -314,9 +314,6 @@ class RegionMediator:
                 count += 1
         return count
 
-    def _category_label(self, category_key: str) -> str:
-        return _ZONE_LABELS.get(category_key, category_key.capitalize())
-
     # ─── Edit panel field handlers ───
 
     def _current_zone(self) -> _Zone | None:
@@ -339,7 +336,7 @@ class RegionMediator:
         zone.category_key = category_key
         card = self._l.region_panel.get_card(zone.id)
         if card:
-            card.set_category_label(self._category_label(category_key))
+            card.set_category_label(category_key)
         self._persist_fields(zone, category_key=category_key)
 
     def _on_color_changed(self, color: QColor):

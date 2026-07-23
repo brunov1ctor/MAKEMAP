@@ -448,6 +448,19 @@ class TerrainSettingsPanel(QFrame):
     def remove_terrain(self, terrain_id: str):
         self._on_card_deleted(terrain_id)
 
+    def clear_terrains(self):
+        """Drops every card without emitting terrain_removed — used when
+        reloading a different project's terrains (TerrainMediator._load_from_db),
+        where each one is being replaced, not individually deleted."""
+        for terrain_id in list(self._cards):
+            card = self._cards.pop(terrain_id, None)
+            if card:
+                self._list_layout.removeWidget(card)
+                card.deleteLater()
+        self._selected_id = ""
+        self._update_crud_visibility()
+        self.content_changed.emit()
+
     @property
     def selected_terrain_id(self) -> str:
         return self._selected_id

@@ -15,6 +15,7 @@ from src.canvas.tools.defaults import SelectTool, PanTool
 from src.canvas.tools.brush_tool import BrushTool, RegionTool, RoadTool, RiverTool, RegionBrushTool
 from src.canvas.tools.text_tool import TextTool
 from src.engines.map.region_layer import RegionLayer
+from src.engines.map.terrain_layer import TerrainLayer
 from src.canvas.map_boundary import MovableBoundaryItem
 from src.engines.map.brush import BrushEngine
 from src.canvas.input_manager import InputManager
@@ -163,9 +164,11 @@ class CanvasEngine(QWidget):
         self.tool_manager.register(RiverTool(self.viewport))
 
         # Região panel's paint brush (distinct from RegionTool's click-polygon,
-        # used by the toolbar's Bioma/Estrada/Rio dropdown)
+        # used by the toolbar's Bioma/Estrada/Rio dropdown) — deliberately
+        # never wired to self.snap (see RegionBrushTool._paint): a região is
+        # a freeform painted area, not grid-tile placement, so it shouldn't
+        # inherit whatever Snap/Grid state the terrain Brush tool left on.
         self._region_brush_tool = RegionBrushTool(self.viewport, history_engine=self.history)
-        self._region_brush_tool.set_snap_manager(self.snap)
         self.tool_manager.register(self._region_brush_tool)
 
     def set_asset_engine(self, asset_engine):
@@ -189,6 +192,32 @@ class CanvasEngine(QWidget):
         """A blank, paintable Região layer — brush-painted colored area
         managed by RegionMediator/RegionBrushTool. See region_layer.py."""
         return RegionLayer(self.viewport.scene(), color)
+
+    def get_or_create_terrain_layer(self, asset_id: str) -> TerrainLayer:
+        """Brush-tool material layer for `asset_id` — reaches into
+        BrushTool the same way `create_region_layer` reaches into
+        RegionLayer, so BrushMediator can reload persisted terrain masks
+        without touching BrushTool internals directly."""
+        return self._brush_tool._get_or_create_terrain_layer(asset_id)
+
+    def terrain_layers(self) -> dict[str, TerrainLayer]:
+        """All brush-painted terrain layers, keyed by asset_id — for
+        BrushMediator to export/persist."""
+        return self._brush_tool._terrain_layers
+
+    def clear_terrain_layers(self):
+        """Removes every brush-painted terrain layer from the scene —
+        used when switching projects (see BrushMediator._load_from_db)."""
+        for layer in self._brush_tool._terrain_layers.values():
+            layer.remove_from_scene()
+        self._brush_tool._terrain_layers.clear()
+
+    def place_stamp_item(self, asset_id: str, position: QPointF, rotation: float,
+                          scale: float, opacity: float) -> QGraphicsPixmapItem | None:
+        """Builds a brush-stamped object item at a scene position — shared
+        by live painting (BrushTool._on_object_stamp) and DB reload
+        (BrushMediator._load_from_db) so both produce identical items."""
+        return self._brush_tool.place_stamp_item(asset_id, position, rotation, scale, opacity)
 
     def paint_zone(self, polygon: QPolygonF, zone_key: str, region_id: str,
                     name: str, stars: int, color: QColor):

@@ -54,6 +54,13 @@ class _SidebarRow(QFrame):
         self.key = key
         self._selected = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Fixed, not left to sizeHint() — the emoji icon (📋/⭐/📁) pulls in
+        # Windows' color-emoji font as a per-character fallback, and that
+        # font's line metrics are wildly taller than the row's actual text,
+        # so an auto sizeHint balloons this row to ~100px+ instead of its
+        # intended ~30px on real Windows rendering (not reproducible with
+        # the offscreen/test QPA platform, which doesn't do that fallback).
+        self.setFixedHeight(30)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(8, 5, 8, 5)
         lay.setSpacing(8)

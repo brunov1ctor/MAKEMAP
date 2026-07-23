@@ -39,18 +39,6 @@ def set_category_lookup(categories: list[dict]):
     _category_lookup = {c["id"]: c for c in categories}
 
 
-# Smart filters — computed over other columns (favorite), not a distinct
-# category value of their own. Chefes (Boss) and Elite used to live here
-# too (computed from mobs.rarity) but became real navigable folders in
-# the category tree instead (see migration 7) — Todos and Favoritos stay
-# pinned smart filters since neither makes sense as an assignable folder
-# ("Todos" is just the root view; favorite is a per-mob flag, not a
-# hierarchical grouping).
-SMART_FILTERS: list[tuple[str, str, str]] = [
-    ("todos", "📋", "Todos"),
-    ("favoritos", "⭐", "Favoritos"),
-]
-
 RARITY_DEFS: list[tuple[str, str, str]] = [
     ("normal", "#9AA5B1", "Normal"),
     ("raro", "#4FC3F7", "Raro"),

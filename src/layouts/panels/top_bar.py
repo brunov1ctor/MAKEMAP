@@ -26,10 +26,31 @@ class TopNavigationButton(QToolButton):
     - Tamanho consistente: 62px altura, min 72px largura
     """
 
-    def __init__(self, icon: str, text: str, parent=None):
+    # Width every short single-word button already naturally lands on
+    # ("Mapa"/"Mobs"/"NPCs"/"Lore"/"Logs") — a `wrap=True` button (see
+    # below) is clamped to exactly this instead of its natural (much
+    # wider) single-line width, so it reads as 2-3 lines rather than
+    # visibly wider than the rest of the bar.
+    _WRAPPED_WIDTH = 72
+
+    def __init__(self, icon: str, text: str, menu_id: str = None, wrap: bool = False, parent=None):
         super().__init__(parent)
         self._icon = icon
         self._label = text
+        # Internal identifier used for activation/routing (menu_clicked,
+        # set_active_menu, MENU_PANELS lookups) — kept distinct from the
+        # displayed label so a button's on-screen text can be a longer,
+        # friendlier name ("Itens e Habilidades") without also renaming
+        # the panel/dict key everywhere else that still expects "Itens".
+        self._menu_id = menu_id if menu_id is not None else text
+        # Explicit per-button flag (set in TopBar's `modules` list) rather
+        # than inferring "needs wrapping" from a measured pixel width
+        # threshold — that measurement depends on whatever font actually
+        # resolves at runtime (Typography.FAMILY may not be installed
+        # everywhere), so a threshold tuned in one environment could sit
+        # between two labels' real widths on another and wrap only one of
+        # them. An explicit flag can't disagree with itself like that.
+        self._wrap = wrap
         self.setCheckable(True)
         self.setToolTip(text)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -40,6 +61,8 @@ class TopNavigationButton(QToolButton):
         self.setStyleSheet("QToolButton { background: transparent; border: none; }")
 
     def sizeHint(self):
+        if self._wrap:
+            return QSize(self._WRAPPED_WIDTH, 62)
         fm = QFontMetrics(QFont(Typography.FAMILY, 9, QFont.Weight.Bold))
         tw = fm.horizontalAdvance(self._label) + 20
         return QSize(max(tw, 72), 62)
@@ -47,10 +70,16 @@ class TopNavigationButton(QToolButton):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Custom-painted, so Qt's own disabled-widget dimming (which only
+        # applies to its built-in style/palette drawing) never kicks in on
+        # its own — faded out explicitly here instead, e.g. while no
+        # project is open (see TopBar.set_modules_enabled).
+        if not self.isEnabled():
+            p.setOpacity(0.30)
 
         w, h = self.width(), self.height()
         is_active = self.isChecked()
-        is_hover = self.underMouse() and not is_active
+        is_hover = self.underMouse() and not is_active and self.isEnabled()
         is_pressed = self.isDown()
 
         # ── Background ──
@@ -67,27 +96,36 @@ class TopNavigationButton(QToolButton):
             # Fundo azul semitransparente
             p.fillPath(bg_path, QColor(30, 60, 100, 100))
 
-        # ── Icon (emoji) — 28px, posicionado na metade superior ──
+        # ── Icon (emoji) — posicionado na metade superior. Slightly
+        # shorter than before (24px vs 28px) to free up room below for a
+        # 2nd wrapped label line without growing the button's total
+        # height. ──
         icon_font = QFont("Segoe UI Emoji", 16)
         p.setFont(icon_font)
 
-        icon_rect = QRectF(0, 6, w, 28)
+        icon_rect = QRectF(0, 4, w, 24)
         if is_active:
             p.setPen(QColor(Colors.ACCENT))
         else:
             p.setPen(QColor("#ffffff"))
         p.drawText(icon_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignCenter, self._icon)
 
-        # ── Label — 9pt bold, posicionado na metade inferior ──
-        text_font = QFont(Typography.FAMILY, 9, QFont.Weight.Bold)
+        # ── Label — bold, posicionado na metade inferior. `wrap` buttons
+        # (see __init__) word-wrap onto 2-3 lines within the same
+        # _WRAPPED_WIDTH instead of the button growing wider for a longer
+        # label, at a smaller point size so those lines actually fit the
+        # available height instead of the last one clipping past the
+        # button's edge. Every other (single-line) button is completely
+        # unaffected. ──
+        text_font = QFont(Typography.FAMILY, 7 if self._wrap else 9, QFont.Weight.Bold)
         p.setFont(text_font)
 
-        text_rect = QRectF(2, 34, w - 4, 20)
-        if is_active:
-            p.setPen(QColor("#ffffff"))
-        else:
-            p.setPen(QColor("#ffffff"))
-        p.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self._label)
+        text_rect = QRectF(2, 28, w - 4, 32)
+        p.setPen(QColor("#ffffff"))
+        p.drawText(
+            text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+            self._label,
+        )
 
         # ── Linha inferior azul quando ativo ──
         if is_active:
@@ -203,27 +241,32 @@ class TopBar(QFrame):
         self._arquivo_btn: TopNavigationButton | None = None
         self._active_menu_btn: TopNavigationButton | None = None
 
+        # (icon, menu_id, display_label, wrap) — menu_id is the internal
+        # identifier routed through menu_clicked/set_active_menu/
+        # MENU_PANELS and must stay exactly what those already expect;
+        # display_label is only what's actually painted on the button, so
+        # it can read friendlier/longer without renaming the panel itself.
+        # wrap=True forces that button to wrap its label onto 2-3 lines at
+        # the common 72px width instead of the button being visibly wider
+        # than the rest of the bar.
         modules = [
-            ("☰", "Projetos"),
-            ("🗺", "Mapa"),
-            ("📜", "Quests"),
-            ("🧙", "NPCs"),
-            ("👹", "Mobs"),
-            ("⚔", "Itens"),
-            ("🏰", "Dungeons"),
-            ("⚡", "Eventos"),
-            ("📖", "Lore"),
-            ("⚙", "Config"),
-            ("📋", "Logs"),
+            ("☰", "Projetos", "Projetos", False),
+            ("🗺", "Mapa", "Mapa", False),
+            ("📜", "Quests", "Quests", False),
+            ("🧙", "NPCs", "NPCs", False),
+            ("👹", "Mobs", "Mobs", False),
+            ("⚔", "Itens", "Itens e Habilidades", True),
+            ("🏰", "Dungeons", "Dungeons e Construções", True),
+            ("⚡", "Eventos", "Eventos", False),
+            ("📖", "Lore", "Lore", False),
+            ("⚙", "Config", "Config", False),
+            ("📋", "Logs", "Logs", False),
         ]
 
-        for i, (icon, name) in enumerate(modules):
-            btn = TopNavigationButton(icon, name)
+        for i, (icon, name, label, wrap) in enumerate(modules):
+            btn = TopNavigationButton(icon, label, menu_id=name, wrap=wrap)
             btn.setCheckable(True)
-            if name == "Logs":
-                btn.clicked.connect(lambda checked, n=name, b=btn: self._on_nav_clicked(n, b))
-            else:
-                btn.clicked.connect(lambda checked, n=name, b=btn: self._on_nav_clicked(n, b))
+            btn.clicked.connect(lambda checked, n=name, b=btn: self._on_nav_clicked(n, b))
             self._button_group.addButton(btn, i)
             nav_layout.addWidget(btn)
             self._nav_buttons.append(btn)
@@ -290,9 +333,23 @@ class TopBar(QFrame):
     def set_active_menu(self, name: str):
         """Programmatically set the active menu button."""
         for btn in self._nav_buttons:
-            btn.setChecked(btn._label == name)
-            if btn._label == name:
+            btn.setChecked(btn._menu_id == name)
+            if btn._menu_id == name:
                 self._active_menu_btn = btn
+
+    # "Projetos" always stays reachable (it's the only way to ever get a
+    # project in the first place) and "Logs" doesn't need one (see
+    # MainLayout._on_menu_view) — every other module reads/writes through
+    # window.uow, which is None until a project exists.
+    _ALWAYS_ENABLED = {"Projetos", "Logs"}
+
+    def set_modules_enabled(self, enabled: bool):
+        """Fades out and disables every module button except Projetos/Logs
+        while no project is open, so there's nothing to click into that
+        would silently no-op every action — called from Application on
+        startup (no project yet) and again once one loads/closes."""
+        for btn in self._nav_buttons:
+            btn.setEnabled(enabled or btn._menu_id in self._ALWAYS_ENABLED)
 
     # ── API ──
 

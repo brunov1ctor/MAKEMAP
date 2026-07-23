@@ -10,9 +10,58 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QMenu, QSizePolicy
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap, QPainter
 
 from src.styles.tokens import Colors
 from src.layouts.panels.mobs.categories import category_icon, rarity_color, rarity_label
+
+
+class _CoverImageLabel(QLabel):
+    """A QLabel that always fills its own current size with the mob's
+    image, cropped instead of letterboxed (cover-fit, like CSS
+    background-size: cover) — a pixmap pre-scaled once in set_data() stayed
+    a small fixed square that didn't match the label's real (layout-
+    dependent) size, leaving it floating with empty space around it
+    instead of filling the whole thumbnail area. Falls back to plain text
+    (the category emoji) when no image is set, via the normal QLabel paint
+    path."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._cover_pixmap: QPixmap | None = None
+
+    def set_cover_pixmap(self, pixmap: QPixmap | None):
+        self._cover_pixmap = pixmap if pixmap and not pixmap.isNull() else None
+        self.update()
+
+    def paintEvent(self, event):
+        if self._cover_pixmap is None:
+            super().paintEvent(event)
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        scaled = self._cover_pixmap.scaled(
+            self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation,
+        )
+        x = (self.width() - scaled.width()) // 2
+        y = (self.height() - scaled.height()) // 2
+        painter.drawPixmap(x, y, scaled)
+        painter.end()
+
+
+def _set_icon_or_image(label: _CoverImageLabel, image_path: str, icon: str):
+    """Shared by MobCard/MobListRow: shows the mob's own uploaded image,
+    filling the whole thumbnail area, if it has one — falling back to the
+    category emoji icon otherwise. Previously neither card ever looked at
+    image_path at all, so an uploaded portrait only ever showed up in the
+    edit panel."""
+    pixmap = QPixmap(image_path) if image_path else QPixmap()
+    if not pixmap.isNull():
+        label.setText("")
+        label.set_cover_pixmap(pixmap)
+    else:
+        label.set_cover_pixmap(None)
+        label.setText(icon)
 
 CARD_W = 148
 THUMB_H = 96
@@ -65,7 +114,7 @@ class MobCard(QFrame):
         top_row.addWidget(self._fav_btn)
         thumb_lay.addLayout(top_row)
 
-        self._icon_label = QLabel("👹")
+        self._icon_label = _CoverImageLabel("👹")
         self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._icon_label.setStyleSheet("font-size: 32px; background: transparent; border: none;")
         thumb_lay.addWidget(self._icon_label, 1)
@@ -110,10 +159,10 @@ class MobCard(QFrame):
     # ─── Public API ───
 
     def set_data(self, name: str, level: int, category: str, rarity: str,
-                 element: str, zone_label: str, favorite: bool):
+                 element: str, zone_label: str, favorite: bool, image_path: str = ""):
         self._name_label.setText(name)
         self._level_label.setText(f"Nv. {level}")
-        self._icon_label.setText(category_icon(category))
+        _set_icon_or_image(self._icon_label, image_path, category_icon(category))
         self._element_badge.setText(element or "—")
         self._sub_label.setText(zone_label or "Sem região")
         self._favorite = favorite
@@ -197,8 +246,9 @@ class MobListRow(QFrame):
         self._fav_btn.clicked.connect(self._on_fav_clicked)
         layout.addWidget(self._fav_btn)
 
-        self._icon_label = QLabel("👹")
-        self._icon_label.setFixedWidth(22)
+        self._icon_label = _CoverImageLabel("👹")
+        self._icon_label.setFixedSize(22, 22)
+        self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._icon_label.setStyleSheet("font-size: 16px; background: transparent; border: none;")
         layout.addWidget(self._icon_label)
 
@@ -253,10 +303,10 @@ class MobListRow(QFrame):
         self._refresh_style()
 
     def set_data(self, name: str, level: int, category: str, rarity: str,
-                 element: str, zone_label: str, favorite: bool):
+                 element: str, zone_label: str, favorite: bool, image_path: str = ""):
         self._name_label.setText(name)
         self._level_label.setText(f"Nv. {level}")
-        self._icon_label.setText(category_icon(category))
+        _set_icon_or_image(self._icon_label, image_path, category_icon(category))
         self._element_label.setText(element or "—")
         self._sub_label.setText(zone_label or "Sem região")
         self._favorite = favorite

@@ -4,17 +4,127 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import QPointF, QTimer
 from PySide6.QtGui import QPixmap
 
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
 
+# Debounce for _sync_to_db — history_changed fires once per completed
+# stroke/stamp-group/undo/redo, not per mouse-move, so this just coalesces
+# a rapid back-to-back sequence (e.g. undo mashing) into one DB round trip
+# rather than gating on every single edit.
+_SYNC_DEBOUNCE_MS = 250
+
 
 class BrushMediator:
     """Manages brush panel ↔ canvas engine connections."""
 
+    MAP_ID = "default"  # matches RegionMediator — neither is scoped to the (unimplemented) maps/worlds hierarchy
+
     def __init__(self, layout: MainLayout):
         self._l = layout
+        self._uow = None
+        self._terrain_rows: dict[str, str] = {}  # asset_id -> painted_terrain row id
+        self._stamp_items: dict[str, object] = {}  # canvas_items row id -> QGraphicsPixmapItem
+
+        self._sync_timer = QTimer()
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.timeout.connect(self._sync_to_db)
+        self._l.canvas.engine.history.history_changed.connect(self._on_history_changed)
+
+    # ─── Persistence wiring (called by application.py on project load) ───
+
+    def set_uow(self, uow):
+        self._uow = uow
+        self._load_from_db()
+
+    def _load_from_db(self):
+        engine = self._l.canvas.engine
+        engine.clear_terrain_layers()
+        for item in self._stamp_items.values():
+            # May be parented to a boundary item rather than added directly
+            # to the scene (see place_stamp_item) — scene.removeItem() on a
+            # non-top-level child is unreliable, same reasoning
+            # PlaceObjectCommand documents for why it uses visibility
+            # instead. Detach first so removal is unambiguous either way.
+            item.setParentItem(None)
+            scene = item.scene()
+            if scene:
+                scene.removeItem(item)
+        self._stamp_items.clear()
+        self._terrain_rows.clear()
+        if not self._uow:
+            return
+
+        for row in self._uow.painted_terrain.get_by_map(self.MAP_ID):
+            layer = engine.get_or_create_terrain_layer(row["asset_id"])
+            layer.import_mask_png_base64(row["mask_png"], row["mask_x"], row["mask_y"])
+            layer.set_texture_transform(row["texture_scale"], row["texture_rotation"])
+            self._terrain_rows[row["asset_id"]] = row["id"]
+
+        for row in self._uow.canvas_items.get_by_map(self.MAP_ID):
+            if row["item_type"] != "asset":
+                continue
+            item = engine.place_stamp_item(
+                row["asset_id"], QPointF(row["position_x"], row["position_y"]),
+                row["rotation"], row["scale_x"], row["opacity"],
+            )
+            if item is None:
+                continue
+            self._stamp_items[row["id"]] = item
+
+    def _on_history_changed(self):
+        self._sync_timer.start(_SYNC_DEBOUNCE_MS)
+
+    def _sync_to_db(self):
+        """Upserts every currently-painted terrain mask + object stamp into
+        the project DB, and drops rows for stamps no longer present —
+        fired (debounced) off HistoryEngine.history_changed, which already
+        covers stroke completion, stamp placement, undo and redo alike."""
+        if not self._uow:
+            return
+        engine = self._l.canvas.engine
+
+        for asset_id, layer in engine.terrain_layers().items():
+            mask_png, mask_x, mask_y = layer.export_mask_png_base64()
+            fields = dict(
+                asset_id=asset_id, mask_png=mask_png, mask_x=mask_x, mask_y=mask_y,
+                texture_scale=layer.texture_scale, texture_rotation=layer.texture_rotation,
+            )
+            row_id = self._terrain_rows.get(asset_id)
+            if row_id:
+                self._uow.painted_terrain.update(row_id, **fields)
+            else:
+                self._terrain_rows[asset_id] = self._uow.painted_terrain.create(map_id=self.MAP_ID, **fields)
+
+        seen_ids: set[str] = set()
+        for item in engine.viewport.scene().items():
+            data = item.data(0)
+            if not isinstance(data, dict) or data.get("item_type") != "asset" or not item.isVisible():
+                continue
+            center = item.mapToScene(item.boundingRect().center())
+            fields = dict(
+                item_type="asset", asset_id=data.get("asset_id", ""),
+                position_x=center.x(), position_y=center.y(),
+                rotation=item.rotation(), scale_x=item.scale(), scale_y=item.scale(),
+                opacity=item.opacity(),
+            )
+            row_id = item.data(1)
+            # A cached id can go stale (e.g. undo hid the item, its row got
+            # swept as "no longer present" below, then redo brought it back
+            # still carrying that dead id) — fall back to creating a fresh
+            # row rather than silently no-op'ing an update that matches
+            # nothing.
+            if not row_id or not self._uow.canvas_items.update(row_id, **fields):
+                row_id = self._uow.canvas_items.create(map_id=self.MAP_ID, **fields)
+                item.setData(1, row_id)
+            self._stamp_items[row_id] = item
+            seen_ids.add(row_id)
+
+        for stale_id in set(self._stamp_items) - seen_ids:
+            self._uow.canvas_items.delete(stale_id)
+            del self._stamp_items[stale_id]
 
     def connect_panel(self):
         """Connect brush config panel + asset browser panel to BrushEngine."""
@@ -145,7 +255,6 @@ class BrushMediator:
         self.populate_assets(self._l.asset_browser_panel.current_category())
 
     def on_asset_selected(self, asset_id: str):
-        self._l._ensure_project()
         engine = self._l.canvas.engine.brush_engine
         engine.clear_assets()
         engine.add_asset(asset_id)

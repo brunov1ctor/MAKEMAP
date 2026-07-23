@@ -18,6 +18,7 @@ from PySide6.QtGui import QPixmap, QIcon
 from src.styles.tokens import Colors
 from src.layouts.panels.mobs.categories import RARITY_DEFS, TIPO_OPTIONS
 from src.layouts.panels.mobs.edit_helpers import _combo, _spin, _hr, _stat_row
+from src.layouts.panels.mobs.edit_widgets import _DropImageButton
 
 logger = logging.getLogger("MAKEMAP")
 
@@ -71,16 +72,17 @@ class OverviewSectionMixin:
 
         thumb_col = QVBoxLayout()
         thumb_col.setSpacing(4)
-        self._thumb = QToolButton()
+        self._thumb = _DropImageButton()
         self._thumb.setFixedSize(220, 200)
         self._thumb.setIconSize(self._thumb.size())
         self._thumb.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._thumb.setToolTip("Alterar imagem")
+        self._thumb.setToolTip("Clique ou arraste uma imagem")
         self._thumb_pixmap = None
         self._image_path = ""
         self._thumb.clicked.connect(self._on_pick_image)
+        self._thumb.image_dropped.connect(self._on_image_dropped)
         thumb_col.addWidget(self._thumb)
-        thumb_hint = QLabel("Clique para alterar imagem")
+        thumb_hint = QLabel("Clique ou arraste uma imagem")
         thumb_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         thumb_hint.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
         thumb_col.addWidget(thumb_hint)
@@ -179,7 +181,19 @@ class OverviewSectionMixin:
 
     def _refresh_thumb(self):
         if self._thumb_pixmap is not None:
-            self._thumb.setIcon(QIcon(self._thumb_pixmap))
+            # QIcon on a QToolButton letterboxes to fit — scaling
+            # KeepAspectRatioByExpanding then cropping to the button's own
+            # size first (cover-fit) makes the image actually fill the
+            # whole portrait area instead of floating small with padding
+            # around it whenever its aspect ratio doesn't match the button.
+            btn_size = self._thumb.size()
+            scaled = self._thumb_pixmap.scaled(
+                btn_size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation,
+            )
+            x = (scaled.width() - btn_size.width()) // 2
+            y = (scaled.height() - btn_size.height()) // 2
+            cropped = scaled.copy(x, y, btn_size.width(), btn_size.height())
+            self._thumb.setIcon(QIcon(cropped))
             self._thumb.setText("")
             self._thumb.setStyleSheet("""
                 QToolButton { border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); }
@@ -196,6 +210,12 @@ class OverviewSectionMixin:
         path, _filter = QFileDialog.getOpenFileName(self, "Selecionar Imagem", "", "Imagens (*.png *.jpg *.jpeg *.webp)")
         if not path:
             return
+        self._set_image_path(path)
+
+    def _on_image_dropped(self, path: str):
+        self._set_image_path(path)
+
+    def _set_image_path(self, path: str):
         pixmap = QPixmap(path)
         if pixmap.isNull():
             return
