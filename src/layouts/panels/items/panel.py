@@ -530,19 +530,16 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
             self._skill_tree.refresh_node_metadata(self._current_skill_id, record)
 
     def _on_skill_delete(self, skill_id: str):
+        """Exclui direto no clique — sem QMessageBox (isso abriria uma
+        janela nativa fora do app; mesmo no-confirm precedent do "✕" das
+        guias da Árvore de Habilidades, ver skill_tree/canvas.py's
+        _delete_tab). remove_skill_node tira o nó dela (e qualquer conexão
+        que o referencie) de toda guia onde exista, pra não deixar a árvore
+        com um nó órfão apontando pra um id que já era."""
         if not self._uow:
             return
         if self._current_skill_id == skill_id:
             self._skill_save_timer.stop()  # about to delete this row — discard, don't save
-        record = self._skill_by_id(skill_id)
-        name = record.get("name") if record else skill_id
-        reply = QMessageBox.question(
-            self, "Excluir habilidade", f'Excluir "{name}"? Essa ação não pode ser desfeita.',
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
         self._uow.skills.delete(skill_id)
         self._skill_tree.remove_skill_node(skill_id)
         if self._current_skill_id == skill_id:

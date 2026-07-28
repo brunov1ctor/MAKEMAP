@@ -80,7 +80,7 @@ class SkillEditor(QWidget):
     def __init__(self, skills_provider=None, parent=None):
         """`skills_provider` fica disponível para futuras necessidades do
         editor — a Árvore de Habilidades agora cria/conecta nós direto no
-        próprio canvas (ver skill_tree.py), não mais a partir daqui."""
+        próprio canvas (ver skill_tree/canvas.py), não mais a partir daqui."""
         super().__init__(parent)
         # The app-wide stylesheet (build_stylesheet(), applied once at
         # QApplication level) styles QComboBox popups dark everywhere else,
@@ -179,7 +179,7 @@ class SkillEditor(QWidget):
         grid.setColumnStretch(1, 1)
 
         # "Categoria" saiu — a Árvore de Habilidades agora agrupa por guia,
-        # criada e nomeada direto no canvas da árvore (ver skill_tree.py),
+        # criada e nomeada direto no canvas da árvore (ver skill_tree/canvas.py),
         # que já cumpre esse papel sem precisar de um campo redundante aqui.
         self._level_spin = _spin(1, 999, 1)
         self._level_spin.valueChanged.connect(self._emit_changed)
@@ -272,7 +272,7 @@ class SkillEditor(QWidget):
 
         # Rank Máximo — até que rank essa habilidade pode ser evoluída na
         # Árvore de Habilidades (o node lá herda esse teto, ver
-        # skill_tree.py._ensure_node/refresh_node_metadata). Mudar aqui
+        # skill_tree/canvas.py._ensure_node/refresh_node_metadata). Mudar aqui
         # reconstrói a tabela "Dano por Rank" abaixo pra ter uma linha por
         # rank de 1 até esse valor.
         self._rank_max_spin = _spin(1, 10, 5)

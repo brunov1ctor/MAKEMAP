@@ -76,7 +76,8 @@
       "Bash(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\578f48d3-a1f5-4b02-b16f-012e0f273afc\\\\scratchpad\\\\test_light_full.py\")",
       "Bash(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\578f48d3-a1f5-4b02-b16f-012e0f273afc\\\\scratchpad\\\\test_brush_default.py\")",
       "Bash(python -m py_compile src/layouts/panels/items/skill_tree.py)",
-      "Bash(python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\3491475e-8cdc-43f0-8e14-48ccfc4b25d5\\\\scratchpad\\\\smoke_skill_tree.py\")"
+      "Bash(python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\3491475e-8cdc-43f0-8e14-48ccfc4b25d5\\\\scratchpad\\\\smoke_skill_tree.py\")",
+      "PowerShell(py -m py_compile src\\\\layouts\\\\panels\\\\items\\\\skill_tree.py)"
     ],
     "additionalDirectories": [
       "\\tmp",

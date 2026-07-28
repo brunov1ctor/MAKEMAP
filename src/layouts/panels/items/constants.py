@@ -71,7 +71,7 @@ SKILL_FLAGS = [
 # épico...) não fazia sentido pra uma habilidade; um tier de progressão faz.
 # Mesmas chaves/cores de ITEM_RARITY_DEFS (o node da Árvore de Habilidades já
 # colore o anel do card via item_rarity_color(skill["rarity"]), ver
-# skill_tree.py._ensure_node — reaproveitar as chaves evita duplicar/migrar
+# skill_tree/canvas.py._ensure_node — reaproveitar as chaves evita duplicar/migrar
 # a coluna `rarity` do banco), só com rótulos próprios de habilidade.
 SKILL_TIER_DEFS: list[tuple[str, str, str]] = [
     ("common", "#9AA5B1", "Inicial"),
