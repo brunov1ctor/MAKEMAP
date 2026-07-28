@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QScrollArea, QWidget, QToolButton, QLineEdit,
 )
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtGui import QPixmap, QFontMetrics
 
 from src.styles.tokens import Colors
 from src.layouts.panels.brush.flow_layout import FlowLayout
@@ -38,25 +38,115 @@ class MaterialThumbnail(QToolButton):
     """Clickable material thumbnail for the grid."""
 
     favorited = Signal(str)
+    effects_requested = Signal(str)
+
+    _ICON_SIZE = 32
 
     def __init__(self, asset_id: str = "", name: str = "", parent=None):
         super().__init__(parent)
         self.asset_id = asset_id
+        self._name = name
         self._is_favorite = False
-        self.setFixedSize(52, 58)
         self.setCheckable(True)
         self.setToolTip(name)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        self.setIconSize(QSize(36, 36))
-        self.setText(name[:7] if len(name) > 7 else name)
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self._on_right_click)
+
+        # A real internal layout instead of QToolButton's own icon+text
+        # painting (setIcon()/setText()) — that auto-centers the icon+text
+        # block as a unit within whatever rect the button has, so reserving
+        # extra width for the "⋮" button on the right also pushed the icon
+        # rightward and left an equally wide empty strip on the left (the
+        # "bordas sobrando" complaint). A plain QHBoxLayout with a QLabel
+        # for the thumbnail and the kebab button beside it, sized to fit
+        # exactly, avoids that entirely.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(2, 2, 2, 2)
+        outer.setSpacing(1)
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(2)
+        self._icon_label = QLabel()
+        self._icon_label.setFixedSize(self._ICON_SIZE, self._ICON_SIZE)
+        self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._icon_label.setStyleSheet("background: transparent; border: none;")
+        top_row.addWidget(self._icon_label)
+
+        # Right column: a small ★ favorite toggle stacked above the "⋮"
+        # menu button — replaces the old right-click-only favorite menu
+        # (undiscoverable, and right-click now does nothing on this card).
+        right_col = QVBoxLayout()
+        right_col.setContentsMargins(0, 0, 0, 0)
+        right_col.setSpacing(2)
+
+        self._fav_btn = QToolButton()
+        self._fav_btn.setToolTip("Favoritar")
+        self._fav_btn.setFixedSize(14, 14)
+        self._fav_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._fav_btn.setStyleSheet(f"""
+            QToolButton {{
+                background: transparent; border: none;
+                color: {_TEXT}; font-size: 10px; padding: 0;
+            }}
+            QToolButton:hover {{ color: {_ACCENT}; }}
+        """)
+        self._fav_btn.clicked.connect(lambda: self.favorited.emit(self.asset_id))
+        right_col.addWidget(self._fav_btn)
+
+        # "⋮" — opens the asset effects editor directly on click (see
+        # AssetEffectsMediator.open_editor / MainLayout.asset_effects_panel)
+        # — no popup menu, since there's only ever this one action behind it.
+        self._menu_btn = QToolButton()
+        self._menu_btn.setText("⋮")
+        self._menu_btn.setToolTip("Editar Efeitos")
+        self._menu_btn.setFixedSize(14, 14)
+        self._menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._menu_btn.setStyleSheet(f"""
+            QToolButton {{
+                background: transparent; border: none;
+                color: {_TEXT_SEC}; font-size: 11px; font-weight: bold; padding: 0;
+            }}
+            QToolButton:hover {{ color: {_TEXT}; }}
+        """)
+        self._menu_btn.clicked.connect(lambda: self.effects_requested.emit(self.asset_id))
+        right_col.addWidget(self._menu_btn)
+
+        top_row.addLayout(right_col)
+        outer.addLayout(top_row)
+
+        # Word-wrapped instead of truncated to a handful of characters —
+        # the card stays narrow (so 4 fit per row instead of 3), the full
+        # name just takes as many lines as it needs instead of one. A
+        # QLabel's sizeHint() ignores word-wrap entirely and reports the
+        # width needed for the text on ONE line unless it's given an
+        # explicit width — without setFixedWidth() here a long name (e.g.
+        # "Pavimento de Pedra") would blow the whole card back out to
+        # ~100+px. Height can't be fixed up front the same way (that's
+        # what clipped/cut off longer names before) — _update_style()
+        # measures the real wrapped height per name via QFontMetrics
+        # instead, since QVBoxLayout doesn't propagate heightForWidth()
+        # through nested layouts reliably enough for sizeHint() to do it.
+        self._name_content_w = self._ICON_SIZE + top_row.spacing() + self._menu_btn.width()
+        self._name_label = QLabel()
+        self._name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._name_label.setWordWrap(True)
+        self._name_label.setFixedWidth(self._name_content_w)
+        self._name_label.setStyleSheet(f"background: transparent; border: none; font-size: 9px; color: {_TEXT_MUTED};")
+        outer.addWidget(self._name_label)
+
         self._update_style()
+
+    def sizeHint(self) -> QSize:
+        # QToolButton's own sizeHint() is computed from its icon()/text()
+        # properties via the style — both are unused now (see __init__),
+        # so left to the default it collapses to a near-empty button and
+        # FlowLayout would size/place this card far too small. Defer to
+        # the actual child layout's own sizeHint() instead.
+        return self.layout().sizeHint()
 
     def set_favorite(self, fav: bool):
         # No QGraphicsDropShadowEffect here on purpose — its blur extends
-        # well past this button's 52x58 bounds, and the grid packs items
+        # well past this button's small bounds, and the grid packs items
         # with only 2px of spacing, so the glow painted over whichever
         # neighbor comes after it in the FlowLayout. The border-color swap
         # in _update_style() already marks favorites clearly on its own.
@@ -65,11 +155,18 @@ class MaterialThumbnail(QToolButton):
 
     def _update_style(self):
         border = _ACCENT if self._is_favorite else _BORDER
+        self._fav_btn.setText("★" if self._is_favorite else "☆")
+        self._name_label.setText(self._name)
+        fm = QFontMetrics(self._name_label.font())
+        needed = fm.boundingRect(
+            0, 0, self._name_content_w, 1000,
+            int(Qt.TextFlag.TextWordWrap) | int(Qt.AlignmentFlag.AlignHCenter), self._name,
+        )
+        self._name_label.setFixedHeight(max(fm.height(), needed.height()) + 2)
         self.setStyleSheet(f"""
             QToolButton {{
                 border: 2px solid {border}; border-radius: 4px;
-                background: {_BG_SECTION}; padding: 2px;
-                font-size: 10px; color: {_TEXT_MUTED};
+                background: {_BG_SECTION};
             }}
             QToolButton:hover {{ border-color: {_TEXT_SEC}; }}
             QToolButton:checked {{
@@ -77,16 +174,13 @@ class MaterialThumbnail(QToolButton):
             }}
         """)
 
-    def _on_right_click(self, pos):
-        self.favorited.emit(self.asset_id)
-
     def set_pixmap(self, pixmap: QPixmap):
         scaled = pixmap.scaled(
-            QSize(36, 36),
+            QSize(self._ICON_SIZE, self._ICON_SIZE),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        self.setIcon(QIcon(scaled))
+        self._icon_label.setPixmap(scaled)
 
 
 def _separator():
@@ -108,11 +202,22 @@ class AssetBrowserPanel(QFrame):
     tab_changed = Signal(str)
     style_changed = Signal(str)
     close_requested = Signal()
+    effects_requested = Signal(str)  # asset_id — bubbled from a card's "⋮" menu
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, embedded: bool = False):
+        """`embedded=True` — used when this panel is a tab page inside
+        BrushToolPanel (see panel.py) rather than its own floating
+        window: skips the fixed width (the stack sizes it instead), the
+        own glass background (the parent panel already paints one), and
+        the header/close button (BrushToolPanel's own header + tab
+        switcher already covers both jobs)."""
         super().__init__(parent)
-        self.setFixedWidth(self.PANEL_WIDTH)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self._embedded = embedded
+        if embedded:
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        else:
+            self.setFixedWidth(self.PANEL_WIDTH)
+            self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
 
@@ -120,38 +225,39 @@ class AssetBrowserPanel(QFrame):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(6)
 
-        # ── header ──
-        header = QHBoxLayout()
-        header.setContentsMargins(10, 6, 10, 0)
-        header.setSpacing(6)
+        if not embedded:
+            # ── header (standalone floating-panel mode only) ──
+            header = QHBoxLayout()
+            header.setContentsMargins(10, 6, 10, 0)
+            header.setSpacing(6)
 
-        icon = QLabel("🎨")
-        icon.setStyleSheet("font-size: 14px; background: transparent; border: none;")
-        header.addWidget(icon)
+            icon = QLabel("🎨")
+            icon.setStyleSheet("font-size: 14px; background: transparent; border: none;")
+            header.addWidget(icon)
 
-        title = QLabel("Assets")
-        title.setStyleSheet(f"""
-            color: {_TEXT}; font-size: 13px; font-weight: bold;
-            background: transparent; border: none;
-        """)
-        header.addWidget(title)
-        header.addStretch()
+            title = QLabel("Assets")
+            title.setStyleSheet(f"""
+                color: {_TEXT}; font-size: 13px; font-weight: bold;
+                background: transparent; border: none;
+            """)
+            header.addWidget(title)
+            header.addStretch()
 
-        close_btn = QToolButton()
-        close_btn.setText("✕")
-        close_btn.setFixedSize(20, 20)
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setStyleSheet(f"""
-            QToolButton {{
-                border: none; border-radius: 4px; font-size: 11px;
-                color: {_TEXT_SEC}; background: transparent;
-            }}
-            QToolButton:hover {{ background: #333; color: {_TEXT}; }}
-        """)
-        close_btn.clicked.connect(self.close_requested.emit)
-        header.addWidget(close_btn)
-        root.addLayout(header)
-        root.addWidget(_separator())
+            close_btn = QToolButton()
+            close_btn.setText("✕")
+            close_btn.setFixedSize(20, 20)
+            close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            close_btn.setStyleSheet(f"""
+                QToolButton {{
+                    border: none; border-radius: 4px; font-size: 11px;
+                    color: {_TEXT_SEC}; background: transparent;
+                }}
+                QToolButton:hover {{ background: #333; color: {_TEXT}; }}
+            """)
+            close_btn.clicked.connect(self.close_requested.emit)
+            header.addWidget(close_btn)
+            root.addLayout(header)
+            root.addWidget(_separator())
 
         # ── abas de estilo (pai das abas de categoria abaixo) ──
         self._style_tab_container = QWidget()
@@ -205,8 +311,13 @@ class AssetBrowserPanel(QFrame):
         self._tab_flow = FlowLayout(self._tab_container, spacing=2)
         self._tab_flow.setContentsMargins(10, 4, 10, 4)
 
-        self._tab_categories = ["terrain", "trees", "rocks", "mountains", "buildings", "effects", "misc"]
-        self._tab_labels = ["🌍 Terrain", "🌲 Trees", "🪨 Rocks", "⛰ Mountains", "🏠 Buildings", "✨ Effects", "📦 Misc", "★"]
+        # "water" is its own real category folder (see library.py's
+        # CATEGORY_FOLDERS) — sits right next to Terrain since it's still
+        # a terrain material (paints into a TerrainLayer the same way),
+        # just one the Brush tool treats specially for the shoreline
+        # foam blend (see BrushTool._check_is_terrain/is_water_asset).
+        self._tab_categories = ["terrain", "water", "trees", "rocks", "mountains", "buildings", "effects", "misc"]
+        self._tab_labels = ["🌍 Terrain", "🌊 Água", "🌲 Trees", "🪨 Rocks", "⛰ Mountains", "🏠 Buildings", "✨ Effects", "📦 Misc", "★"]
         self._tab_buttons: list[QToolButton] = []
 
         for i, label in enumerate(self._tab_labels):
@@ -283,6 +394,14 @@ class AssetBrowserPanel(QFrame):
         """Populate material grid. Each dict: {id, name, pixmap, favorite}."""
         for btn in self._asset_buttons:
             self._grid_layout.removeWidget(btn)
+            # removeWidget() only drops it from the layout's own bookkeeping
+            # — it stays visible at its old position until deleteLater()'s
+            # deferred delete actually runs on the next event-loop pass.
+            # Between a favorite-toggle click and that pass, the stale card
+            # was rendering on top of the freshly repositioned ones ("um
+            # dos assets ficou flutuando sobre os outros"). Hide it now so
+            # it's gone immediately, not just eventually.
+            btn.hide()
             btn.deleteLater()
         self._asset_buttons.clear()
 
@@ -294,8 +413,31 @@ class AssetBrowserPanel(QFrame):
                 btn.set_favorite(True)
             btn.clicked.connect(lambda checked, a=asset: self._on_asset_clicked(a))
             btn.favorited.connect(self.favorite_toggled.emit)
+            btn.effects_requested.connect(self.effects_requested.emit)
             self._grid_layout.addWidget(btn)
             self._asset_buttons.append(btn)
+
+        # FlowLayout's height only stays correct if _grid_container is
+        # explicitly resized to heightForWidth() — same reasoning/fix
+        # already applied in showEvent()/resizeEvent() below (QScrollArea's
+        # own widget-resizable negotiation doesn't track a self-referential
+        # FlowLayout sizeHint() reliably). Skipping this after a full
+        # rebuild left the container's height stuck at whatever the
+        # PREVIOUS set of cards needed — cards spilling past the panel's
+        # own border whenever the new grid needed more room (card heights
+        # vary per name length, so this isn't even the same every time).
+        self._grid_layout.invalidate()
+        vp_w = self._grid_scroll.viewport().width()
+        if vp_w > 0:
+            self._grid_container.resize(vp_w, self._grid_container.heightForWidth(vp_w))
+
+    def set_selected_asset(self, asset_id: str):
+        """Checks whichever grid button matches `asset_id` (unchecking the
+        rest) without emitting asset_selected — used to reflect a default
+        asset picked programmatically (see BrushMediator._ensure_default_asset),
+        mirroring what _on_asset_clicked does visually for a real click."""
+        for btn in self._asset_buttons:
+            btn.setChecked(btn.asset_id == asset_id)
 
     def current_category(self) -> str:
         idx = next((i for i, b in enumerate(self._tab_buttons) if b.isChecked()), 0)
@@ -336,11 +478,17 @@ class AssetBrowserPanel(QFrame):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # Tab buttons are built once while the panel is still hidden, so FlowLayout's
-        # first real pass sees them all as invisible and never positions them. Force a
-        # fresh pass now that they're actually visible.
+        # Tab buttons (and, when embedded inside BrushToolPanel's tab stack,
+        # the asset grid itself) are built/populated while this page is still
+        # hidden, so FlowLayout's first real pass sees them all as invisible
+        # and never positions them. Force a fresh pass now that they're
+        # actually visible.
         self._style_tab_flow.invalidate()
         self._tab_flow.invalidate()
+        vp_w = self._grid_scroll.viewport().width()
+        if vp_w > 0:
+            self._grid_container.resize(vp_w, self._grid_container.heightForWidth(vp_w))
+        self._grid_layout.invalidate()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -352,4 +500,8 @@ class AssetBrowserPanel(QFrame):
             self._grid_container.resize(vp_w, self._grid_container.heightForWidth(vp_w))
 
     def paintEvent(self, event):
-        paint_glass_panel(self)
+        # Embedded mode: BrushToolPanel (the actual floating window here)
+        # already paints its own glass background — painting a second one
+        # underneath the tab content would just double up the same look.
+        if not self._embedded:
+            paint_glass_panel(self)

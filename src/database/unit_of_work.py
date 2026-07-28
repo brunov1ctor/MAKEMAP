@@ -18,6 +18,7 @@ from src.database.repositories.entities import (
     AssetPackRepository, ZoneRepository, TerrainPaintRepository, TerrainRepository,
 )
 from src.database.repositories.asset_settings import AssetSettingsRepository
+from src.database.repositories.ui_state import UIStateRepository
 
 
 class UnitOfWork:
@@ -62,6 +63,7 @@ class UnitOfWork:
         self.zones = ZoneRepository(self.db)
         self.painted_terrain = TerrainPaintRepository(self.db)
         self.terrains = TerrainRepository(self.db)
+        self.ui_state = UIStateRepository(self.db)
 
     def close(self):
         self.db.close()

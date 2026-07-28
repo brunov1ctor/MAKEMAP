@@ -13,10 +13,12 @@ from PySide6.QtWidgets import (
     QToolButton, QWidget, QFileDialog,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtGui import QPixmap
 
 from src.styles.tokens import Colors
-from src.layouts.panels.mobs.categories import RARITY_DEFS, TIPO_OPTIONS
+from src.layouts.panels.mobs.categories import (
+    TIPO_OPTIONS, category_icon, category_label, category_badge_color, category_tag_text_color,
+)
 from src.layouts.panels.mobs.edit_helpers import _combo, _spin, _hr, _stat_row
 from src.layouts.panels.mobs.edit_widgets import _DropImageButton
 
@@ -25,7 +27,7 @@ logger = logging.getLogger("MAKEMAP")
 
 class OverviewSectionMixin:
     """Visão Geral — matches the reference profile-card layout: the
-    editable Nome field at the top, then an ID + Raridade badge row,
+    editable Nome field at the top, then an ID + Categoria badge row,
     then a big portrait next to an "Informações Gerais" card (Nível/
     Tipo/Tier, Categoria/Subcategoria, Ambiente/Região — label above
     value, thin dividers between columns and between rows, no visible
@@ -33,9 +35,16 @@ class OverviewSectionMixin:
     panel's own header (see MobEditPanel._build_ui) just mirrors this
     Nome field as a plain read-only title — it's not a separate/
     duplicate value, load()/set_empty() set both from the same source.
-    Status, Elemento and the Raridade *selector* (the badge here is just
-    a readout of it) live in Atributos instead — none of the three
-    appear in the reference card."""
+    Status, Elemento and Raridade live in Atributos instead — none of
+    the three appear in the reference card."""
+
+    # The portrait button resizes to match each loaded image's own aspect
+    # ratio (see _refresh_thumb) instead of a fixed box — bounded by these,
+    # so a very wide or very tall image still fits next to Informações
+    # Gerais without blowing up the layout.
+    _THUMB_MAX_W = 220
+    _THUMB_MAX_H = 320
+    _THUMB_DEFAULT_H = 200
 
     def _build_overview_section(self) -> QWidget:
         w = QWidget()
@@ -55,14 +64,21 @@ class OverviewSectionMixin:
         id_row.setSpacing(8)
         self._id_label = QLabel("")
         self._id_label.setTextFormat(Qt.TextFormat.RichText)
-        self._id_label.setStyleSheet(f"""
-            font-size: 10px; font-weight: bold; background: rgba(255,255,255,0.05); color: {Colors.TEXT_PRIMARY};
-            border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; padding: 4px 10px;
-        """)
+        self._id_label.setStyleSheet(
+            f"font-size: 10px; font-weight: bold; background: transparent; color: {Colors.TEXT_PRIMARY}; border: none;"
+        )
         id_row.addWidget(self._id_label)
-        self._rarity_badge = QLabel("")
-        self._rarity_badge.setStyleSheet("font-size: 11px; font-weight: bold; border-radius: 8px; padding: 4px 12px;")
-        id_row.addWidget(self._rarity_badge)
+        # Reads the mob's actual Categoria (the folder picked in
+        # Informações Gerais below, see _refresh_category_badge) — not
+        # Raridade, which has its own selector/readout already in
+        # Atributos and used to be what this tag mirrored, so it never
+        # matched the category the mob was actually filed under.
+        self._category_badge = QLabel("")
+        self._category_badge.setStyleSheet(
+            f"font-size: 11px; font-weight: bold; border-radius: 8px; padding: 4px 12px; "
+            f"background: rgba(255,255,255,0.08); color: {Colors.TEXT_PRIMARY};"
+        )
+        id_row.addWidget(self._category_badge)
         id_row.addStretch()
         outer.addLayout(id_row)
 
@@ -73,7 +89,7 @@ class OverviewSectionMixin:
         thumb_col = QVBoxLayout()
         thumb_col.setSpacing(4)
         self._thumb = _DropImageButton()
-        self._thumb.setFixedSize(220, 200)
+        self._thumb.setFixedSize(self._THUMB_MAX_W, self._THUMB_DEFAULT_H)
         self._thumb.setIconSize(self._thumb.size())
         self._thumb.setCursor(Qt.CursorShape.PointingHandCursor)
         self._thumb.setToolTip("Clique ou arraste uma imagem")
@@ -113,11 +129,22 @@ class OverviewSectionMixin:
         info_lay.addWidget(info_title)
         info_lay.addWidget(_hr())
 
+        # Elemento moved here from Atributos as free text (matches the
+        # reference layout) — Atributos previously had it as a fixed-
+        # options dropdown; one field/one source of truth now instead of
+        # two widgets both writing mobs.element.
         self._level_spin = _spin(1, 999, 1)
+        self._element_edit = QLineEdit()
+        self._element_edit.setPlaceholderText("Ex: Fogo")
+        info_lay.addLayout(_stat_row([
+            ("Nível", self._level_spin), ("Elemento", self._element_edit),
+        ]))
+        info_lay.addWidget(_hr())
+
         self._tipo_combo = _combo(TIPO_OPTIONS)
         self._tier_spin = _spin(1, 10, 1)
         info_lay.addLayout(_stat_row([
-            ("Nível", self._level_spin), ("Tipo", self._tipo_combo), ("Tier", self._tier_spin),
+            ("Tipo", self._tipo_combo), ("Tier", self._tier_spin),
         ]))
         info_lay.addWidget(_hr())
 
@@ -125,6 +152,7 @@ class OverviewSectionMixin:
         # folder tree (MobsPanel._reload_categories) — not built statically
         # here since folders are user-created/persisted, not a fixed list.
         self._category_combo = QComboBox()
+        self._category_combo.currentIndexChanged.connect(self._refresh_category_badge)
         self._subcategory_edit = QLineEdit()
         self._subcategory_edit.setPlaceholderText("Opcional")
         info_lay.addLayout(_stat_row([
@@ -132,12 +160,12 @@ class OverviewSectionMixin:
         ]))
         info_lay.addWidget(_hr())
 
-        self._ambiente_edit = QLineEdit()
-        self._ambiente_edit.setPlaceholderText("Ex: Pântano Sombrio")
         self._zone_combo = QComboBox()
         self._zone_combo.addItem("Sem região", "")
+        self._ambiente_edit = QLineEdit()
+        self._ambiente_edit.setPlaceholderText("Ex: Pântano Sombrio")
         info_lay.addLayout(_stat_row([
-            ("Ambiente", self._ambiente_edit), ("Região", self._zone_combo),
+            ("Região", self._zone_combo), ("Ambiente", self._ambiente_edit),
         ]))
 
         top_row.addWidget(info_card, 1)
@@ -170,36 +198,47 @@ class OverviewSectionMixin:
         outer.addStretch()
         return w
 
-    def _refresh_rarity_badge(self):
-        key = next((k for k, _c, label in RARITY_DEFS if label == self._rarity_combo.currentText()), "normal")
-        color = next((c for k, c, _l in RARITY_DEFS if k == key), "#9AA5B1")
-        self._rarity_badge.setText(f"🔥 {self._rarity_combo.currentText()}")
-        self._rarity_badge.setStyleSheet(
+    def _refresh_category_badge(self):
+        category_id = self._category_combo.currentData()
+        if not category_id:
+            self._category_badge.setText("❔ Sem categoria")
+            self._category_badge.setStyleSheet(
+                f"font-size: 11px; font-weight: bold; border-radius: 8px; padding: 4px 12px; "
+                f"background: rgba(255,255,255,0.08); color: {Colors.TEXT_MUTED};"
+            )
+            return
+        color = category_badge_color(category_id)
+        text_color = category_tag_text_color(category_id)
+        self._category_badge.setText(f"{category_icon(category_id)} {category_label(category_id)}")
+        self._category_badge.setStyleSheet(
             f"font-size: 11px; font-weight: bold; border-radius: 8px; padding: 4px 12px; "
-            f"background: {color}33; color: {color};"
+            f"background: {color}; color: {text_color};"
         )
 
     def _refresh_thumb(self):
         if self._thumb_pixmap is not None:
-            # QIcon on a QToolButton letterboxes to fit — scaling
-            # KeepAspectRatioByExpanding then cropping to the button's own
-            # size first (cover-fit) makes the image actually fill the
-            # whole portrait area instead of floating small with padding
-            # around it whenever its aspect ratio doesn't match the button.
-            btn_size = self._thumb.size()
-            scaled = self._thumb_pixmap.scaled(
-                btn_size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation,
-            )
-            x = (scaled.width() - btn_size.width()) // 2
-            y = (scaled.height() - btn_size.height()) // 2
-            cropped = scaled.copy(x, y, btn_size.width(), btn_size.height())
-            self._thumb.setIcon(QIcon(cropped))
+            # Fit the BUTTON to the image's own aspect ratio (bounded by
+            # _THUMB_MAX_W/_THUMB_MAX_H) instead of a fixed box — with
+            # contain-fit painting (_DropImageButton.paintEvent), a fixed
+            # box left visible empty bars around any image that didn't
+            # happen to match its aspect ratio.
+            ratio = self._thumb_pixmap.width() / self._thumb_pixmap.height()
+            w = self._THUMB_MAX_W
+            h = round(w / ratio)
+            if h > self._THUMB_MAX_H:
+                h = self._THUMB_MAX_H
+                w = round(h * ratio)
+            self._thumb.setFixedSize(w, h)
+            self._thumb.setIconSize(self._thumb.size())
+            self._thumb.set_cover_pixmap(self._thumb_pixmap)
             self._thumb.setText("")
             self._thumb.setStyleSheet("""
                 QToolButton { border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); }
             """)
         else:
-            self._thumb.setIcon(QIcon())
+            self._thumb.setFixedSize(self._THUMB_MAX_W, self._THUMB_DEFAULT_H)
+            self._thumb.setIconSize(self._thumb.size())
+            self._thumb.set_cover_pixmap(None)
             self._thumb.setText("👹")
             self._thumb.setStyleSheet(f"""
                 QToolButton {{ border-radius: 8px; border: 1px dashed {Colors.BORDER_SUBTLE};
@@ -243,7 +282,7 @@ class OverviewSectionMixin:
             siblings = sorted(by_parent.get(parent_id, []), key=lambda c: (c.get("sort_order") or 0, c["name"]))
             for c in siblings:
                 prefix = ("    " * depth) + ("↳ " if depth else "")
-                self._category_combo.addItem(f"{prefix}{c.get('icon') or '📁'} {c['name']}", c["id"])
+                self._category_combo.addItem(f"{prefix}{c.get('icon') or '🐾'} {c['name']}", c["id"])
                 add_level(c["id"], depth + 1)
 
         add_level(None, 0)

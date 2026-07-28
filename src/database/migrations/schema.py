@@ -492,7 +492,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
             id TEXT PRIMARY KEY,
             parent_id TEXT REFERENCES mob_categories(id) ON DELETE CASCADE,
             name TEXT NOT NULL,
-            icon TEXT DEFAULT '📁',
+            icon TEXT DEFAULT '🐾',
             sort_order INTEGER DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
@@ -854,6 +854,110 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         -- referencia sua pré-requisito, e o par nó+aresta é derivado disso
         -- automaticamente.
         ALTER TABLE skills ADD COLUMN evolves_from TEXT REFERENCES skills(id) ON DELETE SET NULL;
+    """),
+    (16, "Mobs panel — seed the 5 difficulty-tier category folders (Normal/Raro/Elite/Épico/Boss) with mob-themed icons instead of the generic folder glyph", """
+        -- The category tree (migration 5) has been empty by default since
+        -- migration 9 dropped the old example seed — new users had to
+        -- build every folder by hand, and freshly created ones defaulted
+        -- to a plain 📁 icon (see panel_category_mixin.py's
+        -- _confirm_new_category) that reads as "folder", not "mob". These
+        -- 5 match the reference design's difficulty ladder and use icons
+        -- that actually evoke that ladder instead.
+        INSERT OR IGNORE INTO mob_categories (id, parent_id, name, icon, sort_order) VALUES
+            ('normal', NULL, 'Normal', '🐾', 0),
+            ('raro', NULL, 'Raro', '💎', 1),
+            ('elite', NULL, 'Elite', '💠', 2),
+            ('epico', NULL, 'Épico', '⚔️', 3),
+            ('boss', NULL, 'Boss', '👑', 4);
+    """),
+    (17, "Mobs panel — backfill mobs stuck on the dead 'outros' category default to the new Normal folder", """
+        -- mobs.category's DB column default has been the literal string
+        -- 'outros' since migration 3, but that seeded folder was dropped
+        -- in migration 7 — every mob that never had a category explicitly
+        -- set was showing "❔ Sem categoria" in the editor/badge instead
+        -- of a real folder. Migration 16 gives every project a "Normal"
+        -- folder to fall back to instead; this backfills existing rows
+        -- to match (mirrors edit_overview_mixin.py's own load()-time
+        -- fallback, which now also treats 'outros' as unset for mobs
+        -- created before this migration ran).
+        UPDATE mobs SET category = 'normal' WHERE category = 'outros' OR category IS NULL OR category = '';
+    """),
+    (18, "Região panel — user-uploaded reference photo per região card", """
+        -- A região card's thumbnail only ever showed the auto-generated
+        -- painted-mask preview (or a flat color swatch before anything's
+        -- painted) — no way to attach a real reference photo, unlike
+        -- Mobs' portrait. Same loose-reference reasoning as mobs.
+        -- image_path (migration 3): a plain column, no asset-library FK.
+        ALTER TABLE painted_zones ADD COLUMN image_path TEXT DEFAULT '';
+    """),
+    (19, "Asset effect regions — painted grid per asset (emissive windows, aura, glitter, etc.)", """
+        -- A flat JSON list of EFFECT_GRID_SIZE*EFFECT_GRID_SIZE cell keys
+        -- (see src/engines/asset_effects.py) — every placed instance of
+        -- that asset renders these as small local glow/particle effects
+        -- (src/canvas/asset_effects_overlay.py), no new table needed since
+        -- asset_settings already keys by the same asset_id.
+        ALTER TABLE asset_settings ADD COLUMN effects_json TEXT DEFAULT '[]';
+    """),
+    (20, "Generic per-project UI state (key/value) — first use: remembers the last brush asset picked", """
+        -- Small generic key/value store for "remember the last X" UI state
+        -- that doesn't warrant its own dedicated table/column — starting
+        -- with the Brush panel's last-picked asset (src/layouts/mediators/
+        -- brush_mediator.py), reusable for future "last used ..." needs.
+        CREATE TABLE IF NOT EXISTS ui_state (
+            key TEXT PRIMARY KEY,
+            value TEXT DEFAULT ''
+        );
+    """),
+    (21, "Mob categories — appearance customization (card/image border color, image asset)", """
+        -- The category editor used to be a single inline name field with the
+        -- icon hardcoded to '🐾' (see panel_category_mixin.py). Replacing it
+        -- with a full edit panel (icon picker, card border color, an
+        -- uploaded image, and a separate border color around that image)
+        -- needs somewhere to persist those three new choices — empty string
+        -- means "use the old hardcoded fallback" (category_badge_color /
+        -- the emoji icon), so existing rows keep rendering exactly as before.
+        ALTER TABLE mob_categories ADD COLUMN border_color TEXT DEFAULT '';
+        ALTER TABLE mob_categories ADD COLUMN image_path TEXT DEFAULT '';
+        ALTER TABLE mob_categories ADD COLUMN image_border_color TEXT DEFAULT '';
+    """),
+    (22, "Mob categories — preset sensible border colors for the seeded difficulty-tier folders", """
+        -- Migration 21 added a real border_color column, but the 5
+        -- folders migration 16 seeds (Normal/Raro/Elite/Épico/Boss) were
+        -- left with the default '' — _SidebarRow reads border_color
+        -- directly (not category_badge_color's hardcoded id->color
+        -- fallback), so these rendered with no border color at all in the
+        -- CATEGORIAS sidebar until now. Same color ladder
+        -- category_badge_color already used for the mob card badge
+        -- (gray/blue/purple/orange), plus a gold for Épico so it's not
+        -- identical to Elite's purple. The `border_color = ''` guard
+        -- avoids overwriting anything a user already picked by hand in
+        -- the window between migration 21 and this one.
+        UPDATE mob_categories SET border_color = '#9AA5B1' WHERE id = 'normal' AND border_color = '';
+        UPDATE mob_categories SET border_color = '#4FC3F7' WHERE id = 'raro' AND border_color = '';
+        UPDATE mob_categories SET border_color = '#AB47BC' WHERE id = 'elite' AND border_color = '';
+        UPDATE mob_categories SET border_color = '#FFD54F' WHERE id = 'epico' AND border_color = '';
+        UPDATE mob_categories SET border_color = '#FFA726' WHERE id = 'boss' AND border_color = '';
+    """),
+    (23, "Mob categories — replace migration 22's color guesses with the ones actually requested", """
+        -- Migration 22 already ran (or may have already run) by the time
+        -- these specific colors were picked, so this overwrites
+        -- unconditionally for just these 4 ids rather than guarding on
+        -- border_color = '' like migration 22 did — Raro is untouched,
+        -- kept at migration 22's blue.
+        UPDATE mob_categories SET border_color = '#A9C08C' WHERE id = 'normal';  -- verde musgo claro
+        UPDATE mob_categories SET border_color = '#64B5F6' WHERE id = 'elite';   -- azul claro
+        UPDATE mob_categories SET border_color = '#AB47BC' WHERE id = 'epico';   -- roxo
+        UPDATE mob_categories SET border_color = '#FFA726' WHERE id = 'boss';    -- laranja
+    """),
+    (24, "Mob categories — customizable rarity-tag text color", """
+        -- The rarity tag (MobCard's "Boss" pill, the Visão Geral category
+        -- badge) had its text color hardcoded to white after border_color
+        -- became user-editable — needed for contrast against whatever
+        -- background color got picked, but not customizable itself. A 3rd
+        -- color field alongside border_color/image_border_color; empty
+        -- means "use white", same "no color chosen" convention as the
+        -- other two (see category_badge_color/category_tag_text_color).
+        ALTER TABLE mob_categories ADD COLUMN tag_text_color TEXT DEFAULT '';
     """),
 ]
 

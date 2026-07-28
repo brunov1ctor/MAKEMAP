@@ -74,11 +74,12 @@ class MobsPanel(
     _LEFT_MIN_W = 264
     _LEFT_MAX_W = 320
 
-    def __init__(self, uow, zones_provider=None, project_dir=None, parent=None):
+    def __init__(self, uow, zones_provider=None, zone_thumbnail_provider=None, project_dir=None, parent=None):
         super().__init__(parent)
         self._uow = uow
         self._project_dir = project_dir
         self._zones_provider = zones_provider or (lambda: [])
+        self._zone_thumbnail_provider = zone_thumbnail_provider or (lambda _zone_id, size=24: None)
         self._mobs: list[dict] = []
         self._selected_id = ""
         # Category folder explorer state — mirrors a simple browser history
@@ -97,6 +98,18 @@ class MobsPanel(
         # _on_export_choice/_close_tools_mode).
         self._tools_mode: str | None = None
         self._template_fmt: str | None = None  # which format _template_edit currently holds
+        # Set by the "Imagens (pasta)" card (see ImportExportMixin) whenever
+        # a folder is picked there — kept even after Cancelar/Aplicar so a
+        # SUBSEQUENT JSON/CSV/Excel import (creating brand-new mobs) can
+        # auto-match each new mob's name against it too, without the user
+        # having to reselect the folder or run the image step twice.
+        self._staged_image_folder: str | None = None
+        self._staged_image_files: dict[str, str] = {}
+        # Same idea as _staged_image_folder/_staged_image_files above, but
+        # for the "Assets (pasta)" card (mob_assets — 3D models/textures,
+        # not the mob's own portrait) — see ImportExportMixin.
+        self._staged_asset_folder: str | None = None
+        self._staged_asset_files: dict[str, str] = {}
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -187,11 +200,12 @@ class MobsPanel(
         self._import_btn.clicked.connect(self._toggle_import_mode)
         header.addWidget(self._import_btn)
 
-        # Exportar keeps its format menu — JSON/CSV open an editable
-        # template in the right panel (see _on_export_choice), Excel opens
-        # the save dialog directly and writes a template .xlsx file (no
-        # panel takeover, since a spreadsheet isn't something to edit as
-        # plain text here).
+        # Exportar keeps its format menu — JSON/CSV open a read-only view
+        # of the user's current mobs in the right panel (see
+        # _on_export_choice), Excel opens the save dialog directly and
+        # writes the same data straight to an .xlsx file (no panel
+        # takeover, since a spreadsheet isn't something to view as plain
+        # text here).
         export_btn = _menu_btn("📤 Exportar", [
             ("json", "Exportar como JSON"), ("csv", "Exportar como CSV"), ("xlsx", "Exportar como Excel (.xlsx)"),
         ], self._on_export_choice)

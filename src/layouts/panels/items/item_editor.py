@@ -185,11 +185,18 @@ class ItemEditor(QWidget):
         self._stack_max = self._num(_spin(1, 9999, 1))
         self._durabilidade = self._num(_spin(0, 9999, 100))
         self._nivel_min = self._num(_spin(0, 999, 1))
+        # Taxa/Qtd. de drop — um único valor por item (não por mob): o
+        # painel de Mobs só lê isto ao adicionar o item como drop, sem
+        # campo próprio lá (ver ExtrasSectionMixin._on_pick_drop_item).
+        self._drop_rate = self._num(_dspin(0, 100, 10.0, " %"))
+        self._drop_qty = self._num(_spin(1, 9999, 1))
         grid.addLayout(self._labeled("Peso", self._peso), 0, 0)
         grid.addLayout(self._labeled("Valor de Venda", self._valor), 1, 0)
         grid.addLayout(self._labeled("Stack Máximo", self._stack_max), 2, 0)
         grid.addLayout(self._labeled("Durabilidade", self._durabilidade), 3, 0)
         grid.addLayout(self._labeled("Nível Mínimo", self._nivel_min), 4, 0)
+        grid.addLayout(self._labeled("Taxa de Drop", self._drop_rate), 5, 0)
+        grid.addLayout(self._labeled("Qtd. de Drop", self._drop_qty), 6, 0)
 
         self._classe = QComboBox()
         self._classe.addItems(ALLOWED_CLASSES)
@@ -408,6 +415,8 @@ class ItemEditor(QWidget):
         self._stack_max.setValue(int(stats.get("stack_max", 1)))
         self._durabilidade.setValue(int(stats.get("durabilidade", 100)))
         self._nivel_min.setValue(int(stats.get("nivel_min", record.get("level_req") or 1)))
+        self._drop_rate.setValue(float(stats.get("drop_rate", 10.0)))
+        self._drop_qty.setValue(int(stats.get("drop_qty", 1)))
         self._classe.setCurrentText(stats.get("classe", "Todas"))
         for key, _label, default in ITEM_FLAGS:
             self._flag_switches[key].setChecked(bool(stats.get(key, default)))
@@ -445,6 +454,8 @@ class ItemEditor(QWidget):
             "stack_max": self._stack_max.value(),
             "durabilidade": self._durabilidade.value(),
             "nivel_min": self._nivel_min.value(),
+            "drop_rate": self._drop_rate.value(),
+            "drop_qty": self._drop_qty.value(),
             "classe": self._classe.currentText(),
             "uso": self._uso.currentText(),
             "cooldown": self._cooldown_item.value(),

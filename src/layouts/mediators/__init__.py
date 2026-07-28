@@ -10,5 +10,14 @@ from src.layouts.mediators.terrain_mediator import TerrainMediator
 from src.layouts.mediators.grid_mediator import GridMediator
 from src.layouts.mediators.toolbar_mediator import ToolbarMediator
 from src.layouts.mediators.region_mediator import RegionMediator
+from src.layouts.mediators.spawn_mediator import SpawnMediator
+from src.layouts.mediators.text_mediator import TextMediator
+from src.layouts.mediators.marker_mediator import MarkerMediator
+from src.layouts.mediators.light_mediator import LightMediator
+from src.layouts.mediators.asset_effects_mediator import AssetEffectsMediator
 
-__all__ = ["BrushMediator", "TerrainMediator", "GridMediator", "ToolbarMediator", "RegionMediator"]
+__all__ = [
+    "BrushMediator", "TerrainMediator", "GridMediator", "ToolbarMediator",
+    "RegionMediator", "SpawnMediator", "TextMediator", "MarkerMediator", "LightMediator",
+    "AssetEffectsMediator",
+]

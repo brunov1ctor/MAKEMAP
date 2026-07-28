@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPointF, QTimer
@@ -9,6 +10,8 @@ from PySide6.QtGui import QPixmap
 
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
+
+logger = logging.getLogger("MAKEMAP")
 
 # Debounce for _sync_to_db — history_changed fires once per completed
 # stroke/stamp-group/undo/redo, not per mouse-move, so this just coalesces
@@ -62,6 +65,16 @@ class BrushMediator:
             layer.import_mask_png_base64(row["mask_png"], row["mask_x"], row["mask_y"])
             layer.set_texture_transform(row["texture_scale"], row["texture_rotation"])
             self._terrain_rows[row["asset_id"]] = row["id"]
+
+        # The water/land foam halo (BrushTool._apply_shoreline_blend) is
+        # purely derived from the painted masks — never persisted itself
+        # — so without recomputing it here, a reloaded project shows every
+        # terrain mask correctly but the foam only reappears once the user
+        # paints another stroke.
+        try:
+            engine._brush_tool._apply_shoreline_blend()
+        except Exception:
+            logger.exception("Falha ao recalcular halo de espuma terra-água ao carregar o projeto")
 
         for row in self._uow.canvas_items.get_by_map(self.MAP_ID):
             if row["item_type"] != "asset":
@@ -148,7 +161,7 @@ class BrushMediator:
                     panel.roughness_slider.value_changed, panel.smoothness_slider.value_changed,
                     panel.mode_changed, panel.terrain_changed, panel.random_rotation_check.toggled,
                     browser.asset_selected, browser.favorite_toggled,
-                    browser.tab_changed, browser.style_changed):
+                    browser.tab_changed, browser.style_changed, browser.effects_requested):
             try:
                 sig.disconnect()
             except (RuntimeError, TypeError):
@@ -169,6 +182,7 @@ class BrushMediator:
         browser.tab_changed.connect(self.on_tab_changed)
         browser.favorite_toggled.connect(self.on_favorite_toggled)
         browser.style_changed.connect(self.on_style_changed)
+        browser.effects_requested.connect(self._l._asset_effects_med.open_editor)
 
         # Library change watcher
         asset_engine = self._l.canvas.engine._asset_engine
@@ -199,6 +213,47 @@ class BrushMediator:
 
         # Populate grid with current active tab
         self.populate_assets(browser.current_category())
+
+        # First time this session the panel opens with nothing painted yet
+        # (BrushTool._active_asset_id starts ""), the brush would otherwise
+        # sit empty until the user manually picks a material — default it
+        # to whatever was last used in this project, or the first asset in
+        # the library on a genuinely first-ever use.
+        self._ensure_default_asset(browser)
+
+    _LAST_ASSET_KEY = "last_brush_asset_id"
+
+    def _ensure_default_asset(self, browser):
+        brush_tool = self._l.canvas.engine._brush_tool
+        if brush_tool._active_asset_id:
+            return  # already has one — a real pick this session, don't override it
+
+        asset_engine = self._l.canvas.engine._asset_engine
+        library = getattr(asset_engine, "library", None) if asset_engine else None
+        if not library:
+            return
+
+        window = self._l.window()
+        uow = window.uow if window and hasattr(window, "uow") else None
+
+        asset_id = ""
+        if uow:
+            last_id = uow.ui_state.get(self._LAST_ASSET_KEY, "")
+            if last_id and library.get_pixmap(last_id) is not None:
+                asset_id = last_id
+        if not asset_id:
+            # Fall back to whatever's actually first in the CURRENTLY
+            # populated grid (not library.list_all()[0]) — the browser's
+            # default tab/category may not be "all assets", so those two
+            # "first" answers can disagree; using the grid's own first
+            # button guarantees set_selected_asset below finds a match.
+            if browser._asset_buttons:
+                asset_id = browser._asset_buttons[0].asset_id
+
+        if not asset_id:
+            return  # empty library — nothing to default to
+        browser.set_selected_asset(asset_id)
+        self.on_asset_selected(asset_id)
 
     def _on_terrain_context_changed(self, *_args):
         self._l.brush_panel.set_terrain_options(self._terrain_options())
@@ -236,6 +291,9 @@ class BrushMediator:
         if category == "__favorites__":
             assets = library.list_favorites(style=style)
         elif category:
+            # "water" is a real category folder too (see
+            # engines/assets/library.py's CATEGORY_FOLDERS) — same lookup
+            # as any other tab.
             assets = library.list_by_category(category, style=style)
         else:
             assets = library.list_all()
@@ -274,6 +332,9 @@ class BrushMediator:
                 if (brightness != 0.0 or contrast != 0.0) and pixmap and not pixmap.isNull():
                     pixmap = self._apply_adjustments(pixmap, brightness, contrast)
             self._l.brush_panel.set_texture_preview(pixmap)
+        window = self._l.window()
+        if window and hasattr(window, "uow") and window.uow:
+            window.uow.ui_state.set(self._LAST_ASSET_KEY, asset_id)
         # Picking a material is the end of the browsing task — close the
         # sub-panel and hand focus back to the compact brush config.
         self._l.asset_browser_panel.hide()

@@ -61,6 +61,7 @@ class TextItem(QGraphicsItem):
         self._hovered = False
         self._editor: _InlineTextEditor | None = None
         self.on_commit = None  # one-shot callback fired by the next _finish_editing()
+        self.on_edited = None  # persistent callback fired by every _finish_editing() — TextMediator's save hook
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -123,6 +124,9 @@ class TextItem(QGraphicsItem):
         self.start_editing()
         super().mouseDoubleClickEvent(event)
 
+    def is_editing(self) -> bool:
+        return self._editor is not None
+
     def start_editing(self):
         if self._editor is not None:
             return
@@ -158,3 +162,5 @@ class TextItem(QGraphicsItem):
         callback, self.on_commit = self.on_commit, None
         if callback:
             callback()
+        if self.on_edited:
+            self.on_edited()

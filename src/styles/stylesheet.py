@@ -226,4 +226,47 @@ def build_stylesheet() -> str:
         selection-background-color: rgba(36, 58, 94, 0.80);
         selection-color: {Colors.ACCENT};
     }}
+
+    /* --- Menu --- */
+    /* Fallback for any QMenu that doesn't set its own inline QSS (most
+       right-click/"..." menus already do — see MobCard, _AssetCard,
+       etc.) — without this a plain QMenu() falls back to the native
+       light popup regardless of Fusion, since QMenu has no style at all
+       until something targets it. */
+    QMenu {{
+        background-color: {Colors.BG_ELEVATED};
+        color: {Colors.TEXT_PRIMARY};
+        border: 1px solid {Colors.BORDER};
+        padding: 4px;
+    }}
+
+    QMenu::item {{
+        padding: 4px 20px 4px 8px;
+        border-radius: 3px;
+    }}
+
+    QMenu::item:selected {{
+        background-color: {Colors.ACCENT_DIM};
+    }}
+
+    QMenu::separator {{
+        height: 1px;
+        background: {Colors.BORDER_SUBTLE};
+        margin: 4px 2px;
+    }}
+
+    /* --- Dialogs (QMessageBox, QInputDialog confirm/delete prompts) --- */
+    QDialog {{
+        background-color: {Colors.BG_ELEVATED};
+        color: {Colors.TEXT_PRIMARY};
+    }}
+
+    QMessageBox {{
+        background-color: {Colors.BG_ELEVATED};
+    }}
+
+    QMessageBox QLabel {{
+        color: {Colors.TEXT_PRIMARY};
+        background: transparent;
+    }}
     """

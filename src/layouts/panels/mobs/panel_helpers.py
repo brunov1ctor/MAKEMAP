@@ -10,6 +10,7 @@ import re
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel
 
 from src.styles.tokens import Colors
+from src.layouts.panels.shared.import_export_helpers import normalize_name as _normalize_mob_name
 
 _LEVEL_BANDS = [
     (1, 10, "1-10"), (11, 20, "11-20"), (21, 30, "21-30"),
@@ -21,53 +22,41 @@ _SORT_OPTIONS = [
     ("tier_desc", "Tier (maior primeiro)"),
 ]
 
-# Resumo Rápido's donut/legend now breaks mobs down by top-level category
-# (see MobDataMixin._recompute_stats) instead of rarity — categories don't
-# carry a color of their own like RARITY_DEFS did, so this fixed palette is
-# cycled by each root category's position instead.
-_CATEGORY_PALETTE = [
-    "#4FC3F7", "#AB47BC", "#FFA726", "#66BB6A", "#EF5350",
-    "#26C6DA", "#FFCA28", "#8D6E63", "#EC407A", "#7E57C2",
-]
 
-
-def _category_color(index: int) -> str:
-    return _CATEGORY_PALETTE[index % len(_CATEGORY_PALETTE)]
-
-
-# ─── Import/export templates (Importar/Exportar, see ImportExportMixin) ───
-# One blank/example mob — never the user's existing mobs, since Aplicar
-# always CREATES new rows (see ImportExportMixin._import_mob_dicts), so
-# prefilling real data would risk silently duplicating it. A reasonably
-# useful subset of fields, not all ~30 DB columns, mirrors config/parallax's
-# own JSON template (_JSON_PARAM_DOCS in parallax_section.py) — document the
-# fields worth documenting, let short/self-explanatory ones speak for
-# themselves.
-_TEMPLATE_EXAMPLE = {
-    "name": "Novo Mob", "description": "", "category": "", "subcategory": "",
-    "tier": 1, "level": 1, "rarity": "normal", "tipo": "Inimigo",
+# ─── Mob field subset (Importar/Exportar JSON/CSV/Excel, see
+# ImportExportMixin) ───
+# A reasonably useful subset of fields, not all ~30 DB columns — used two
+# ways: as the DEFAULTS filled in for a mob missing a given key when
+# Exportar builds its output from self._mobs, and as the base values for
+# Importar's immutable starting template (see _TEMPLATE_FIELD_DOCS/
+# _parse_mobs_json below), same subset either direction.
+_MOB_TEMPLATE_FIELDS = {
+    "name": "", "description": "", "category": "", "subcategory": "",
+    "tier": 1, "level": 1, "tipo": "Inimigo",
     "element": "", "ambiente": "", "zone_id": "",
     "health": 100, "mana": 50, "damage": 10, "defense": 5, "favorite": 0,
 }
 _TEMPLATE_FIELD_DOCS = [
     ("name", "nome do mob (obrigatório)"),
+    # Categoria doubles as the difficulty tier now (Normal/Raro/Elite/
+    # Boss/Épico) — the old separate "rarity" field was dropped as a
+    # redundant duplicate of the same concept.
     ("category", "ID de uma categoria existente — veja a lista abaixo"),
     ("subcategory", "texto livre, opcional"),
     ("tier", "1 a 10"),
-    ("rarity", "normal | raro | elite | boss | mitico"),
     ("tipo", "Inimigo | Aliado | Neutro | Chefe"),
-    ("element", "Fogo | Gelo | Raio | Terra | Água | Vento | Sagrado | Sombrio | Veneno (ou vazio)"),
+    ("element", "texto livre, ou vazio"),
     ("zone_id", "ID de uma região existente, ou vazio"),
     ("favorite", "0 ou 1"),
 ]
 
 
 def _parse_mobs_json(text: str) -> list[dict]:
-    """Permissive parser for the hand-edited mob template — same technique
-    as parallax_section.py's _parse_layers_json: strips "// ..." line
-    comments, tolerates a bare object (no enclosing []), unquoted keys, and
-    trailing commas, rather than requiring strict JSON from someone editing
-    this by hand."""
+    """Permissive parser for the hand-edited Importar JSON card — same
+    technique as parallax_section.py's _parse_layers_json: strips
+    "// ..." line comments, tolerates a bare object (no enclosing []),
+    unquoted keys, and trailing commas, rather than requiring strict JSON
+    from someone editing this by hand."""
     text = re.sub(r'//[^\n]*', '', text)
     text = text.strip()
     if not text:

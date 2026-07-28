@@ -16,18 +16,30 @@ from src.styles.tokens import Colors
 from src.layouts.panels.mobs.categories import item_rarity_label, item_rarity_color
 
 _INPUT_STYLE = f"""
-    QLineEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
+    QLineEdit, QTextEdit, QSpinBox, QDoubleSpinBox {{
         background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
         border-radius: 5px; padding: 1px 4px; color: {Colors.TEXT_PRIMARY}; font-size: 10px;
     }}
-    QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
+    QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
         border-color: {Colors.ACCENT};
     }}
+    /* QComboBox gets its own rule (not lumped in with the line above) —
+    it used to share the same 1px/4px padding as a QLineEdit and never
+    got a :hover state, which every other panel's dropdown (RegionEditPanel,
+    grid_panel, text_panel, brush/panel, ...) already has via its own
+    near-identical _combo_style()/local override — that's what read as
+    "out of style" next to the rest of the app. Padding/drop-down width
+    now match that same shared pattern. */
+    QComboBox {{
+        background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
+        border-radius: 5px; padding: 2px 8px; color: {Colors.TEXT_PRIMARY}; font-size: 10px;
+    }}
+    QComboBox:hover, QComboBox:focus {{ border-color: {Colors.ACCENT}; }}
+    QComboBox::drop-down {{ width: 14px; border: none; }}
     QComboBox QAbstractItemView {{
         background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
         selection-background-color: {Colors.ACCENT_DIM}; border: 1px solid {Colors.BORDER};
     }}
-    QComboBox::drop-down {{ width: 12px; border: none; }}
     QLabel {{ color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none; }}
 """
 

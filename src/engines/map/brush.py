@@ -37,7 +37,7 @@ class BrushAssetEntry:
 class BrushConfig:
     """Full brush configuration."""
     name: str = "Default Brush"
-    size: float = 64.0
+    size: float = 50.0
     spacing: float = 0.3  # fraction of size
     scatter: float = 0.5  # dispersion amount (0-1)
     density: float = 1.0  # items per stamp

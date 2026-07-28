@@ -14,6 +14,10 @@ from src.canvas.tools.base import ToolManager
 from src.canvas.tools.defaults import SelectTool, PanTool
 from src.canvas.tools.brush_tool import BrushTool, RegionTool, RoadTool, RiverTool, RegionBrushTool
 from src.canvas.tools.text_tool import TextTool
+from src.canvas.text_item import TextItem
+from src.canvas.tools.spawn_tool import SpawnTool
+from src.canvas.tools.marker_tool import MarkerTool
+from src.canvas.tools.light_tool import LightTool
 from src.engines.map.region_layer import RegionLayer
 from src.engines.map.terrain_layer import TerrainLayer
 from src.canvas.map_boundary import MovableBoundaryItem
@@ -68,6 +72,12 @@ class CanvasEngine(QWidget):
         self.transform = TransformEngine(self.viewport.scene(), self)
         self.selection_highlight = SelectionHighlight(self.viewport.scene())
         self.selection.selection_changed.connect(self._on_selection_changed)
+        # A TextItem finishing its inline edit doesn't change Qt's own
+        # selection state (it was already selected the whole time), so
+        # selection_changed never fires on its own — re-run the handle
+        # visibility check here so the resize/rotate frame appears once
+        # typing commits (see _on_selection_changed's is_editing() filter).
+        self.text_committed.connect(lambda: self._on_selection_changed([]))
 
         # Clipboard Engine
         self.clipboard = ClipboardEngine(self.viewport.scene(), self)
@@ -141,13 +151,14 @@ class CanvasEngine(QWidget):
 
     def _register_default_tools(self):
         self.tool_manager.register(
-            SelectTool(self.viewport, self.selection, self.transform, self.history)
+            SelectTool(self.viewport, self.selection, self.transform, self.history, tool_manager=self.tool_manager)
         )
         self.tool_manager.register(PanTool(self.viewport))
-        self.tool_manager.register(TextTool(
+        self._text_tool = TextTool(
             self.viewport, self.tool_manager, self.history, self.selection, self.transform,
             on_committed=self.text_committed.emit,
-        ))
+        )
+        self.tool_manager.register(self._text_tool)
 
         # Brush (asset painting)
         self.brush_engine = BrushEngine(self)
@@ -170,6 +181,25 @@ class CanvasEngine(QWidget):
         # inherit whatever Snap/Grid state the terrain Brush tool left on.
         self._region_brush_tool = RegionBrushTool(self.viewport, history_engine=self.history)
         self.tool_manager.register(self._region_brush_tool)
+
+        # Spawn panel's mob-group stamp (see SpawnMediator/spawn_tool.py)
+        self._spawn_tool = SpawnTool(
+            self.viewport, history_engine=self.history,
+            selection_engine=self.selection, transform_engine=self.transform,
+        )
+        self.tool_manager.register(self._spawn_tool)
+
+        # Marcador tool's point-of-interest pin (see MarkerMediator/marker_tool.py)
+        self._marker_tool = MarkerTool(
+            self.viewport, self.tool_manager, self.history, self.selection, self.transform,
+        )
+        self.tool_manager.register(self._marker_tool)
+
+        # Iluminação panel's light object (see LightMediator/light_tool.py)
+        self._light_tool = LightTool(
+            self.viewport, self.tool_manager, self.history, self.selection, self.transform,
+        )
+        self.tool_manager.register(self._light_tool)
 
     def set_asset_engine(self, asset_engine):
         """Injeta o AssetEngine após o projeto ser carregado."""
@@ -211,6 +241,11 @@ class CanvasEngine(QWidget):
         for layer in self._brush_tool._terrain_layers.values():
             layer.remove_from_scene()
         self._brush_tool._terrain_layers.clear()
+        # The foam/opacity-blend overlays are purely derived from these
+        # layers (see BrushTool._clear_all_blend_overlays) — without this
+        # they'd linger in the scene, orphaned, after the layers they were
+        # blending are long gone.
+        self._brush_tool._clear_all_blend_overlays()
 
     def place_stamp_item(self, asset_id: str, position: QPointF, rotation: float,
                           scale: float, opacity: float) -> QGraphicsPixmapItem | None:
@@ -324,12 +359,18 @@ class CanvasEngine(QWidget):
         Terrain layer items span their entire raster canvas, not just the
         painted area, so a bounding-box rectangle around one is misleading —
         those get a mask-contour perimeter highlight instead of move/resize
-        handles.
+        handles. A TextItem mid inline-edit is also excluded — its own
+        dashed edit-highlight is enough while typing, and a resize/rotate
+        handle frame doesn't make sense until editing commits (see
+        text_committed's connection below, which re-runs this once it does).
         """
         selected = self.viewport.scene().selectedItems()
         terrain_by_item = {layer.item: layer for layer in self._brush_tool._terrain_layers.values()}
         terrain_selected = [terrain_by_item[it] for it in selected if it in terrain_by_item]
-        other_selected = [it for it in selected if it not in terrain_by_item]
+        other_selected = [
+            it for it in selected
+            if it not in terrain_by_item and not (isinstance(it, TextItem) and it.is_editing())
+        ]
 
         if other_selected:
             self.transform.show_handles(other_selected)
@@ -397,6 +438,7 @@ class CanvasEngine(QWidget):
     def _on_mouse_press(self, event: QMouseEvent):
         # Pan with middle button or space always takes priority
         if event.button() == Qt.MouseButton.MiddleButton or self.viewport._space_held:
+            self._commit_stray_text_edit(None)
             self.viewport._panning = True
             self.viewport._pan_start = event.position()
             self.viewport.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -405,12 +447,26 @@ class CanvasEngine(QWidget):
         # Let boundary items handle their own press
         scene_pos = self.viewport.mapToScene(int(event.position().x()), int(event.position().y()))
         item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
+        self._commit_stray_text_edit(item)
         if isinstance(item, MovableBoundaryItem) and item._hit_border(item.mapFromScene(scene_pos)):
             from PySide6.QtWidgets import QGraphicsView
             QGraphicsView.mousePressEvent(self.viewport, event)
             return
 
         self.tool_manager.mouse_press(event, scene_pos)
+
+    def _commit_stray_text_edit(self, clicked_item):
+        """`viewport.mousePressEvent` is fully monkeypatched to this method
+        (see __init__), which bypasses QGraphicsScene's own event dispatch —
+        so a click outside a TextItem being inline-edited never reaches its
+        _InlineTextEditor and never fires the focusOutEvent that would
+        normally commit it (Enter/Escape were the only way out). Commit it
+        here instead whenever the click isn't on that item or its editor."""
+        for it in self.viewport.scene().items():
+            if isinstance(it, TextItem) and it.is_editing():
+                if clicked_item is not it and clicked_item is not it._editor:
+                    it._finish_editing()
+                break
 
     def _on_mouse_move(self, event: QMouseEvent):
         scene_pos = self.viewport.mapToScene(int(event.position().x()), int(event.position().y()))

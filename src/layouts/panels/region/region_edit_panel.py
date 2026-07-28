@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QToolButton,
-    QLineEdit, QComboBox, QCheckBox, QTextEdit, QColorDialog, QScrollArea, QWidget,
+    QLineEdit, QComboBox, QTextEdit, QScrollArea, QWidget,
 )
 from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
@@ -26,6 +26,7 @@ from src.styles.tokens import Colors
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.region.star_rating import StarRating
 from src.layouts.panels.collapsible_section import CollapsibleSection
+from src.layouts.panels.terrain.color_picker import HueBar, SatValSquare, ColorSlider
 
 ESTILOS = ["Nenhum", "Vapor"]
 
@@ -39,9 +40,7 @@ class RegionEditPanel(QFrame):
     terrain_changed = Signal(str)         # terrain_id ("" = Mapa Infinito)
     category_changed = Signal(str)       # category_key
     color_changed = Signal(QColor)
-    visibility_changed = Signal(bool)
     radius_changed = Signal(float)
-    softness_changed = Signal(float)
     mode_changed = Signal(str)           # "add" | "remove"
     opacity_changed = Signal(float)
     stars_changed = Signal(int)
@@ -151,22 +150,13 @@ class RegionEditPanel(QFrame):
         self._color_btn = QToolButton()
         self._color_btn.setFixedHeight(24)
         self._color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._color_btn.clicked.connect(self._pick_color)
+        self._color_btn.clicked.connect(self._toggle_color_picker)
         self._refresh_color_btn()
         info_section.content_layout.addWidget(self._field_row("Cor da região", self._color_btn))
 
-        self._visible_check = QCheckBox("Visível")
-        self._visible_check.setChecked(True)
-        self._visible_check.setStyleSheet(f"""
-            QCheckBox {{ color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none; }}
-            QCheckBox::indicator {{
-                width: 30px; height: 16px; border-radius: 8px;
-                border: 1px solid {Colors.BORDER}; background: rgba(255,255,255,0.06);
-            }}
-            QCheckBox::indicator:checked {{ background: {Colors.ACCENT}; border-color: {Colors.ACCENT}; }}
-        """)
-        self._visible_check.toggled.connect(self.visibility_changed.emit)
-        info_section.content_layout.addWidget(self._visible_check)
+        self._color_picker = self._build_color_picker()
+        self._color_picker.hide()
+        info_section.content_layout.addWidget(self._color_picker)
 
         layout.addWidget(info_section)
         layout.addWidget(self._sep())
@@ -179,10 +169,12 @@ class RegionEditPanel(QFrame):
         self.radius_slider.value_changed.connect(self.radius_changed.emit)
         tools_section.content_layout.addWidget(self.radius_slider)
 
-        self.softness_slider = BrushSlider("Suavização", "◐", 0, 100, 50, "%")
-        self.softness_slider.value_changed.connect(lambda v: self.softness_changed.emit(v / 100.0))
-        tools_section.content_layout.addWidget(self.softness_slider)
-
+        # "Opacidade" is the região's own live transparency (RegionLayer.
+        # set_opacity, a real QGraphicsItem opacity) — NOT the brush's
+        # paint-mask alpha, which only ever accumulates and can't be
+        # lowered once painted. Wired that way specifically so this
+        # always visibly does something the instant it's dragged,
+        # regardless of how much of the área is already painted.
         self.opacity_slider = BrushSlider("Opacidade", "▦", 5, 100, 50, "%")
         self.opacity_slider.value_changed.connect(lambda v: self.opacity_changed.emit(v / 100.0))
         tools_section.content_layout.addWidget(self.opacity_slider)
@@ -298,11 +290,126 @@ class RegionEditPanel(QFrame):
         sep.setStyleSheet("background: rgba(255,255,255,0.10); border: none;")
         return sep
 
-    def _pick_color(self):
-        color = QColorDialog.getColor(self._color, self, "Cor da região",
-                                       QColorDialog.ColorDialogOption.ShowAlphaChannel)
-        if color.isValid():
-            self.set_color(color, emit=True)
+    # ─── In-panel color picker (no external QColorDialog — same pattern
+    # as terrain's BackgroundSection/color_picker.py) ───────────────────
+
+    def _build_color_picker(self) -> QFrame:
+        """HueBar + saturation/value square + R/G/B/A sliders + hex entry,
+        all embedded directly in this panel — clicking the color swatch
+        toggles this open/closed instead of popping a native OS dialog."""
+        widget = QFrame()
+        widget.setStyleSheet("background: transparent; border: none;")
+        lay = QVBoxLayout(widget)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(6)
+
+        self._hue_bar = HueBar()
+        self._hue_bar.setFixedHeight(16)
+        self._hue_bar.hue_changed.connect(self._on_hue_changed)
+        lay.addWidget(self._hue_bar)
+
+        self._sv_square = SatValSquare()
+        self._sv_square.setFixedHeight(90)
+        self._sv_square.sv_changed.connect(self._on_sv_changed)
+        lay.addWidget(self._sv_square)
+
+        self._r_slider = ColorSlider("R", 0, 255, self._color.red())
+        self._g_slider = ColorSlider("G", 0, 255, self._color.green())
+        self._b_slider = ColorSlider("B", 0, 255, self._color.blue())
+        self._a_slider = ColorSlider("A", 0, 255, self._color.alpha())
+        for slider in (self._r_slider, self._g_slider, self._b_slider):
+            slider.value_changed.connect(self._on_rgb_slider_changed)
+        self._a_slider.value_changed.connect(self._on_alpha_slider_changed)
+        lay.addWidget(self._r_slider)
+        lay.addWidget(self._g_slider)
+        lay.addWidget(self._b_slider)
+        lay.addWidget(self._a_slider)
+
+        hex_row = QHBoxLayout()
+        hex_row.setSpacing(4)
+        hex_label = QLabel("#")
+        hex_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 11px; background: transparent; border: none;")
+        hex_row.addWidget(hex_label)
+        self._hex_input = QLineEdit()
+        self._hex_input.setFixedHeight(22)
+        self._hex_input.setMaxLength(6)
+        self._hex_input.setStyleSheet(f"""
+            QLineEdit {{
+                background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 4px; color: {Colors.TEXT_PRIMARY}; font-size: 10px; padding: 0 4px;
+            }}
+            QLineEdit:focus {{ border-color: {Colors.ACCENT}; }}
+        """)
+        self._hex_input.returnPressed.connect(self._on_hex_entered)
+        hex_row.addWidget(self._hex_input, 1)
+        lay.addLayout(hex_row)
+
+        h, s, v, _a = self._color.getHsv()
+        self._hsv = [max(0, h), s * 100 // 255, v * 100 // 255]
+        self._hue_bar.set_hue(self._hsv[0])
+        self._sv_square.set_hue(self._hsv[0])
+        self._sv_square.set_sv(self._hsv[1], self._hsv[2])
+        self._sync_hex_input()
+        return widget
+
+    def _toggle_color_picker(self):
+        self._color_picker.setVisible(not self._color_picker.isVisible())
+        self.content_changed.emit()
+
+    def _on_hue_changed(self, hue: int):
+        self._hsv[0] = hue
+        self._sv_square.set_hue(hue)
+        self._apply_hsv()
+
+    def _on_sv_changed(self, s: int, v: int):
+        self._hsv[1], self._hsv[2] = s, v
+        self._apply_hsv()
+
+    def _apply_hsv(self):
+        h, s, v = self._hsv
+        color = QColor.fromHsv(h, round(s * 255 / 100), round(v * 255 / 100))
+        color.setAlpha(self._color.alpha())
+        self._sync_rgb_sliders(color)
+        self._sync_hex_input(color)
+        self.set_color(color, emit=True, sync_picker=False)
+
+    def _on_rgb_slider_changed(self, _value: int):
+        color = QColor(self._r_slider.value(), self._g_slider.value(), self._b_slider.value(), self._color.alpha())
+        h, s, v, _a = color.getHsv()
+        self._hsv = [max(0, h), s * 100 // 255, v * 100 // 255]
+        self._hue_bar.set_hue(self._hsv[0])
+        self._sv_square.set_hue(self._hsv[0])
+        self._sv_square.set_sv(self._hsv[1], self._hsv[2])
+        self._sync_hex_input(color)
+        self.set_color(color, emit=True, sync_picker=False)
+
+    def _on_alpha_slider_changed(self, value: int):
+        color = QColor(self._color)
+        color.setAlpha(value)
+        self.set_color(color, emit=True, sync_picker=False)
+
+    def _on_hex_entered(self):
+        text = self._hex_input.text().strip().lstrip("#")
+        if len(text) != 6:
+            return
+        try:
+            r, g, b = int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+        except ValueError:
+            return
+        self.set_color(QColor(r, g, b, self._color.alpha()), emit=True)
+
+    def _sync_rgb_sliders(self, color: QColor):
+        for slider, value in ((self._r_slider, color.red()), (self._g_slider, color.green()),
+                               (self._b_slider, color.blue())):
+            slider.blockSignals(True)
+            slider.set_value(value)
+            slider.blockSignals(False)
+
+    def _sync_hex_input(self, color: QColor | None = None):
+        color = color or self._color
+        self._hex_input.blockSignals(True)
+        self._hex_input.setText(color.name(QColor.NameFormat.HexRgb).lstrip("#").upper())
+        self._hex_input.blockSignals(False)
 
     def _refresh_color_btn(self):
         self._color_btn.setStyleSheet(f"""
@@ -335,9 +442,15 @@ class RegionEditPanel(QFrame):
         self._terrain_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._terrain_combo.blockSignals(False)
 
-    def load(self, name: str, category_key: str, color: QColor, visible: bool,
+    def load(self, name: str, category_key: str, color: QColor,
              radius: float, softness: float, mode: str, opacity: float,
              stars: int, estilo: str, observacao: str, terrain_id: str = ""):
+        # `softness` is accepted (unused) purely to keep both call sites
+        # (RegionMediator.on_add_requested/_open_edit) unchanged — the
+        # "Suavização" slider itself was removed (see __init__): with the
+        # fill now hard-clipped to the traced border (RegionLayer.
+        # _bordered_result), it had almost no visible effect left, and
+        # nobody could tell what it did.
         self._name_edit.blockSignals(True)
         self._name_edit.setText(name)
         self._name_edit.blockSignals(False)
@@ -353,12 +466,7 @@ class RegionEditPanel(QFrame):
 
         self.set_color(color, emit=False)
 
-        self._visible_check.blockSignals(True)
-        self._visible_check.setChecked(visible)
-        self._visible_check.blockSignals(False)
-
         self.radius_slider.set_value(radius)
-        self.softness_slider.set_value(softness * 100)
         self.opacity_slider.set_value(opacity * 100)
         self._mode = mode
 
@@ -374,9 +482,26 @@ class RegionEditPanel(QFrame):
         self._obs_edit.setPlainText(observacao)
         self._obs_edit.blockSignals(False)
 
-    def set_color(self, color: QColor, emit: bool = True):
+    def set_color(self, color: QColor, emit: bool = True, sync_picker: bool = True):
         self._color = QColor(color)
         self._refresh_color_btn()
+        if sync_picker and hasattr(self, "_hue_bar"):
+            # Re-sync every picker sub-widget to the new color — used when
+            # the change came from OUTSIDE the picker itself (load(), hex
+            # entry). Callers that already updated their own sibling
+            # widgets before calling this (hue bar, sv square, rgb/alpha
+            # sliders) pass sync_picker=False to avoid redundant, blocked-
+            # signal round-trips.
+            h, s, v, _a = self._color.getHsv()
+            self._hsv = [max(0, h), s * 100 // 255, v * 100 // 255]
+            self._hue_bar.set_hue(self._hsv[0])
+            self._sv_square.set_hue(self._hsv[0])
+            self._sv_square.set_sv(self._hsv[1], self._hsv[2])
+            self._sync_rgb_sliders(self._color)
+            self._a_slider.blockSignals(True)
+            self._a_slider.set_value(self._color.alpha())
+            self._a_slider.blockSignals(False)
+            self._sync_hex_input(self._color)
         if emit:
             self.color_changed.emit(self._color)
 
@@ -390,11 +515,6 @@ class RegionEditPanel(QFrame):
         editing an existing card auto-persists each field as it changes."""
         self._save_btn.setVisible(is_creating)
         self.content_changed.emit()
-
-    def set_visible_checkbox(self, visible: bool):
-        self._visible_check.blockSignals(True)
-        self._visible_check.setChecked(visible)
-        self._visible_check.blockSignals(False)
 
     def focus_name(self):
         self._name_edit.setFocus()

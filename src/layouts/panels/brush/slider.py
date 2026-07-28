@@ -69,6 +69,7 @@ class BrushSlider(QFrame):
         name_lbl = QLabel(label)
         name_lbl.setMinimumWidth(0)
         name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        name_lbl.setWordWrap(True)
         name_lbl.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 10px; background: transparent; border: none;")
         top.addWidget(name_lbl, 1)
 

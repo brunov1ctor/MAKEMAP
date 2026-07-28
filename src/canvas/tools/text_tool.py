@@ -27,45 +27,83 @@ class TextTool(BaseTool):
 
     def __init__(
         self, viewport, tool_manager=None, history_engine=None, selection_engine=None,
-        transform_engine=None, on_committed=None,
+        transform_engine=None, on_committed=None, properties_provider=None, on_edited=None,
     ):
         super().__init__(viewport)
         self._tool_manager = tool_manager
         self._history = history_engine
         self._selection = selection_engine
         self._on_committed = on_committed
+        self._properties_provider = properties_provider
+        self._on_edited = on_edited
         self._interaction = ItemInteraction(viewport, selection_engine, transform_engine, history_engine) \
             if selection_engine and transform_engine else None
+
+    def set_properties_provider(self, provider):
+        """provider() -> TextProperties, read at the moment a new text box
+        is placed — lets MainLayout hand over whatever the Text panel is
+        currently configured to (color, shadow, outline...) instead of
+        always starting from hardcoded defaults."""
+        self._properties_provider = provider
+
+    def set_on_edited(self, callback):
+        """callback() wired onto every new TextItem's persistent on_edited
+        hook — TextMediator uses this to know when to save, since retyping
+        an EXISTING text (double-click, not a fresh placement) never touches
+        HistoryEngine and would otherwise go unsaved."""
+        self._on_edited = callback
 
     def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
         if event.button() != Qt.MouseButton.LeftButton:
             return
 
-        if self._interaction and self._interaction.try_begin(scene_pos):
+        # item_filter=isinstance(TextItem): clicking on top of a painted
+        # região/terrain (also selectable layers) must still place a new
+        # text box, not hijack the click into selecting/dragging that
+        # other layer — only an EXISTING TextItem should be picked up here.
+        if self._interaction and self._interaction.try_begin(scene_pos, item_filter=lambda it: isinstance(it, TextItem)):
             return
 
-        item = TextItem(TextProperties(text="Texto", font_size=20, font_weight=600))
+        props = self._properties_provider() if self._properties_provider else \
+            TextProperties(text="Texto", font_size=20, font_weight=600)
+        item = TextItem(props)
         item.setPos(scene_pos)
         item.setZValue(50)
         self.viewport.scene().addItem(item)
         if self._history:
             self._history.push(PlaceObjectCommand(item))
 
+        # start_editing() before selecting: CanvasEngine._on_selection_changed
+        # skips showing resize/rotate handles for a TextItem mid inline-edit
+        # (is_editing() check) — selecting first would show them a beat too
+        # early, then leave them stuck since editing doesn't re-fire
+        # selection_changed on its own.
+        item.on_commit = self._handle_commit
+        item.on_edited = self._on_edited
+        item.start_editing()
+
         if self._selection:
             self._selection.select(item)
         else:
             self.viewport.scene().clearSelection()
             item.setSelected(True)
-        item.on_commit = self._handle_commit
-        item.start_editing()
+
+        # Placement itself (not the later edit-commit) is when the panel's
+        # config has been "consumed" — switch to Selecionar right away so
+        # the Texto toolbar button turns off and the panel closes, while
+        # inline editing (already started above) keeps working independently
+        # of which tool is active (see TextItem._InlineTextEditor — it owns
+        # its own keyboard focus, not routed through the tool manager).
+        if self._tool_manager:
+            self._tool_manager.activate("Selecionar")
+        if self._on_committed:
+            self._on_committed()
 
     def _handle_commit(self):
         """Fired once, by the item itself, when the very first edit right
-        after placement commits (Enter / click outside) — switches to the
-        Selection tool (not Pan) so the Texto button turns off in the
-        toolbar AND the just-placed, still-selected object stays fully
-        interactive (drag/rotate/resize handles) — Pan has no
-        ItemInteraction wired at all, which left the object undraggable."""
+        after placement commits (Enter / click outside). Placement already
+        switched tools/closed the panel (see mouse_press) — this is now
+        just a safety net in case that ever changes."""
         if self._tool_manager:
             self._tool_manager.activate("Selecionar")
         if self._on_committed:

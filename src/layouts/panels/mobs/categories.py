@@ -39,15 +39,11 @@ def set_category_lookup(categories: list[dict]):
     _category_lookup = {c["id"]: c for c in categories}
 
 
-RARITY_DEFS: list[tuple[str, str, str]] = [
-    ("normal", "#9AA5B1", "Normal"),
-    ("raro", "#4FC3F7", "Raro"),
-    ("elite", "#AB47BC", "Elite"),
-    ("boss", "#FFA726", "Chefe"),
-    ("mitico", "#EF5350", "Mítico"),
-]
-RARITY_LABELS = {key: label for key, _color, label in RARITY_DEFS}
-RARITY_COLORS = {key: color for key, color, _label in RARITY_DEFS}
+# Migration 16's seeded root folder new/unassigned mobs fall back to —
+# "outros" (the mobs.category DB column's old default, see migration 3)
+# stopped resolving to a real folder once migration 7 dropped it, leaving
+# every unset mob showing "❔ Sem categoria" instead of a real category.
+DEFAULT_CATEGORY_ID = "normal"
 
 # Separate loot-tier scale (items.rarity, mobs.abilities_json entries,
 # mob_assets.rarity) — items already existed with this DEFAULT 'common'
@@ -96,12 +92,40 @@ def category_icon(key: str) -> str:
     return _category_lookup.get(key, {}).get("icon", "❔")
 
 
-def rarity_label(key: str) -> str:
-    return RARITY_LABELS.get(key, "Normal")
+# Migration 16 seeds the 5 difficulty-tier category folders with ids
+# normal/raro/elite/epico/boss — migrations 22/23 seed sensible
+# border_color values directly onto those rows now, so this no longer
+# needs its own id->color guesses as a fallback (it used to, back when
+# categories had nowhere to store a color at all). Keeping an id-based
+# guess here would silently defeat CategoryEditPanel's "✕ Usar cor
+# padrão" clear button for exactly those 5 categories — clearing a
+# stored color must always land on the same flat neutral gray for every
+# category, not a per-id color that happens to look identical to what
+# was just cleared. Used by both the Visão Geral category badge
+# (edit_overview_mixin.py) and the grid card's chip (mob_card.py).
+def category_badge_color(category_id: str) -> str:
+    stored = _category_lookup.get(category_id, {}).get("border_color")
+    return stored or "#9AA5B1"
 
 
-def rarity_color(key: str) -> str:
-    return RARITY_COLORS.get(key, "#9AA5B1")
+def category_image_border_color(category_id: str) -> str:
+    """CategoryEditPanel's "Cor da borda da imagem" — a separate color
+    from category_badge_color's "Cor da borda do card" (the card frame +
+    rarity tag), specifically for the border drawn around a mob card's
+    thumbnail/image. Falls back to the card border color when unset, not
+    straight to the hardcoded id->color guesses, so a category with only
+    one color picked still looks consistent across both spots."""
+    stored = _category_lookup.get(category_id, {}).get("image_border_color")
+    if stored:
+        return stored
+    return category_badge_color(category_id)
+
+
+def category_tag_text_color(category_id: str) -> str:
+    """CategoryEditPanel's "Cor do texto da tag" — the rarity tag's own
+    text color, independent of its background (category_badge_color).
+    Defaults to white, same as before this became user-editable."""
+    return _category_lookup.get(category_id, {}).get("tag_text_color") or "#FFFFFF"
 
 
 def item_rarity_label(key: str) -> str:

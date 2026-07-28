@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import uuid
 import sqlite3
+import json
 import logging
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -74,6 +75,7 @@ def get_shared_db() -> sqlite3.Connection:
 
 CATEGORY_FOLDERS = [
     "terrain",
+    "water",
     "trees",
     "mountains",
     "rocks",
@@ -534,6 +536,17 @@ class AssetLibrary(QObject):
             rows = self._db.execute("SELECT * FROM assets WHERE favorite = 1 ORDER BY name").fetchall()
         return [self._row_to_asset(r) for r in rows]
 
+    # ─── Terrain type ────────────────────────────────────────────────────
+    # "water" is a real category folder (see CATEGORY_FOLDERS) just like
+    # terrain/trees/rocks/... — moving an asset in/out of it (drag-and-
+    # drop in the Config/Assets panel, see card.py's
+    # _on_card_drop_from_outside) already updates its `category` column,
+    # same mechanism every other category move uses.
+
+    def is_water(self, asset_id: str) -> bool:
+        row = self._db.execute("SELECT category FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        return bool(row) and row["category"] == "water"
+
     # ─── Sounds ──────────────────────────────────────────────────────────
 
     def get_sound(self, asset_id: str, prefix: str) -> dict | None:
@@ -579,7 +592,18 @@ class AssetLibrary(QObject):
             width=row["width"],
             height=row["height"],
             hash=row["hash"],
+            tags=self._parse_tags(row["tags"] if "tags" in row.keys() else None),
         )
+
+    @staticmethod
+    def _parse_tags(raw: str | None) -> list[str]:
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+        return parsed if isinstance(parsed, list) else []
 
     @property
     def library_path(self) -> Path:

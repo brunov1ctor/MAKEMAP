@@ -1,0 +1,371 @@
+"""SpawnMediator — Spawn panel ↔ canvas engine wiring.
+
+Categories/mobs are read LIVE from the same DB rows the Mobs module owns
+(mob_categories/mobs) — nothing is cached/copied here beyond the current
+selection, so renaming or adding a mob/category in the Mobs module is
+reflected the next time a category is reopened in the Spawn panel.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import TYPE_CHECKING
+
+from PySide6.QtCore import QPointF, QTimer
+from PySide6.QtGui import QPixmap
+
+from src.layouts.panels.spawn.portrait_compose import compose_group_portrait
+from src.services.project_assets import resolve_asset_path
+
+if TYPE_CHECKING:
+    from src.layouts.main_layout import MainLayout
+
+logger = logging.getLogger("MAKEMAP")
+
+_PREVIEW_SIZE = 56
+# Debounce for _sync_to_db — same reasoning/value as BrushMediator's own:
+# history_changed fires once per completed stamp/undo/redo, not per mouse-
+# move, so this only coalesces rapid back-to-back sequences into one DB
+# round trip.
+_SYNC_DEBOUNCE_MS = 250
+
+
+class SpawnMediator:
+    """Manages Spawn panel ↔ canvas engine connections."""
+
+    MAP_ID = "default"  # matches BrushMediator/RegionMediator
+
+    def __init__(self, layout: MainLayout):
+        self._l = layout
+        self._uow = None
+        self._active_mob_name = ""
+        self._active_face: QPixmap | None = None
+        self._stamp_items: dict[str, object] = {}  # canvas_items row id -> QGraphicsPixmapItem
+
+        panel = self._l.spawn_panel
+        panel.category_selected.connect(self.on_category_selected)
+        panel.size_changed.connect(self.on_size_changed)
+        panel.quantity_changed.connect(self.on_quantity_changed)
+
+        sub_panel = self._l.spawn_mob_sub_panel
+        sub_panel.mob_selected.connect(self.on_mob_selected)
+
+        self._l.canvas.engine._spawn_tool.on_stamp_placed(self._on_stamp_placed)
+
+        self._sync_timer = QTimer()
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.timeout.connect(self._sync_to_db)
+        self._l.canvas.engine.history.history_changed.connect(self._on_history_changed)
+
+        # Clicking a placed mob-spawn stamp (via the normal Selecionar
+        # tool) shows its info in the Inspector — see _on_selection_changed.
+        self._l.canvas.engine.selection.selection_changed.connect(self._on_selection_changed)
+
+    # ─── Persistence wiring (called by application.py on project load) ───
+
+    def set_uow(self, uow):
+        self._uow = uow
+        self._active_mob_name = ""
+        self._active_face = None
+        self._l.canvas.engine._spawn_tool.set_mob(None, "", None)
+        self._l.spawn_panel.set_selected_mob("", None)
+        self._refresh_categories()
+        self._load_from_db()
+
+    def _load_from_db(self):
+        """Reloads every persisted mob-spawn stamp for the current project.
+        Mirrors BrushMediator._load_from_db's stamp-reload half — mob-spawn
+        stamps aren't parented to a boundary item (see SpawnTool._place),
+        so plain scene.removeItem()/addItem() is safe here without the
+        detach-first dance Brush's stamps need."""
+        scene = self._l.canvas.engine.viewport.scene()
+        for item in self._stamp_items.values():
+            if item.scene() is not None:
+                item.scene().removeItem(item)
+        self._stamp_items.clear()
+        if not self._uow:
+            return
+
+        project_dir = self._project_dir()
+        tool = self._l.canvas.engine._spawn_tool
+        for row in self._uow.canvas_items.get_by_map(self.MAP_ID):
+            if row["item_type"] != "mob_spawn":
+                continue
+            mob_id = row["asset_id"]
+            mob = self._uow.mobs.get(mob_id)
+            if not mob:
+                # The mob itself was deleted since this was placed — drop
+                # the orphaned stamp rather than showing a blank/broken one.
+                continue
+            try:
+                meta = json.loads(row["metadata"] or "{}")
+            except (TypeError, ValueError):
+                meta = {}
+            quantity = int(meta.get("quantity", 1))
+            size = float(meta.get("size", 64.0))
+            face = self._load_face(mob, project_dir)
+            item = tool.build_stamp_item(
+                mob_id, row["name"] or mob.get("name", ""), quantity, size, face,
+                QPointF(row["position_x"], row["position_y"]),
+            )
+            # Unlike BrushMediator's own reload (which relies solely on its
+            # python-side dict for the row-id lookup), cache the row id
+            # directly on the item too — _sync_to_db reads it via
+            # item.data(1), and without this the very next sync would find
+            # nothing there and insert a duplicate row for every reloaded
+            # stamp.
+            item.setData(1, row["id"])
+            scene.addItem(item)
+            self._stamp_items[row["id"]] = item
+
+    def _on_history_changed(self):
+        self._sync_timer.start(_SYNC_DEBOUNCE_MS)
+
+    def _sync_to_db(self):
+        """Upserts every currently-placed mob-spawn stamp into the project
+        DB, and drops rows for stamps no longer present — fired (debounced)
+        off HistoryEngine.history_changed, which already covers stamp
+        placement, undo and redo alike (see SpawnTool's begin_group/
+        end_group). Mirrors BrushMediator._sync_to_db's stamp half."""
+        if not self._uow:
+            return
+        seen_ids: set[str] = set()
+        for item in self._l.canvas.engine.viewport.scene().items():
+            data = item.data(0)
+            if not isinstance(data, dict) or data.get("item_type") != "mob_spawn" or not item.isVisible():
+                continue
+            fields = dict(
+                item_type="mob_spawn", asset_id=data.get("mob_id") or "",
+                name=data.get("name", ""), position_x=item.pos().x(), position_y=item.pos().y(),
+                metadata=json.dumps({"quantity": data.get("quantity", 1), "size": data.get("size", 64.0)}),
+            )
+            row_id = item.data(1)
+            # A cached id can go stale (undo hid the item, its row got
+            # swept below, then redo brought it back still carrying that
+            # dead id) — fall back to creating a fresh row, same as Brush.
+            if not row_id or not self._uow.canvas_items.update(row_id, **fields):
+                row_id = self._uow.canvas_items.create(map_id=self.MAP_ID, **fields)
+                item.setData(1, row_id)
+            self._stamp_items[row_id] = item
+            seen_ids.add(row_id)
+
+        for stale_id in set(self._stamp_items) - seen_ids:
+            self._uow.canvas_items.delete(stale_id)
+            del self._stamp_items[stale_id]
+
+    def _project_dir(self):
+        window = self._l.window()
+        return window.project.path if window and getattr(window, "project", None) else None
+
+    # ─── Categories ───
+
+    def _refresh_categories(self):
+        if not self._uow:
+            self._l.spawn_panel.set_categories([])
+            return
+        roots = self._uow.mob_categories.get_children(None)
+        categories = [(c["id"], c.get("icon") or "🐾", c["name"]) for c in roots]
+        self._l.spawn_panel.set_categories(categories)
+
+    def _descendant_category_ids(self, root_id: str) -> set[str]:
+        """A category folder can nest sub-folders (same tree the Mobs
+        module's own CATEGORIAS explorer navigates) — a mob filed under
+        any of those still counts as "in" the top-level category picked
+        here."""
+        ids = {root_id}
+        for child in self._uow.mob_categories.get_children(root_id):
+            ids |= self._descendant_category_ids(child["id"])
+        return ids
+
+    def on_category_selected(self, category_id: str):
+        if not self._uow:
+            return
+        cat = self._uow.mob_categories.get(category_id)
+        icon = (cat.get("icon") if cat else "") or "🐾"
+        label = cat.get("name") if cat else category_id
+
+        wanted = self._descendant_category_ids(category_id)
+        project_dir = self._project_dir()
+        mobs = []
+        for m in self._uow.mobs.get_all():
+            if m.get("category") not in wanted:
+                continue
+            mobs.append((m["id"], m.get("name", ""), self._load_face(m, project_dir)))
+
+        sub_panel = self._l.spawn_mob_sub_panel
+        sub_panel.set_category(label, icon, mobs)
+        if not sub_panel.isVisible():
+            sub_panel.show()
+            sub_panel.raise_()
+        self._l._reposition()
+
+    def _load_face(self, mob: dict, project_dir) -> QPixmap | None:
+        """The image to stamp for this mob — an image-type mob_asset (see
+        the Assets CRUD in the mob edit panel's Informações Extras, e.g.
+        "the goblin's face asset") takes priority over the mob's own
+        Visão Geral portrait (`image_path`), since that's the art actually
+        meant to represent this creature on the map, not just its catalog
+        thumbnail. Falls back to the portrait if no image asset exists."""
+        mob_id = mob.get("id", "")
+        if mob_id and self._uow:
+            for asset in self._uow.mob_assets.get_by_mob(mob_id):
+                if asset.get("asset_type") != "Imagem":
+                    continue
+                pixmap = self._load_portrait(asset.get("file_path", ""), project_dir)
+                if pixmap is not None:
+                    return pixmap
+        return self._load_portrait(mob.get("image_path", ""), project_dir)
+
+    @staticmethod
+    def _load_portrait(image_path: str, project_dir) -> QPixmap | None:
+        if not image_path:
+            return None
+        pixmap = QPixmap(resolve_asset_path(project_dir, image_path))
+        return pixmap if not pixmap.isNull() else None
+
+    def _resolve_drops(self, mob: dict, project_dir) -> list[tuple[dict, float, int]]:
+        """mob["drops_json"] only carries {item_id, rate, qty} — resolve
+        each item_id against the real Item catalog so the Inspector can
+        render the same _DropTile cards the Mobs edit panel does, instead
+        of a bare id (see InspectorPanel._GeralTab)."""
+        try:
+            drops = json.loads(mob.get("drops_json") or "[]")
+        except (TypeError, ValueError):
+            drops = []
+        resolved = []
+        for d in drops:
+            item_id = d.get("item_id", "")
+            item = self._uow.items.get(item_id) if item_id else None
+            item = dict(item) if item else {"id": item_id, "name": "Item removido do catálogo"}
+            item["image_path"] = resolve_asset_path(project_dir, item.get("image_path") or "")
+            resolved.append((item, d.get("rate", 0), d.get("qty", 1)))
+        return resolved
+
+    def _resolve_abilities(self, mob: dict, project_dir) -> list[tuple[dict, bool]]:
+        """Same idea as _resolve_drops but for abilities_json — mirrors
+        ExtrasSectionMixin._resolve_ability (mob edit panel), just against
+        a live DB lookup instead of a cached catalog list."""
+        try:
+            abilities = json.loads(mob.get("abilities_json") or "[]")
+        except (TypeError, ValueError):
+            abilities = []
+        resolved = []
+        for a in abilities:
+            skill_id = a.get("skill_id")
+            if skill_id:
+                skill = self._uow.skills.get(skill_id)
+                unlinked = skill is None
+                skill = dict(skill) if skill else {"id": skill_id}
+            else:
+                unlinked = True
+                skill = {
+                    "id": "", "name": a.get("legacy_name", ""),
+                    "description": a.get("legacy_description", ""),
+                    "rarity": a.get("legacy_rarity", "common"),
+                }
+            if skill.get("image_path"):
+                skill["image_path"] = resolve_asset_path(project_dir, skill["image_path"])
+            resolved.append((skill, unlinked))
+        return resolved
+
+    # ─── Mob selection ───
+
+    def on_mob_selected(self, mob_id: str):
+        if not self._uow:
+            return
+        mob = self._uow.mobs.get(mob_id)
+        if not mob:
+            return
+        self._active_mob_name = mob.get("name", "")
+        self._active_face = self._load_face(mob, self._project_dir())
+
+        tool = self._l.canvas.engine._spawn_tool
+        tool.set_mob(mob_id, self._active_mob_name, self._active_face)
+
+        self._l.spawn_mob_sub_panel.hide()
+        self._refresh_preview()
+        self._l._reposition()
+
+    # ─── Auto-tag by região on placement ───
+
+    def _on_stamp_placed(self, mob_id: str | None, scene_pos):
+        """Fired by SpawnTool after every stamp — if it landed inside a
+        painted região, tags that mob with it (mobs.zone_id), the same
+        field the "Região" dropdown in Visão Geral sets by hand. Shows up
+        immediately as the "📍 <região>" badge on the mob's card (see
+        MobCard.set_data) next time the Mobs module is opened."""
+        if not self._uow or not mob_id:
+            return
+        region_id = self._l._region_med.region_at_point(scene_pos)
+        if not region_id:
+            return
+        mob = self._uow.mobs.get(mob_id)
+        if not mob or mob.get("zone_id") == region_id:
+            return
+        self._uow.mobs.update(mob_id, zone_id=region_id)
+
+    # ─── Selection → Inspector ─────────────────────────────────────────
+    # SelectionEngine._emit only includes an item in the emitted `ids` list
+    # when its data(0) carries an "id" key — mob-spawn stamps don't (see
+    # SpawnTool.build_stamp_item's data(0) shape), so this reads
+    # selection.selected_items directly instead of trusting the signal's
+    # own payload, the same way MainLayout._on_selection_for_text_panel
+    # already does for TextItem selections.
+
+    def _on_selection_changed(self, _ids):
+        if not self._uow:
+            return
+        selected = self._l.canvas.engine.selection.selected_items
+        mob_id = None
+        for item in selected:
+            data = item.data(0)
+            if isinstance(data, dict) and data.get("item_type") == "mob_spawn":
+                mob_id = data.get("mob_id")
+                break
+        if not mob_id:
+            # Selection changed to something else (or nothing) — only clear
+            # the Inspector when nothing at all is selected, so switching
+            # to a different kind of element (once something else wires
+            # into the Inspector) isn't stomped on by this mediator.
+            if not selected:
+                self._l.right_panel.clear()
+            return
+        mob = self._uow.mobs.get(mob_id)
+        if not mob:
+            return
+        try:
+            pixmap = self._load_face(mob, self._project_dir())
+            region_name = self._l._region_med.zone_name(mob.get("zone_id", "")) if mob.get("zone_id") else ""
+            project_dir = self._project_dir()
+            drops = self._resolve_drops(mob, project_dir)
+            abilities = self._resolve_abilities(mob, project_dir)
+            self._l.right_panel.set_mob(
+                mob, pixmap=pixmap, region_name=region_name, drops=drops, abilities=abilities,
+            )
+        except Exception:
+            # A bad/legacy DB value here (malformed drops_json, odd image
+            # path, ...) shouldn't leave the Inspector silently blank with
+            # no clue why — log it and fall back to at least the name/type,
+            # which don't depend on any of the above.
+            logger.exception("Falha ao popular o Inspector para o mob %s", mob_id)
+            self._l.right_panel.set_element(name=mob.get("name", ""), type_="Mob")
+
+    # ─── Stamp mode params ───
+
+    def on_size_changed(self, size: float):
+        self._l.canvas.engine._spawn_tool.set_size(size)
+        self._refresh_preview()
+
+    def on_quantity_changed(self, quantity: int):
+        self._l.canvas.engine._spawn_tool.set_quantity(quantity)
+        self._refresh_preview()
+
+    def _refresh_preview(self):
+        panel = self._l.spawn_panel
+        if self._active_face is None:
+            panel.set_selected_mob(self._active_mob_name, None)
+            return
+        tool = self._l.canvas.engine._spawn_tool
+        preview = compose_group_portrait(self._active_face, tool.quantity, _PREVIEW_SIZE)
+        panel.set_selected_mob(self._active_mob_name, preview)

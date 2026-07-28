@@ -10,6 +10,7 @@ DEFAULT_SETTINGS = {
     "contrast": 0.0,
     "sound_volume_paint": 0.7,
     "sound_volume_ambient": 0.7,
+    "effects_json": "[]",
 }
 
 

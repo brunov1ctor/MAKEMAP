@@ -1,0 +1,75 @@
+"""LightTool — click to drop a light object; click an existing one to
+select/drag it instead. Named "Luz" (not "Iluminação") on purpose: the
+toolbar's 💡 "Iluminação" button is a toggle that opens LightPanel (see
+main_layout._toggle_light_panel), not this tool directly — picking a type
+in that panel is what arms this tool (mirrors how "Região" arms
+RegionBrushTool from inside RegionSettingsPanel)."""
+
+from __future__ import annotations
+
+from PySide6.QtCore import Qt, QPointF
+from PySide6.QtGui import QMouseEvent
+
+from src.canvas.tools.base import BaseTool
+from src.canvas.tools.interaction import ItemInteraction
+from src.canvas.light_item import LightItem
+from src.engines.light import LightProperties
+from src.engines.core.history import PlaceObjectCommand
+
+
+class LightTool(BaseTool):
+    name = "Luz"
+    cursor = Qt.CursorShape.CrossCursor
+
+    def __init__(
+        self, viewport, tool_manager=None, history_engine=None, selection_engine=None,
+        transform_engine=None, on_placed=None, properties_provider=None,
+    ):
+        super().__init__(viewport)
+        self._tool_manager = tool_manager
+        self._history = history_engine
+        self._selection = selection_engine
+        self._on_placed = on_placed
+        self._properties_provider = properties_provider
+        self._interaction = ItemInteraction(viewport, selection_engine, transform_engine, history_engine) \
+            if selection_engine and transform_engine else None
+
+    def set_properties_provider(self, provider):
+        self._properties_provider = provider
+
+    def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
+        # item_filter: clicking on top of a região/terrain/asset must still
+        # place a new light, not hijack the click into selecting that other
+        # layer (same fix already applied to Spawn/Texto/Marcador).
+        if self._interaction and self._interaction.try_begin(scene_pos, item_filter=lambda it: isinstance(it, LightItem)):
+            return
+
+        props = self._properties_provider() if self._properties_provider else LightProperties()
+        item = LightItem(props)
+        item.setPos(scene_pos)
+        item.setZValue(9)
+        self.viewport.scene().addItem(item)
+        if self._history:
+            self._history.push(PlaceObjectCommand(item))
+
+        if self._selection:
+            self._selection.select(item)
+        else:
+            self.viewport.scene().clearSelection()
+            item.setSelected(True)
+
+        if self._tool_manager:
+            self._tool_manager.activate("Selecionar")
+        if self._on_placed:
+            self._on_placed(item)
+
+    def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
+        if self._interaction:
+            self._interaction.move(scene_pos)
+
+    def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
+        if self._interaction:
+            self._interaction.release(scene_pos)

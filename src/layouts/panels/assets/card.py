@@ -187,6 +187,7 @@ class AssetRowCard(QFrame):
         col1.setSpacing(8)
 
         asset_id = self._get_asset_id(file_path)
+        self._asset_id = asset_id
 
         self._thumb = QLabel()
         self._thumb.setFixedSize(64, 64)
@@ -484,8 +485,20 @@ class AssetRowCard(QFrame):
             w = w.parent()
         return None
 
+    def _cards_to_move(self) -> list["AssetRowCard"]:
+        """The full set of cards this drag should carry — the whole
+        multi-selection if `self` is part of one (so dragging any one of
+        several selected cards moves all of them together, matching a
+        normal file manager), or just `self` alone when it isn't part of
+        a multi-selection (or is the only thing selected)."""
+        selected = CardSelectionManager.get().selected
+        if self in selected and len(selected) > 1:
+            return selected
+        return [self]
+
     def _finish_cross_category_drop(self, global_pos: QPoint):
-        """Procura a CategorySection sob o cursor e faz o drop lá."""
+        """Procura a CategorySection sob o cursor e faz o drop lá — de
+        todos os cards selecionados (ver _cards_to_move), não só deste."""
         from PySide6.QtWidgets import QApplication
         widget = QApplication.widgetAt(global_pos)
         target_section: CategorySection | None = None
@@ -504,15 +517,20 @@ class AssetRowCard(QFrame):
             return
 
         target_section._set_drop_highlight(False)
+        local_y = target_section._content.mapFromGlobal(global_pos).y()
+        cards = self._cards_to_move()
 
         if target_section is src_section:
-            local_y = target_section._content.mapFromGlobal(global_pos).y()
-            target_section._on_card_drag_drop(local_y, str(self._path))
+            for card in cards:
+                target_section._on_card_drag_drop(local_y, str(card._path))
         else:
             if src_section:
                 src_section._remove_spacer()
-            local_y = target_section._content.mapFromGlobal(global_pos).y()
-            target_section._on_card_drop_from_outside(self, local_y)
+            for card in cards:
+                # Each card resolves its OWN current section internally
+                # (see _on_card_drop_from_outside) — the selection can
+                # span more than one category at once.
+                target_section._on_card_drop_from_outside(card, local_y)
 
     def _update_preview(self):
         from src.services.asset_adjustments import apply_brightness_contrast

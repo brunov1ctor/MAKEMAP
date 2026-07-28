@@ -90,8 +90,12 @@ class EngineIntegrator(QObject):
         if tool_name in tool_map:
             self.painting.set_mode(tool_map[tool_name])
 
-        # Activate tool in canvas tool manager
-        self._layout.canvas.engine.tool_manager.activate(tool_name)
+        # NOTE: does NOT call tool_manager.activate(tool_name) here —
+        # ToolbarMediator.connect() (toolbar_mediator.py) already connects
+        # this same CanvasToolbar.tool_selected signal directly to
+        # tool_manager.activate. Calling it again here deactivated +
+        # reactivated the tool twice per click (and double-fired
+        # tool_changed) for no reason.
 
         # Update status
         self._layout.status_bar.tool_label.setText(tool_name)

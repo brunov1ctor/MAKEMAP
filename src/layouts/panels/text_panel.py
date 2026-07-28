@@ -126,12 +126,11 @@ class TextToolPanel(QFrame):
     shadow_toggled = Signal(bool)
     shadow_color_changed = Signal(str)
     shadow_opacity_changed = Signal(float)  # 0-100
-    shadow_x_changed = Signal(float)
-    shadow_y_changed = Signal(float)
     shadow_blur_changed = Signal(float)
 
     outline_toggled = Signal(bool)
     outline_color_changed = Signal(str)
+    outline_opacity_changed = Signal(float)  # 0-100
     outline_width_changed = Signal(float)
 
     glow_toggled = Signal(bool)
@@ -264,9 +263,16 @@ class TextToolPanel(QFrame):
         section_layout.addWidget(self._separator())
 
         section_layout.addWidget(self._section_label("Cor do Texto"))
-        self.color_field = ColorField("#FFFFFF", "Cor do texto")
+        self.color_field = ColorField("#FFFFFF")
         self.color_field.color_changed.connect(lambda v: self._emit(self.color_changed, v))
         section_layout.addWidget(self.color_field)
+        # Lives right next to the text's own color — same compact style
+        # Sombra/Contorno use for their own "Opacidade" row — instead of
+        # the old full-width slider buried at the bottom of "Estilo",
+        # disconnected from the color it actually fades.
+        self.text_opacity = self._labeled_spin(0, 100, 100, " %")
+        self.text_opacity.valueChanged.connect(lambda v: self._emit(self.opacity_changed, float(v)))
+        section_layout.addLayout(self._field_row("Opacidade", self.text_opacity))
         section_layout.addWidget(self._separator())
 
         section_layout.addWidget(self._section_label("Alinhamento"))
@@ -354,12 +360,6 @@ class TextToolPanel(QFrame):
         layout.addLayout(self._slider_row(self.curvature_slider, self.curvature_value))
         layout.addWidget(self._separator())
 
-        layout.addWidget(self._section_label("Opacidade"))
-        self.opacity_slider, self.opacity_value = self._build_slider(100)
-        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
-        layout.addLayout(self._slider_row(self.opacity_slider, self.opacity_value))
-        layout.addWidget(self._separator())
-
         layout.addWidget(self._section_label("Enfeites"))
         layout.addLayout(self._build_effects_grid())
 
@@ -445,7 +445,7 @@ class TextToolPanel(QFrame):
 
         body = QVBoxLayout()
         body.setSpacing(6)
-        self.shadow_color = ColorField("#000000", "Cor da sombra")
+        self.shadow_color = ColorField("#000000")
         self.shadow_color.color_changed.connect(lambda v: self._emit(self.shadow_color_changed, v))
         body.addWidget(self.shadow_color)
 
@@ -453,19 +453,19 @@ class TextToolPanel(QFrame):
         self.shadow_opacity.valueChanged.connect(lambda v: self._emit(self.shadow_opacity_changed, float(v)))
         body.addLayout(self._field_row("Opacidade", self.shadow_opacity))
 
-        xyz_row = QHBoxLayout()
-        xyz_row.setSpacing(6)
-        self.shadow_x = self._labeled_spin(-50, 50, 3)
-        self.shadow_x.valueChanged.connect(lambda v: self._emit(self.shadow_x_changed, float(v)))
-        self.shadow_y = self._labeled_spin(-50, 50, 3)
-        self.shadow_y.valueChanged.connect(lambda v: self._emit(self.shadow_y_changed, float(v)))
         self.shadow_blur = self._labeled_spin(0, 100, 6)
         self.shadow_blur.valueChanged.connect(lambda v: self._emit(self.shadow_blur_changed, float(v)))
-        for label, spin in (("X", self.shadow_x), ("Y", self.shadow_y), ("Desfoque", self.shadow_blur)):
-            xyz_row.addLayout(self._field_col(label, spin))
-        body.addLayout(xyz_row)
+        body.addLayout(self._field_row("Desfoque", self.shadow_blur))
 
-        self._shadow_controls = [self.shadow_color, self.shadow_opacity, self.shadow_x, self.shadow_y, self.shadow_blur]
+        # shadow_color excluded from the enable/disable group below — its
+        # "Personalizar" button (and the swatch itself) should stay usable
+        # to pick/preview a color even while "Sombra" is switched off, same
+        # as outline/glow's own color fields (see _build_outline_section/
+        # _build_glow_section) — previously the whole ColorField (button
+        # included) got disabled along with the rest of the section, so
+        # only the always-on "Cor do Texto" field's Personalizar ever
+        # actually opened.
+        self._shadow_controls = [self.shadow_opacity, self.shadow_blur]
         self._set_section_enabled(self._shadow_controls, False)
         return toggle, body
 
@@ -475,15 +475,20 @@ class TextToolPanel(QFrame):
 
         body = QVBoxLayout()
         body.setSpacing(6)
-        self.outline_color = ColorField("#FFFFFF", "Cor do contorno")
+        self.outline_color = ColorField("#FFFFFF")
         self.outline_color.color_changed.connect(lambda v: self._emit(self.outline_color_changed, v))
         body.addWidget(self.outline_color)
+
+        self.outline_opacity = self._labeled_spin(0, 100, 100, " %")
+        self.outline_opacity.valueChanged.connect(lambda v: self._emit(self.outline_opacity_changed, float(v)))
+        body.addLayout(self._field_row("Opacidade", self.outline_opacity))
 
         self.outline_width = self._labeled_spin(0, 40, 2)
         self.outline_width.valueChanged.connect(lambda v: self._emit(self.outline_width_changed, float(v)))
         body.addLayout(self._field_row("Tamanho", self.outline_width))
 
-        self._outline_controls = [self.outline_color, self.outline_width]
+        # outline_color excluded — see the same note in _build_shadow_section.
+        self._outline_controls = [self.outline_opacity, self.outline_width]
         self._set_section_enabled(self._outline_controls, False)
         return toggle, body
 
@@ -493,7 +498,7 @@ class TextToolPanel(QFrame):
 
         body = QVBoxLayout()
         body.setSpacing(6)
-        self.glow_color = ColorField("#3B82F6", "Cor do brilho")
+        self.glow_color = ColorField("#3B82F6")
         self.glow_color.color_changed.connect(lambda v: self._emit(self.glow_color_changed, v))
         body.addWidget(self.glow_color)
 
@@ -501,7 +506,8 @@ class TextToolPanel(QFrame):
         self.glow_blur.valueChanged.connect(lambda v: self._emit(self.glow_blur_changed, float(v)))
         body.addLayout(self._field_row("Desfoque", self.glow_blur))
 
-        self._glow_controls = [self.glow_color, self.glow_blur]
+        # glow_color excluded — see the same note in _build_shadow_section.
+        self._glow_controls = [self.glow_blur]
         self._set_section_enabled(self._glow_controls, False)
         return toggle, body
 
@@ -524,10 +530,6 @@ class TextToolPanel(QFrame):
     def _on_curvature_changed(self, value: int):
         self.curvature_value.setText(f"{value}%")
         self._emit(self.curvature_changed, float(value))
-
-    def _on_opacity_changed(self, value: int):
-        self.opacity_value.setText(f"{value}%")
-        self._emit(self.opacity_changed, float(value))
 
     @staticmethod
     def _set_section_enabled(controls: list, enabled: bool):
@@ -562,15 +564,6 @@ class TextToolPanel(QFrame):
         row.addWidget(widget)
         return row
 
-    def _field_col(self, label_text: str, widget) -> QVBoxLayout:
-        col = QVBoxLayout()
-        col.setSpacing(2)
-        label = QLabel(label_text)
-        label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9pt; background: transparent; border: none;")
-        col.addWidget(label)
-        widget.setFixedWidth(56)
-        col.addWidget(widget)
-        return col
 
     @staticmethod
     def _build_slider(initial: int) -> tuple:
@@ -734,6 +727,7 @@ class TextToolPanel(QFrame):
         self.italic_btn.setChecked(props.italic)
 
         self.color_field.set_color(props.color)
+        self.text_opacity.setValue(round(props.opacity * 100))
 
         btn = self._align_buttons.get(props.align)
         if btn:
@@ -745,14 +739,13 @@ class TextToolPanel(QFrame):
         self.shadow_toggle.setChecked(props.shadow.enabled)
         self.shadow_color.set_color(props.shadow.color)
         self.shadow_opacity.setValue(round(props.shadow.opacity * 100))
-        self.shadow_x.setValue(props.shadow.offset_x)
-        self.shadow_y.setValue(props.shadow.offset_y)
         self.shadow_blur.setValue(props.shadow.blur)
         self._set_section_enabled(self._shadow_controls, props.shadow.enabled)
 
         self.outline_toggle.setChecked(props.outline.enabled)
         self.outline_effect_check.setChecked(props.outline.enabled)
         self.outline_color.set_color(props.outline.color)
+        self.outline_opacity.setValue(round(props.outline.opacity * 100))
         self.outline_width.setValue(props.outline.width)
         self._set_section_enabled(self._outline_controls, props.outline.enabled)
 
@@ -764,10 +757,6 @@ class TextToolPanel(QFrame):
         curvature = percent_from_radius(props.curve.radius) if props.curve.enabled else 0.0
         self.curvature_slider.setValue(round(curvature))
         self.curvature_value.setText(f"{round(curvature)}%")
-
-        opacity_pct = round(props.opacity * 100)
-        self.opacity_slider.setValue(opacity_pct)
-        self.opacity_value.setText(f"{opacity_pct}%")
 
         self.strikethrough_check.setChecked(props.strikethrough)
         self.overline_check.setChecked(props.overline)

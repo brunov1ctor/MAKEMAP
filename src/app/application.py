@@ -7,7 +7,7 @@ from datetime import datetime
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog,
-    QVBoxLayout,
+    QVBoxLayout, QStyleFactory,
 )
 from PySide6.QtGui import QKeySequence
 from PySide6.QtCore import Qt, QRect
@@ -309,6 +309,21 @@ class MainWindow(QMainWindow):
         # Connect project DB to painted regions (loads any saved zones)
         self.layout_widget._region_med.set_uow(self.uow)
 
+        # Connect project DB to the Spawn panel (loads live mob categories)
+        self.layout_widget._spawn_med.set_uow(self.uow)
+
+        # Connect project DB to the Texto tool (loads any saved text objects)
+        self.layout_widget._text_med.set_uow(self.uow)
+
+        # Connect project DB to the Marcador tool (loads any saved markers)
+        self.layout_widget._marker_med.set_uow(self.uow)
+
+        # Connect project DB to the Iluminação tool (loads any saved lights)
+        self.layout_widget._light_med.set_uow(self.uow)
+
+        # Connect project DB to the asset effects editor (per-asset painted regions)
+        self.layout_widget._asset_effects_med.set_uow(self.uow)
+
         # Connect project DB to the Brush tool (loads any saved terrain
         # painting + object stamps, clearing whatever the previous project
         # had painted) — must run after asset_engine.set_uow() above, since
@@ -362,6 +377,15 @@ class Application:
         self.app = QApplication(sys.argv)
         self.app.setApplicationName(APP_NAME)
         self.app.setApplicationVersion(VERSION)
+        # The native Windows style ("windowsvista"/"windows11") only honors
+        # a subset of QSS — combobox popups, menus and dialogs kept
+        # rendering with the OS's own light chrome no matter what the
+        # stylesheet below said, since that native style ignores most of
+        # the relevant selectors. Fusion is a cross-platform Qt style that
+        # actually paints from the stylesheet, so the dark theme applies
+        # consistently instead of only to the widgets a native style
+        # happens to fully delegate.
+        self.app.setStyle(QStyleFactory.create("Fusion"))
         self.app.setStyleSheet(build_stylesheet())
 
         sys.excepthook = self._handle_exception

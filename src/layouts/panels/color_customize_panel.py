@@ -237,11 +237,13 @@ class ColorCustomizePanel(QFrame):
         self._hsv[0] = hue
         self.sv_square.set_hue(hue)
         self._apply_hsv()
+        self.grid.clear_to(self._color)
 
     def _on_sv_changed(self, s: int, v: int):
         self._hsv[1] = s
         self._hsv[2] = v
         self._apply_hsv()
+        self.grid.clear_to(self._color)
 
     def _on_rgb_slider_changed(self, _val: int):
         color = QColor(self.r_slider.value(), self.g_slider.value(), self.b_slider.value())
@@ -255,6 +257,7 @@ class ColorCustomizePanel(QFrame):
         self.sv_square.set_sv(self._hsv[1], self._hsv[2])
         self.sv_square.blockSignals(False)
         self._set_brush_color(color.name())
+        self.grid.clear_to(self._color)
 
     def _apply_hsv(self):
         color = QColor.fromHsv(self._hsv[0], self._hsv[1] * 255 // 100, self._hsv[2] * 255 // 100)
@@ -273,11 +276,13 @@ class ColorCustomizePanel(QFrame):
         text = self.hex_input.text().strip().lstrip("#")
         if len(text) in (3, 6) and all(c in "0123456789abcdefABCDEF" for c in text):
             self.set_color(f"#{text}")
+            self.grid.clear_to(self._color)
 
     def _set_brush_color(self, hex_color: str):
-        """A hue/sv/rgb/hex edit only changes what color painting the grid
-        will lay down next — it must NOT repaint the grid itself, same as a
-        real paint app's color picker leaves the canvas alone."""
+        """Updates the brush color used both for the next painted cell and
+        for the flat-fill callers (_on_hue_changed and friends) apply via
+        grid.clear_to() right after — this method itself only syncs the
+        hex/rgb readouts and the paintbrush, it never touches the grid."""
         self._color = hex_color
         self.hex_input.blockSignals(True)
         self.hex_input.setText(hex_color.lstrip("#"))

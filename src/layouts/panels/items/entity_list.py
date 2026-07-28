@@ -16,8 +16,8 @@ from PySide6.QtWidgets import (
     QPushButton, QToolButton, QFrame, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QSizePolicy,
 )
-from PySide6.QtCore import Qt, Signal, QMimeData
-from PySide6.QtGui import QColor, QDrag
+from PySide6.QtCore import Qt, Signal, QMimeData, QSize
+from PySide6.QtGui import QColor, QDrag, QPixmap, QIcon
 
 from src.styles.tokens import Colors
 from src.layouts.panels.mobs.categories import item_rarity_label, item_rarity_color
@@ -58,7 +58,6 @@ class EntityListColumn(QFrame):
     selected = Signal(str)         # row id
     new_requested = Signal()
     import_requested = Signal()
-    json_apply = Signal(str)       # raw JSON text from the { } JSON editor
     delete_requested = Signal(str)  # row id
 
     PAGE_SIZE = 50
@@ -92,7 +91,7 @@ class EntityListColumn(QFrame):
         outer.setContentsMargins(12, 10, 12, 10)
         outer.setSpacing(8)
 
-        # ── Header: title + New button + { } JSON ──
+        # ── Header: title + New button ──
         header = QHBoxLayout()
         header.setSpacing(6)
         header.addWidget(sub_header(title))
@@ -106,73 +105,7 @@ class EntityListColumn(QFrame):
         """)
         new_btn.clicked.connect(self.new_requested.emit)
         header.addWidget(new_btn)
-
-        # Same "{ } JSON" affordance as config's Parallax section — a toggle
-        # that reveals an inline bulk editor to paste/create many records at
-        # once, right beside the "+ Novo …" button.
-        json_btn = QToolButton()
-        json_btn.setText("{ } JSON")
-        json_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        json_btn.setToolTip("Criar vários registros de uma vez em JSON")
-        json_btn.setStyleSheet(
-            f"QToolButton {{ background: rgba(255,255,255,0.05); border: 1px solid {Colors.BORDER_SUBTLE}; "
-            f"padding: 5px 8px; color: {Colors.TEXT_SECONDARY}; font-size: 10px; font-weight: bold; border-radius: 6px; }}"
-            f"QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; border-color: {Colors.ACCENT}; }}"
-        )
-        json_btn.clicked.connect(self._toggle_json)
-        header.addWidget(json_btn)
         outer.addLayout(header)
-
-        # ── Inline JSON bulk editor (collapsed by default) ──
-        self._json_widget = QFrame()
-        self._json_widget.setStyleSheet(
-            f"QFrame {{ background: rgba(0,0,0,0.15); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; }}"
-        )
-        jl = QVBoxLayout(self._json_widget)
-        jl.setContentsMargins(8, 6, 8, 6)
-        jl.setSpacing(5)
-        self._json_hint = QLabel("Cole uma lista JSON para criar vários de uma vez.")
-        self._json_hint.setWordWrap(True)
-        self._json_hint.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 8pt; background: transparent; border: none;")
-        jl.addWidget(self._json_hint)
-        from PySide6.QtWidgets import QTextEdit
-        self._json_edit = QTextEdit()
-        self._json_edit.setFixedHeight(110)
-        self._json_edit.setStyleSheet(
-            f"QTextEdit {{ color: {Colors.TEXT_PRIMARY}; font-size: 8pt; font-family: Consolas, monospace; "
-            f"background: rgba(0,0,0,0.25); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px; padding: 4px; }}"
-        )
-        jl.addWidget(self._json_edit)
-        self._json_error = QLabel("")
-        self._json_error.setWordWrap(True)
-        self._json_error.setStyleSheet(f"color: {Colors.ERROR}; font-size: 8pt; background: transparent; border: none;")
-        self._json_error.hide()
-        jl.addWidget(self._json_error)
-        jbtns = QHBoxLayout()
-        jbtns.addStretch()
-        cancel = QToolButton()
-        cancel.setText("Cancelar")
-        cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel.setStyleSheet(
-            f"QToolButton {{ border: none; border-radius: 4px; padding: 3px 10px; font-size: 8pt; "
-            f"color: {Colors.TEXT_MUTED}; background: transparent; }}"
-            f"QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; background: rgba(255,255,255,0.08); }}"
-        )
-        cancel.clicked.connect(self._toggle_json)
-        jbtns.addWidget(cancel)
-        apply_btn = QToolButton()
-        apply_btn.setText("Aplicar")
-        apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        apply_btn.setStyleSheet(
-            f"QToolButton {{ border: none; border-radius: 4px; padding: 3px 12px; font-size: 8pt; font-weight: bold; "
-            f"color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}"
-            f"QToolButton:hover {{ background: rgba(79,195,247,0.3); }}"
-        )
-        apply_btn.clicked.connect(lambda: self.json_apply.emit(self._json_edit.toPlainText()))
-        jbtns.addWidget(apply_btn)
-        jl.addLayout(jbtns)
-        self._json_widget.hide()
-        outer.addWidget(self._json_widget)
 
         # ── Search + filters ──
         filter_row = QHBoxLayout()
@@ -211,6 +144,7 @@ class EntityListColumn(QFrame):
         self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._table.setCursor(Qt.CursorShape.PointingHandCursor)
         self._table.setWordWrap(False)
+        self._table.setIconSize(QSize(20, 20))
         self._table.verticalHeader().setDefaultSectionSize(30)
         hh = self._table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -263,28 +197,6 @@ class EntityListColumn(QFrame):
     def current_id(self) -> str:
         return self._selected_id
 
-    # ── JSON bulk editor ──
-
-    def set_json_template(self, text: str):
-        """Placeholder/example JSON shown the first time the editor opens."""
-        self._json_template = text
-
-    def _toggle_json(self):
-        showing = not self._json_widget.isVisible()
-        if showing and not self._json_edit.toPlainText().strip():
-            self._json_edit.setPlainText(getattr(self, "_json_template", ""))
-        self._json_error.hide()
-        self._json_widget.setVisible(showing)
-
-    def json_show_error(self, message: str):
-        self._json_error.setText(message)
-        self._json_error.setVisible(bool(message))
-
-    def json_close(self):
-        self._json_edit.clear()
-        self._json_error.hide()
-        self._json_widget.hide()
-
     # ── Filtering / paging ──
 
     def _on_filters_changed(self):
@@ -328,8 +240,18 @@ class EntityListColumn(QFrame):
         self._table.blockSignals(True)
         self._table.setRowCount(len(page_rows))
         for r, row in enumerate(page_rows):
-            icon = row.get("icon") or "📦"
-            name_item = QTableWidgetItem(f"{icon}  {row.get('name', '')}")
+            # The uploaded image (if any) wins over the category/skill emoji
+            # — rows used to always show the emoji even after the editor's
+            # own preview had a real thumbnail, since `icon` was the only
+            # thing rendered here.
+            image_path = row.get("image_path") or ""
+            pixmap = QPixmap(image_path) if image_path else QPixmap()
+            if not pixmap.isNull():
+                name_item = QTableWidgetItem(row.get("name", ""))
+                name_item.setIcon(QIcon(pixmap))
+            else:
+                icon = row.get("icon") or "📦"
+                name_item = QTableWidgetItem(f"{icon}  {row.get('name', '')}")
             name_item.setData(Qt.ItemDataRole.UserRole, row.get("id", ""))
             self._table.setItem(r, 0, name_item)
             self._table.setItem(r, 1, QTableWidgetItem(row.get("category", "") or "—"))

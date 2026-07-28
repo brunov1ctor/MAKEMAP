@@ -2,7 +2,34 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 from PySide6.QtWidgets import QGraphicsItem, QStyle
+
+
+def enable_hover_glow(item: QGraphicsItem, on_hover_changed: Callable[[bool], None]):
+    """Wires native Qt hover in/out on `item` to `on_hover_changed(True/False)`.
+
+    Qt's hover dispatch (hoverEnterEvent/hoverLeaveEvent) still works scene-
+    wide despite mouse events being monkey-patched to route through the tool
+    system instead of QGraphicsView's own dispatch (see CanvasEngine.
+    _on_mouse_move's replay of QGraphicsView.mouseMoveEvent whenever no
+    button is held) — it just needs `setAcceptHoverEvents(True)` and the two
+    handlers, which a plain QGraphicsPixmapItem doesn't have by default.
+    Reassigning them directly on the instance (same monkeypatch technique
+    suppress_selection_decoration already uses for `.paint` below) avoids
+    needing a dedicated subclass for every stamp-like item type that wants
+    hover feedback."""
+    item.setAcceptHoverEvents(True)
+
+    def hover_enter(event):
+        on_hover_changed(True)
+
+    def hover_leave(event):
+        on_hover_changed(False)
+
+    item.hoverEnterEvent = hover_enter
+    item.hoverLeaveEvent = hover_leave
 
 
 def suppress_selection_decoration(item: QGraphicsItem):

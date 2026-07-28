@@ -9,7 +9,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QLineEdit, QDoubleSpinBox, QWidget
 
 from src.layouts.panels.mobs.categories import (
-    RARITY_DEFS, ELEMENT_OPTIONS, AI_TYPE_OPTIONS,
+    AI_TYPE_OPTIONS,
     BEHAVIOR_OPTIONS, ALIGNMENT_OPTIONS, RESISTANCE_KEYS, STATUS_OPTIONS, SIZE_OPTIONS,
 )
 from src.layouts.panels.mobs.edit_helpers import _combo, _spin, _dspin, _section_label, _field_row, _hr
@@ -21,8 +21,10 @@ class AtributosSectionMixin:
     matches the reference image's Atributos layout instead of the
     previous packed label-over-value grid. Combate (Crítico, Facção)
     stays as a couple of rows below the three columns since it isn't
-    pictured in the reference. The Raridade *selector* lives here too
-    (Visão Geral only shows the read-only badge it drives)."""
+    pictured in the reference. Raridade used to have its own selector
+    here, separate from Categoria (Visão Geral) — dropped as a redundant
+    duplicate of the same Normal/Raro/Elite/Boss concept; Categoria is
+    the single source of truth for a mob's difficulty tier now."""
 
     def _build_atributos_section(self) -> QWidget:
         w = QWidget()
@@ -45,10 +47,7 @@ class AtributosSectionMixin:
         self._ai_combo = _combo(AI_TYPE_OPTIONS)
         self._behavior_combo = _combo(BEHAVIOR_OPTIONS)
         self._alignment_combo = _combo(ALIGNMENT_OPTIONS)
-        self._element_combo = _combo(ELEMENT_OPTIONS)
         self._status_combo = _combo(STATUS_OPTIONS)
-        self._rarity_combo = _combo([label for _k, _c, label in RARITY_DEFS])
-        self._rarity_combo.currentIndexChanged.connect(self._refresh_rarity_badge)
 
         for spin_w in (self._hp_spin, self._mana_spin, self._damage_spin, self._defense_spin,
                        self._speed_spin, self._precision_spin, self._dodge_spin,
@@ -58,8 +57,7 @@ class AtributosSectionMixin:
         for w2 in (self._precision_spin, self._dodge_spin, self._resist_fisica_spin, self._resist_magica_spin):
             w2.setDecimals(1)
         for combo_w in (self._size_combo, self._ai_combo, self._behavior_combo,
-                        self._alignment_combo, self._element_combo, self._status_combo,
-                        self._rarity_combo):
+                        self._alignment_combo, self._status_combo):
             combo_w.setMaximumWidth(96)
 
         col1 = QVBoxLayout()
@@ -81,11 +79,11 @@ class AtributosSectionMixin:
         col2.addWidget(_section_label("CLASSIFICAÇÃO"))
         col2.addWidget(_hr())
         for label, widget in [
-            ("Elemento Primário", self._element_combo), ("Tamanho", self._size_combo),
+            ("Tamanho", self._size_combo),
             ("XP Concedida", self._xp_spin), ("Ouro Base", self._gold_spin),
             ("Peso", self._weight_spin), ("Tipo de IA", self._ai_combo),
             ("Comportamento", self._behavior_combo), ("Alinhamento", self._alignment_combo),
-            ("Raridade", self._rarity_combo), ("Status", self._status_combo),
+            ("Status", self._status_combo),
         ]:
             col2.addLayout(_field_row(label, widget))
         col2.addStretch()

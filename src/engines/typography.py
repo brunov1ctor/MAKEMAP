@@ -152,6 +152,125 @@ class TextProperties:
     serif: bool = False
 
 
+# ─── Persistence (JSON-safe dict <-> TextProperties) ──────────────────────
+# Used by TextMediator to store a TextItem's full styling in canvas_items'
+# metadata column — written by hand rather than dataclasses.asdict() because
+# `align` is a TextAlign enum (not JSON-serializable as-is) and every field
+# needs an explicit default so a metadata blob from an older save (missing
+# a field added later) still loads instead of raising a KeyError.
+
+def text_properties_to_dict(props: TextProperties) -> dict:
+    return {
+        "text": props.text,
+        "font_family": props.font_family,
+        "font_size": props.font_size,
+        "font_weight": props.font_weight,
+        "italic": props.italic,
+        "color": props.color,
+        "background_color": props.background_color,
+        "opacity": props.opacity,
+        "align": props.align.name,
+        "spacing": {
+            "letter_spacing": props.spacing.letter_spacing,
+            "word_spacing": props.spacing.word_spacing,
+            "line_height": props.spacing.line_height,
+        },
+        "outline": {
+            "enabled": props.outline.enabled, "color": props.outline.color,
+            "width": props.outline.width, "opacity": props.outline.opacity,
+            "pattern": list(props.outline.pattern.cells),
+        },
+        "shadow": {
+            "enabled": props.shadow.enabled, "color": props.shadow.color,
+            "offset_x": props.shadow.offset_x, "offset_y": props.shadow.offset_y,
+            "blur": props.shadow.blur, "opacity": props.shadow.opacity,
+            "pattern": list(props.shadow.pattern.cells),
+        },
+        "glow": {
+            "enabled": props.glow.enabled, "color": props.glow.color,
+            "radius": props.glow.radius, "opacity": props.glow.opacity,
+            "pattern": list(props.glow.pattern.cells),
+        },
+        "curve": {
+            "enabled": props.curve.enabled, "radius": props.curve.radius,
+            "start_angle": props.curve.start_angle, "clockwise": props.curve.clockwise,
+        },
+        "pattern": list(props.pattern.cells),
+        "ribbon": {
+            "enabled": props.ribbon.enabled, "color": props.ribbon.color,
+            "padding_x": props.ribbon.padding_x, "padding_y": props.ribbon.padding_y,
+            "radius": props.ribbon.radius, "opacity": props.ribbon.opacity,
+        },
+        "strikethrough": props.strikethrough,
+        "overline": props.overline,
+        "underline": props.underline,
+        "double_underline": props.double_underline,
+        "cloud": props.cloud,
+        "serif": props.serif,
+    }
+
+
+def text_properties_from_dict(d: dict) -> TextProperties:
+    spacing_d = d.get("spacing") or {}
+    outline_d = d.get("outline") or {}
+    shadow_d = d.get("shadow") or {}
+    glow_d = d.get("glow") or {}
+    curve_d = d.get("curve") or {}
+    ribbon_d = d.get("ribbon") or {}
+    try:
+        align = TextAlign[d.get("align", "CENTER")]
+    except KeyError:
+        align = TextAlign.CENTER
+    return TextProperties(
+        text=d.get("text", ""),
+        font_family=d.get("font_family", "Segoe UI"),
+        font_size=d.get("font_size", 14.0),
+        font_weight=d.get("font_weight", 400),
+        italic=d.get("italic", False),
+        color=d.get("color", "#FFFFFF"),
+        background_color=d.get("background_color", ""),
+        opacity=d.get("opacity", 1.0),
+        align=align,
+        spacing=TextSpacing(
+            letter_spacing=spacing_d.get("letter_spacing", 0.0),
+            word_spacing=spacing_d.get("word_spacing", 0.0),
+            line_height=spacing_d.get("line_height", 1.2),
+        ),
+        outline=TextOutline(
+            enabled=outline_d.get("enabled", False), color=outline_d.get("color", "#000000"),
+            width=outline_d.get("width", 2.0), opacity=outline_d.get("opacity", 1.0),
+            pattern=PaintGrid(cells=list(outline_d.get("pattern") or [])),
+        ),
+        shadow=TextShadow(
+            enabled=shadow_d.get("enabled", False), color=shadow_d.get("color", "#000000"),
+            offset_x=shadow_d.get("offset_x", 2.0), offset_y=shadow_d.get("offset_y", 2.0),
+            blur=shadow_d.get("blur", 4.0), opacity=shadow_d.get("opacity", 0.6),
+            pattern=PaintGrid(cells=list(shadow_d.get("pattern") or [])),
+        ),
+        glow=TextGlow(
+            enabled=glow_d.get("enabled", False), color=glow_d.get("color", "#4FC3F7"),
+            radius=glow_d.get("radius", 8.0), opacity=glow_d.get("opacity", 0.5),
+            pattern=PaintGrid(cells=list(glow_d.get("pattern") or [])),
+        ),
+        curve=TextCurve(
+            enabled=curve_d.get("enabled", False), radius=curve_d.get("radius", 200.0),
+            start_angle=curve_d.get("start_angle", 180.0), clockwise=curve_d.get("clockwise", True),
+        ),
+        pattern=PaintGrid(cells=list(d.get("pattern") or [])),
+        ribbon=TextRibbon(
+            enabled=ribbon_d.get("enabled", False), color=ribbon_d.get("color", "#2C3E50"),
+            padding_x=ribbon_d.get("padding_x", 16.0), padding_y=ribbon_d.get("padding_y", 6.0),
+            radius=ribbon_d.get("radius", 4.0), opacity=ribbon_d.get("opacity", 0.85),
+        ),
+        strikethrough=d.get("strikethrough", False),
+        overline=d.get("overline", False),
+        underline=d.get("underline", False),
+        double_underline=d.get("double_underline", False),
+        cloud=d.get("cloud", False),
+        serif=d.get("serif", False),
+    )
+
+
 # ─── Typography Renderer ───────────────────────────────────────────────────
 
 class TypographyRenderer:

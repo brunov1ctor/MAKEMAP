@@ -16,11 +16,12 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QPointF, QTimer
+from PySide6.QtGui import QColor, QPixmap
 
 from src.engines.map.region_layer import RegionLayer
 from src.engines.map.zones import DEFAULT_ZONE_COLOR
+from src.services.project_assets import import_asset, resolve_asset_path
 
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
@@ -42,6 +43,7 @@ class _Zone:
     opacity: float = 0.5
     mode: str = "add"
     terrain_id: str = ""  # "" = Mapa Infinito — which terrain's bounds constrain painting
+    image_path: str = ""  # user-uploaded reference photo, dropped/picked on the card
 
 
 class RegionMediator:
@@ -64,9 +66,7 @@ class RegionMediator:
         panel.terrain_changed.connect(self._on_terrain_changed)
         panel.category_changed.connect(self._on_category_changed)
         panel.color_changed.connect(self._on_color_changed)
-        panel.visibility_changed.connect(self._on_visibility_changed)
         panel.radius_changed.connect(self._on_radius_changed)
-        panel.softness_changed.connect(self._on_softness_changed)
         panel.mode_changed.connect(self._on_mode_changed)
         panel.opacity_changed.connect(self._on_opacity_changed)
         panel.stars_changed.connect(self._on_stars_changed)
@@ -110,21 +110,25 @@ class RegionMediator:
             layer.import_mask_png_base64(row["mask_png"], row["mask_x"], row["mask_y"])
             layer.set_style(row["estilo"] or "Nenhum")
             layer.item.setVisible(bool(row["visible"]))
+            layer.set_opacity(row["brush_opacity"])
             zone = _Zone(
                 id=row["id"], category_key=row["category_key"], name=row["name"], color=color,
                 layer=layer, stars=row["stars"], estilo=row["estilo"] or "Nenhum",
                 observacao=row["observacao"] or "", visible=bool(row["visible"]),
                 radius=row["brush_radius"], softness=row["brush_softness"],
                 opacity=row["brush_opacity"], terrain_id=row["terrain_id"] or "",
+                image_path=row["image_path"] or "",
             )
             self._zones[zone.id] = zone
+            photo = self._load_photo(zone.image_path)
             self._l.region_panel.add_region_card(
                 zone.id, zone.name, zone.category_key, zone.color,
                 area_m2=layer.area_m2(), object_count=self._count_objects_in(zone),
                 visible=zone.visible, thumbnail=layer.thumbnail(),
                 terrain_label=self._terrain_label(zone.terrain_id),
-                terrain_id=zone.terrain_id,
+                terrain_id=zone.terrain_id, photo=photo,
             )
+            layer.update_label(zone.name, zone.stars)
 
     # ─── "Nova Região" → configure fields → "Salvar" → card appears ───
     # Painting is a separate, later step: only clicking the newly-created
@@ -135,6 +139,7 @@ class RegionMediator:
         region_id = str(uuid.uuid4())
         name = f"Região {self._l.region_panel.region_count() + 1}"
         zone = _Zone(id=region_id, category_key="", name=name, color=QColor(DEFAULT_ZONE_COLOR), layer=layer)
+        layer.set_opacity(zone.opacity)
         self._zones[region_id] = zone
         self._active_id = region_id
         self._is_creating = True
@@ -142,7 +147,7 @@ class RegionMediator:
         panel = self._l.region_edit_panel
         panel.set_terrain_options(self._terrain_options())
         panel.load(
-            zone.name, zone.category_key, zone.color, zone.visible,
+            zone.name, zone.category_key, zone.color,
             zone.radius, zone.softness, zone.mode, zone.opacity,
             zone.stars, zone.estilo, zone.observacao, zone.terrain_id,
         )
@@ -173,7 +178,22 @@ class RegionMediator:
     def on_card_clicked(self, region_id: str):
         """Just selecting a card (not "Editar" from its "..." menu) arms
         the brush directly targeting it, so you can start painting right
-        away without opening the full field editor."""
+        away without opening the full field editor. Clicking the same
+        card again (see RegionSettingsPanel._on_card_selected) deselects
+        it — region_id comes through as "" — which disarms the brush and
+        stops painting instead of leaving it targeting a card that no
+        longer reads as selected.
+
+        Deliberately does NOT switch the active canvas tool back to
+        "Selecionar" — RegionBrushTool safely no-ops on mouse events while
+        it has no target (see RegionBrushTool.mouse_press/_paint), so
+        painting is already stopped; switching tools would also flip the
+        "Selecionar" toolbar button on, which reads as if the user had
+        clicked it themselves."""
+        if not region_id:
+            self._active_id = None
+            self._l.canvas.engine._region_brush_tool.set_target(None)
+            return
         zone = self._zones.get(region_id)
         if zone is None:
             return
@@ -198,6 +218,32 @@ class RegionMediator:
     def zone_name(self, zone_id: str) -> str:
         zone = self._zones.get(zone_id)
         return zone.name if zone else ""
+
+    def zone_thumbnail(self, zone_id: str, size: int = 24) -> QPixmap | None:
+        """Small preview image for `zone_id` — same "user photo, else
+        painted-mask preview" priority RegionCard's own thumbnail uses
+        (see RegionCard.__init__/set_thumbnail). Used by the Mobs module
+        to badge a mob's card with the actual look of the região it's
+        tagged to, image-only (no name/icon) — see MobCard.set_data."""
+        zone = self._zones.get(zone_id)
+        if not zone:
+            return None
+        if zone.image_path:
+            photo = self._load_photo(zone.image_path)
+            if photo is not None and not photo.isNull():
+                return photo
+        thumb = zone.layer.thumbnail(size)
+        return thumb if not thumb.isNull() else None
+
+    def region_at_point(self, scene_pos: QPointF) -> str | None:
+        """The id of whichever painted região's mask contains `scene_pos`,
+        or None — used by SpawnMediator to auto-tag a mob with the região
+        it was stamped into. On overlapping régions, the first match wins
+        (no defined stacking order between régions today)."""
+        for zone in self._zones.values():
+            if zone.layer.contains_point(scene_pos):
+                return zone.id
+        return None
 
     def _terrain_options(self) -> list[tuple[str, str]]:
         """(terrain_id, name) for every terrain that currently exists —
@@ -235,7 +281,12 @@ class RegionMediator:
         tool = self._l.canvas.engine._region_brush_tool
         tool.set_target(zone.layer)
         tool.set_mode(zone.mode)
-        tool.set_params(radius=zone.radius, softness=zone.softness, opacity=zone.opacity)
+        # radius only — softness has no user-facing control anymore
+        # (RegionBrushTool keeps its own fixed default) and opacity is
+        # the layer's own live QGraphicsItem opacity now (see
+        # RegionLayer.set_opacity / _on_opacity_changed), not a brush
+        # stroke param.
+        tool.set_params(radius=zone.radius)
         boundary = self._l._terrain_med.boundaries.get(zone.terrain_id) if zone.terrain_id else None
         tool.set_active_boundary(boundary)
         self._l.canvas.engine.tool_manager.activate("RegiãoPincel")
@@ -258,7 +309,7 @@ class RegionMediator:
         panel = self._l.region_edit_panel
         panel.set_terrain_options(self._terrain_options())
         panel.load(
-            zone.name, zone.category_key, zone.color, zone.visible,
+            zone.name, zone.category_key, zone.color,
             zone.radius, zone.softness, zone.mode, zone.opacity,
             zone.stars, zone.estilo, zone.observacao, zone.terrain_id,
         )
@@ -299,6 +350,7 @@ class RegionMediator:
         if card:
             card.set_stats(area_m2, object_count)
             card.set_thumbnail(zone.layer.thumbnail())
+        zone.layer.update_label(zone.name, zone.stars)
         self._persist_mask(zone)
 
     def _count_objects_in(self, zone: _Zone) -> int:
@@ -327,6 +379,7 @@ class RegionMediator:
         card = self._l.region_panel.get_card(zone.id)
         if card:
             card.set_name(name)
+        zone.layer.update_label(name, zone.stars)
         self._persist_fields(zone, name=name)
 
     def _on_category_changed(self, category_key: str):
@@ -351,27 +404,43 @@ class RegionMediator:
             card.set_thumbnail(zone.layer.thumbnail())
         self._persist_fields(zone, color=color.name(QColor.NameFormat.HexArgb))
 
-    def _on_visibility_changed(self, visible: bool):
-        zone = self._current_zone()
-        if not zone:
-            return
-        zone.visible = visible
-        zone.layer.item.setVisible(visible)
-        card = self._l.region_panel.get_card(zone.id)
-        if card:
-            card.set_visible_state(visible)
-        self._persist_fields(zone, visible=int(visible))
-
     def on_card_visibility_toggled(self, region_id: str, visible: bool):
-        """From the card's own eye toggle (not the edit panel)."""
+        """From the card's own eye toggle — the only way to toggle
+        visibility now (the edit panel's redundant "Visível" checkbox was
+        removed; clicking the eye already does the same thing)."""
         zone = self._zones.get(region_id)
         if not zone:
             return
         zone.visible = visible
         zone.layer.item.setVisible(visible)
-        if self._active_id == region_id:
-            self._l.region_edit_panel.set_visible_checkbox(visible)
+        zone.layer.set_label_visible(visible)
         self._persist_fields(zone, visible=int(visible))
+
+    def _project_dir(self):
+        window = self._l.window()
+        return window.project.path if window and getattr(window, "project", None) else None
+
+    def _load_photo(self, image_path: str) -> QPixmap | None:
+        if not image_path:
+            return None
+        pixmap = QPixmap(resolve_asset_path(self._project_dir(), image_path))
+        return pixmap if not pixmap.isNull() else None
+
+    def on_card_image_changed(self, region_id: str, path: str):
+        """A photo was dropped/picked directly on the card's thumbnail
+        (see RegionCard._on_image_dropped) — copies it into the project
+        folder (same reasoning as Mobs' portrait, see project_assets.py)
+        and persists the relative path, then swaps the card's display in
+        immediately rather than waiting for a reload."""
+        zone = self._zones.get(region_id)
+        if not zone:
+            return
+        stored_path = import_asset(self._project_dir(), path, "assets/regions", region_id)
+        zone.image_path = stored_path
+        card = self._l.region_panel.get_card(region_id)
+        if card:
+            card.set_photo(self._load_photo(stored_path))
+        self._persist_fields(zone, image_path=stored_path)
 
     def on_paint_cleared(self, region_id: str):
         """"Apagar Pintura" from the card's "..." menu — wipes the mask,
@@ -393,13 +462,6 @@ class RegionMediator:
         zone.radius = radius
         self._l.canvas.engine._region_brush_tool.set_params(radius=radius)
 
-    def _on_softness_changed(self, softness: float):
-        zone = self._current_zone()
-        if not zone:
-            return
-        zone.softness = softness
-        self._l.canvas.engine._region_brush_tool.set_params(softness=softness)
-
     def _on_mode_changed(self, mode: str):
         zone = self._current_zone()
         if not zone:
@@ -408,17 +470,25 @@ class RegionMediator:
         self._l.canvas.engine._region_brush_tool.set_mode(mode)
 
     def _on_opacity_changed(self, opacity: float):
+        """Now the região's own live transparency (RegionLayer.
+        set_opacity — a real QGraphicsItem opacity), not a brush stroke
+        param. That old wiring only ever fed the paint MASK's alpha,
+        which SourceOver-accumulates and can never be lowered once
+        painted — dragging it after already painting an area visibly did
+        nothing, which is what this replaces."""
         zone = self._current_zone()
         if not zone:
             return
         zone.opacity = opacity
-        self._l.canvas.engine._region_brush_tool.set_params(opacity=opacity)
+        zone.layer.set_opacity(opacity)
+        self._persist_fields(zone, brush_opacity=opacity)
 
     def _on_stars_changed(self, stars: int):
         zone = self._current_zone()
         if not zone:
             return
         zone.stars = stars
+        zone.layer.update_label(zone.name, stars)
         self._persist_fields(zone, stars=stars)
 
     def _on_estilo_changed(self, estilo: str):
@@ -455,20 +525,36 @@ class RegionMediator:
             if self._active_id == region_id:
                 self.on_close_edit()
 
+    def on_card_hover_entered(self, region_id: str):
+        """Highlights the matching região on the map while its card is
+        hovered — brightens/thickens the região's OWN existing painted
+        border (see RegionLayer.set_hover) rather than drawing a second
+        outline on top of it."""
+        zone = self._zones.get(region_id)
+        if zone:
+            zone.layer.set_hover(True)
+
+    def on_card_hover_left(self, region_id: str):
+        zone = self._zones.get(region_id)
+        if zone:
+            zone.layer.set_hover(False)
+
     def on_locate(self, region_id: str):
+        """"Localizar" from a card's "..." menu — pans to the região
+        without touching the current zoom level. Centers on the LARGEST
+        contiguous painted patch (see RegionLayer.largest_blob_center_
+        scene), not the bounding box of the whole layer — a região
+        painted as several scattered patches would otherwise center on
+        empty space between them (and the old fitInView-based bounding
+        box also included the layer's raw, potentially much larger than
+        painted, raster canvas)."""
         zone = self._zones.get(region_id)
         if not zone:
             return
-        item = zone.layer.item
-        rect = item.mapToScene(item.boundingRect()).boundingRect()
-        padding = 80
-        rect.adjust(-padding, -padding, padding, padding)
-        viewport = self._l.canvas.engine.viewport
-        viewport.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
-        new_zoom = viewport.transform().m11()
-        viewport._zoom = new_zoom
-        viewport.zoom_changed.emit(new_zoom)
-        viewport.view_changed.emit()
+        center = zone.layer.largest_blob_center_scene()
+        if center is None:
+            return
+        self._l.canvas.engine.viewport.center_on_point(center)
 
     # ─── Persistence helpers ───
 

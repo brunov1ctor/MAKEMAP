@@ -36,7 +36,7 @@ from PySide6.QtGui import QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panel_manager import paint_glass_panel
-from src.layouts.panels.mobs.categories import RARITY_DEFS, rarity_label
+from src.layouts.panels.mobs.categories import DEFAULT_CATEGORY_ID
 from src.layouts.panels.mobs.edit_helpers import _INPUT_STYLE, _no_wheel, _hr
 from src.layouts.panels.mobs.edit_widgets import _CollapsibleSection
 from src.layouts.panels.mobs.edit_overview_mixin import OverviewSectionMixin
@@ -81,7 +81,8 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._drops: list[dict] = []  # {"item_id","rate","qty"} — see _refresh_drops_display
         self._items_catalog: list[dict] = []  # set_items_catalog() — real Item rows for the drop picker
         self._drops_expanded = False
-        self._abilities: list[dict] = []  # {"name","description","rarity"} — see _refresh_abilities_display
+        self._abilities: list[dict] = []  # {"skill_id"} (or legacy {"legacy_name",...}) — see _refresh_abilities_display
+        self._skills_catalog: list[dict] = []  # set_skills_catalog() — real Skill rows for the ability picker
         self._ability_editing_index: int | None = None  # None while the inline editor is hidden or adding new
         self._assets: list[dict] = []  # mob_assets rows — set_assets(), see _refresh_assets_display
 
@@ -220,13 +221,14 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         sections_lay.addWidget(_CollapsibleSection("📊 Atributos", self._build_atributos_section(), expanded=True))
         sections_lay.addWidget(_CollapsibleSection("📄 Informações Extras", self._build_extra_section(), expanded=False))
         sections_lay.addStretch()
-        # The Raridade badge lives in Visão Geral but reads from
-        # _rarity_combo, built afterward in Atributos — refresh it now
-        # that both exist, instead of at construction time in either
-        # section builder (whichever ran first wouldn't have both yet).
-        self._refresh_rarity_badge()
+        self._refresh_category_badge()
         sections_scroll.setWidget(sections_container)
         self._layout.addWidget(sections_scroll, 1)
+        # Kept so popups opened from inside a section (see
+        # _CatalogPickerDialog) can scope themselves to this scroll area's
+        # viewport — the currently-visible content band — instead of the
+        # whole panel including the header/footer, which sit outside it.
+        self._sections_scroll = sections_scroll
 
         # ─── Salvar Alterações — the only footer action now (Ações
         # Rápidas and Cancelar removed); Duplicar/Excluir stay reachable
@@ -336,15 +338,15 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             self._refresh_thumb()
             self._name_edit.clear()
             self._desc_edit.clear()
-            self._category_combo.setCurrentIndex(0)
+            default_idx = self._category_combo.findData(DEFAULT_CATEGORY_ID)
+            self._category_combo.setCurrentIndex(default_idx if default_idx >= 0 else 0)
             self._subcategory_edit.clear()
             self._tier_spin.setValue(1)
             self._level_spin.setValue(1)
             self._tipo_combo.setCurrentIndex(0)
             self._ambiente_edit.clear()
             self._status_combo.setCurrentIndex(0)
-            self._rarity_combo.setCurrentIndex(0)
-            self._refresh_rarity_badge()
+            self._refresh_category_badge()
             self._hp_spin.setValue(0)
             self._mana_spin.setValue(0)
             self._damage_spin.setValue(0)
@@ -354,7 +356,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             self._dodge_spin.setValue(0)
             self._resist_fisica_spin.setValue(0)
             self._resist_magica_spin.setValue(0)
-            self._element_combo.setCurrentIndex(0)
+            self._element_edit.clear()
             self._weight_spin.setValue(0)
             self._xp_spin.setValue(0)
             self._gold_spin.setValue(0)
@@ -378,7 +380,6 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             self._refresh_drops_display()
             self._abilities = []
             self._ability_editing_index = None
-            self._ability_editor.setVisible(False)
             self._refresh_abilities_display()
             self._assets = []
             self._refresh_assets_display()
@@ -407,7 +408,15 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._thumb_pixmap = pixmap if not pixmap.isNull() else None
         self._refresh_thumb()
 
-        category_key = mob.get("category", "outros") or "outros"
+        category_key = mob.get("category") or DEFAULT_CATEGORY_ID
+        if category_key == "outros":
+            # "outros" is the mobs.category column's old hardcoded DB
+            # default (migration 3) — that folder itself was dropped back
+            # in migration 7, so a mob that never got a real category
+            # assigned still carries this literal stale value instead of
+            # an empty string. Treat it the same as unset rather than
+            # showing "Sem categoria" for what's really just "never set".
+            category_key = DEFAULT_CATEGORY_ID
         # Falling back to index 0 here used to silently reassign the mob
         # to whatever folder happens to sort first (e.g. "outros" is the
         # DB column's default but migration 7 deleted that seeded folder,
@@ -432,8 +441,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._ambiente_edit.setText(mob.get("ambiente", ""))
         status = mob.get("status", "ativo") or "ativo"
         self._status_combo.setCurrentIndex(1 if status == "inativo" else 0)
-        self._rarity_combo.setCurrentText(rarity_label(mob.get("rarity", "normal")))
-        self._refresh_rarity_badge()
+        self._refresh_category_badge()
 
         self._hp_spin.setValue(int(mob.get("health", 100) or 0))
         self._mana_spin.setValue(int(mob.get("mana", 50) or 0))
@@ -445,10 +453,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._resist_fisica_spin.setValue(float(mob.get("resist_fisica", 0) or 0))
         self._resist_magica_spin.setValue(float(mob.get("resist_magica", 0) or 0))
 
-        element = mob.get("element", "") or ""
-        if element and self._element_combo.findText(element) < 0:
-            self._element_combo.addItem(element)
-        self._element_combo.setCurrentText(element)
+        self._element_edit.setText(mob.get("element", "") or "")
         self._weight_spin.setValue(float(mob.get("peso", 0) or 0))
         self._xp_spin.setValue(int(mob.get("xp", 0) or 0))
         self._gold_spin.setValue(int(mob.get("ouro", 0) or 0))
@@ -499,8 +504,11 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             self._abilities = json.loads(mob.get("abilities_json") or "[]")
         except (json.JSONDecodeError, TypeError):
             self._abilities = []
+        # Best-effort migration of pre-catalog-link entries
+        # ({"name","description","rarity"}, no skill_id) — see
+        # _migrate_legacy_ability. In-memory only; persisted on next save.
+        self._abilities = [self._migrate_legacy_ability(e) for e in self._abilities]
         self._ability_editing_index = None
-        self._ability_editor.setVisible(False)
         self._refresh_abilities_display()
 
         self._notes_edit.setPlainText(mob.get("notes", ""))
@@ -510,7 +518,6 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
 
     def collect_values(self) -> dict:
         category_key = self._category_combo.currentData() or "outros"
-        rarity_key = next((k for k, _c, label in RARITY_DEFS if label == self._rarity_combo.currentText()), "normal")
         resistances = {key: spin.value() for key, spin in self._resistance_spins.items()}
 
         return dict(
@@ -524,7 +531,6 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             tipo=self._tipo_combo.currentText(),
             ambiente=self._ambiente_edit.text().strip(),
             status="inativo" if self._status_combo.currentIndex() == 1 else "ativo",
-            rarity=rarity_key,
             favorite=int(self._fav_btn.isChecked()),
             health=self._hp_spin.value(),
             mana=self._mana_spin.value(),
@@ -535,7 +541,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             esquiva=self._dodge_spin.value(),
             resist_fisica=self._resist_fisica_spin.value(),
             resist_magica=self._resist_magica_spin.value(),
-            element=self._element_combo.currentText(),
+            element=self._element_edit.text().strip(),
             peso=self._weight_spin.value(),
             xp=self._xp_spin.value(),
             ouro=self._gold_spin.value(),

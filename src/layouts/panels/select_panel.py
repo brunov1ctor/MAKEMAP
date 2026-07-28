@@ -20,7 +20,7 @@ LAYER_ITEMS = [
     ("terrain", "Terreno"),
     ("asset", "Assets"),
     ("zone", "Zonas"),
-    ("mob", "Mobs"),
+    ("mob_spawn", "Mobs"),
 ]
 
 

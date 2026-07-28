@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QMouseEvent, QPen, QColor, QPainterPath
-from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsPathItem
+from PySide6.QtWidgets import QGraphicsPathItem
 
 from src.canvas.tools.base import BaseTool
 from src.canvas.tools.interaction import ItemInteraction
@@ -34,13 +34,14 @@ class SelectTool(BaseTool):
         selection_engine: SelectionEngine,
         transform_engine: TransformEngine | None = None,
         history_engine: HistoryEngine | None = None,
+        tool_manager=None,
     ):
         super().__init__(viewport)
         self._selection = selection_engine
         self._transform = transform_engine
         self._history = history_engine
+        self._tool_manager = tool_manager
         self._interaction = ItemInteraction(viewport, selection_engine, transform_engine, history_engine)
-        self._rubber_band: QGraphicsRectItem | None = None
         self._lasso_path: QGraphicsPathItem | None = None
         self._lasso_points: list[QPointF] = []
         self._start: QPointF | None = None
@@ -59,20 +60,25 @@ class SelectTool(BaseTool):
         self._start = scene_pos
 
         if self._lasso_mode:
-            # Start lasso
+            # Start lasso — the one deliberate multi-select gesture kept
+            # (explicit Alt+drag, not a plain click), see mouse_release.
             self._lasso_points = [scene_pos]
             self._lasso_path = QGraphicsPathItem()
             self._lasso_path.setPen(QPen(QColor(79, 195, 247, 180), 1.5, Qt.PenStyle.DashLine))
             self._lasso_path.setBrush(QColor(79, 195, 247, 20))
             self._lasso_path.setZValue(9999)
             self.viewport.scene().addItem(self._lasso_path)
-        else:
-            # Start rubber band
-            self._rubber_band = QGraphicsRectItem()
-            self._rubber_band.setPen(QPen(QColor(79, 195, 247, 180), 1))
-            self._rubber_band.setBrush(QColor(79, 195, 247, 30))
-            self._rubber_band.setZValue(9999)
-            self.viewport.scene().addItem(self._rubber_band)
+            return
+
+        # Plain click landed on empty space — nothing here to select or
+        # drag. Matches every other tool's "does one thing, then steps
+        # aside" behavior (Texto/Spawn already hand off similarly): clear
+        # whatever was selected and hand control back to Pan instead of
+        # starting a box-select drag.
+        self._start = None
+        self._selection.clear()
+        if self._tool_manager:
+            self._tool_manager.activate("Pan")
 
     def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
         if self._interaction.move(scene_pos):
@@ -86,9 +92,6 @@ class SelectTool(BaseTool):
                 path.lineTo(pt)
             path.closeSubpath()
             self._lasso_path.setPath(path)
-        elif self._rubber_band and self._start:
-            rect = QRectF(self._start, scene_pos).normalized()
-            self._rubber_band.setRect(rect)
 
     def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
         add = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -106,27 +109,6 @@ class SelectTool(BaseTool):
             self._lasso_path = None
             self._lasso_points.clear()
             self._lasso_mode = False
-
-        elif self._rubber_band:
-            rect = self._rubber_band.rect()
-            self.viewport.scene().removeItem(self._rubber_band)
-            self._rubber_band = None
-
-            if rect.width() > 3 or rect.height() > 3:
-                # Box selection
-                self._selection.select_by_rect(rect, add=add)
-            else:
-                # Click selection
-                item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
-                if item and self._selection.is_selectable(item):
-                    if add:
-                        self._selection.toggle(item)
-                    else:
-                        self._selection.select(item)
-                else:
-                    if not add:
-                        self._selection.clear()
-
             self._start = None
 
     def key_press(self, event):

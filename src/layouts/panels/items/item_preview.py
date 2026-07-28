@@ -1,5 +1,6 @@
-"""ItemPreview — the right column of the Itens row: a big PRÉVIA image on
-top and an INFORMAÇÕES RÁPIDAS stat readout below.
+"""ItemPreview — the right column of the Itens row: a single card with the
+PRÉVIA image on the left and the INFORMAÇÕES RÁPIDAS stat readout on the
+right, side by side.
 
 Purely presentational — update(record) re-renders from whatever the editor
 last saved; DPS is derived (Ataque × Vel. de Ataque) exactly like the
@@ -11,7 +12,7 @@ from __future__ import annotations
 import json
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton, QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
@@ -74,28 +75,25 @@ class ItemPreview(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(8)
+        outer.setSpacing(0)
 
-        # ── PRÉVIA ──
-        preview_frame = QFrame()
-        preview_frame.setObjectName("subpanel")
-        preview_frame.setStyleSheet(panel_frame_style())
-        preview_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        pv = QVBoxLayout(preview_frame)
-        pv.setContentsMargins(12, 10, 12, 12)
-        pv.setSpacing(8)
+        # Um único painel — imagem à esquerda, informações rápidas à
+        # direita, lado a lado — em vez de dois cartões empilhados.
+        frame = QFrame()
+        frame.setObjectName("subpanel")
+        frame.setStyleSheet(panel_frame_style())
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        root = QVBoxLayout(frame)
+        root.setContentsMargins(12, 10, 12, 12)
+        root.setSpacing(8)
+
         head = QHBoxLayout()
         head.addWidget(sub_header("Prévia"))
         head.addStretch()
-        self._import_btn = QPushButton("Importar")
-        self._import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._import_btn.setStyleSheet(f"""
-            QPushButton {{ background: rgba(255,255,255,0.05); color: {Colors.TEXT_SECONDARY};
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 5px; padding: 3px 10px; font-size: 9px; }}
-            QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
-        """)
-        head.addWidget(self._import_btn)
-        pv.addLayout(head)
+        root.addLayout(head)
+
+        body = QHBoxLayout()
+        body.setSpacing(12)
 
         self._image = _DropImageLabel("🗡")
         self._image.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -105,25 +103,20 @@ class ItemPreview(QWidget):
         # pedaço da tela direto pro colapso total assim que esbarra nele,
         # em vez de encolher suavemente até quase zero.
         self._image.setMinimumHeight(40)
+        self._image.setMinimumWidth(90)
         self._image.setToolTip("Arraste uma imagem aqui")
         self._image.setStyleSheet(
-            f"font-size: 72px; background: qradialgradient(cx:0.5, cy:0.4, radius:0.7, "
+            f"font-size: 56px; background: qradialgradient(cx:0.5, cy:0.4, radius:0.7, "
             f"stop:0 rgba(79,195,247,0.10), stop:1 transparent); border: none; border-radius: 8px;"
         )
         self._image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._image.image_dropped.connect(self.image_dropped.emit)
-        pv.addWidget(self._image, 1)
-        outer.addWidget(preview_frame, 3)
+        body.addWidget(self._image, 1)
 
         # ── INFORMAÇÕES RÁPIDAS ──
-        info_frame = QFrame()
-        info_frame.setObjectName("subpanel")
-        info_frame.setStyleSheet(panel_frame_style())
-        info_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        iv = QVBoxLayout(info_frame)
-        iv.setContentsMargins(12, 10, 12, 10)
-        iv.setSpacing(4)
-        iv.addWidget(sub_header("Informações Rápidas"))
+        info_col = QVBoxLayout()
+        info_col.setSpacing(4)
+        info_col.addWidget(sub_header("Informações Rápidas"))
 
         self._rows: dict[str, QLabel] = {}
         for key, label in [
@@ -141,14 +134,14 @@ class ItemPreview(QWidget):
             value.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 10px; font-weight: bold; background: transparent; border: none;")
             row.addWidget(value)
             self._rows[key] = value
-            iv.addLayout(row)
-        outer.addWidget(info_frame, 2)
+            info_col.addLayout(row)
+        info_col.addStretch()
+        body.addLayout(info_col, 1)
+
+        root.addLayout(body, 1)
+        outer.addWidget(frame, 1)
 
         self.update(None)
-
-    @property
-    def import_button(self) -> QPushButton:
-        return self._import_btn
 
     def update(self, record: dict | None):
         if not record:
@@ -162,7 +155,7 @@ class ItemPreview(QWidget):
         pixmap = QPixmap(image_path) if image_path else QPixmap()
         if not pixmap.isNull():
             self._image.setPixmap(pixmap.scaled(
-                220, 180, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation,
+                140, 140, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation,
             ))
         else:
             self._image.setPixmap(QPixmap())

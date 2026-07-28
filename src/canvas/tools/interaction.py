@@ -66,11 +66,21 @@ class ItemInteraction:
     def active(self) -> bool:
         return self.dragging or self.rotating or self.resizing
 
-    def try_begin(self, scene_pos: QPointF, add: bool = False) -> bool:
+    def try_begin(self, scene_pos: QPointF, add: bool = False, item_filter=None) -> bool:
         """Start a drag, rotate, or resize at scene_pos if applicable.
         Returns True if something was started — callers should not fall
         through to their own default press handling (e.g. placing a new
-        object) when this returns True."""
+        object) when this returns True.
+
+        `item_filter(item) -> bool`, if given, gates ONLY the "click an
+        existing item to select+drag it" fallback below — a placement tool
+        (Spawn, Texto) passes one that only accepts its own item type, so
+        clicking on top of an unrelated selectable layer (a painted região,
+        terrain, another asset stamp...) still places a new object instead
+        of hijacking the click into selecting/dragging that other layer.
+        Handle hits (resize/rotate/delete on an already-selected item) are
+        unaffected — those are independent of what's directly under the
+        cursor."""
         if self.transform is None:
             return False
 
@@ -91,7 +101,7 @@ class ItemInteraction:
                 return True
 
         item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
-        if item and self.selection.is_selectable(item):
+        if item and self.selection.is_selectable(item) and (item_filter is None or item_filter(item)):
             if item not in selected:
                 if add:
                     self.selection.toggle(item)

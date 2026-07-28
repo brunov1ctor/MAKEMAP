@@ -23,8 +23,8 @@ import logging
 import uuid
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
-    QSizePolicy, QSplitter, QMessageBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QFrame,
+    QSizePolicy, QSplitter, QStackedWidget, QMenu, QMessageBox,
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
@@ -41,6 +41,7 @@ from src.layouts.panels.items.item_editor import ItemEditor
 from src.layouts.panels.items.item_preview import ItemPreview
 from src.layouts.panels.items.skill_editor import SkillEditor
 from src.layouts.panels.items.skill_tree import SkillTreeCanvas
+from src.layouts.panels.items.panel_import_export_mixin import ItemsImportExportMixin
 
 logger = logging.getLogger("MAKEMAP")
 
@@ -52,7 +53,7 @@ _ITEM_CAT_ICONS = {
 }
 
 
-class ItemsSkillsPanel(QWidget):
+class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
     """Fullscreen Itens e Habilidades module."""
 
     closed = Signal()
@@ -74,6 +75,13 @@ class ItemsSkillsPanel(QWidget):
         self._user_dragged: set[int] = set()  # ids() of splitters the user adjusted
         self._auto_positions: dict[int, dict[int, int]] = {}
         self._syncing = False  # guards the column-splitter mirror against recursion
+
+        # ItemsImportExportMixin state
+        self._tools_mode: str | None = None
+        self._import_entity_mode: str = "item"
+        self._staged_image_folder: str = ""
+        self._staged_image_files: dict[str, str] = {}
+        self._template_fmt: str = "json"
 
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -118,6 +126,34 @@ class ItemsSkillsPanel(QWidget):
         title_col.addWidget(subtitle)
         header.addLayout(title_col)
         header.addStretch()
+
+        import_btn = QPushButton("📥 Importar")
+        import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        import_btn.setStyleSheet(f"""
+            QPushButton {{ background: rgba(255,255,255,0.06); color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; padding: 5px 12px; font-size: 10px; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.12); border-color: {Colors.ACCENT}; }}
+        """)
+        import_btn.clicked.connect(self._toggle_import_mode)
+        header.addWidget(import_btn)
+
+        export_btn = QToolButton()
+        export_btn.setText("📤 Exportar")
+        export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        export_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        export_btn.setStyleSheet(f"""
+            QToolButton {{ background: rgba(255,255,255,0.06); color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; padding: 5px 12px; font-size: 10px; }}
+            QToolButton::menu-indicator {{ image: none; }}
+            QToolButton:hover {{ background: rgba(255,255,255,0.12); border-color: {Colors.ACCENT}; }}
+        """)
+        export_menu = QMenu(export_btn)
+        export_menu.addAction("Exportar como JSON", lambda: self._on_export_choice("json"))
+        export_menu.addAction("Exportar como CSV", lambda: self._on_export_choice("csv"))
+        export_menu.addAction("Exportar como Excel", lambda: self._on_export_choice("xlsx"))
+        export_btn.setMenu(export_menu)
+        header.addWidget(export_btn)
+
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -125,7 +161,7 @@ class ItemsSkillsPanel(QWidget):
             QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none; font-size: 14px; border-radius: 14px; }}
             QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
         """)
-        close_btn.clicked.connect(self.closed.emit)
+        close_btn.clicked.connect(self._on_close_clicked)
         header.addWidget(close_btn)
         outer.addLayout(header)
 
@@ -142,19 +178,10 @@ class ItemsSkillsPanel(QWidget):
         )
         self._item_list.new_requested.connect(self._on_new_item)
         self._item_list.selected.connect(self._on_item_selected)
-        self._item_list.json_apply.connect(self._on_items_json)
         self._item_list.delete_requested.connect(self._on_item_delete)
-        self._item_list.set_json_template(
-            '[\n'
-            '  { "name": "Espada Longa", "category": "Arma", "subcategory": "Espada",\n'
-            '    "rarity": "rare", "level": 10 },\n'
-            '  { "name": "Poção de Vida", "category": "Consumível", "rarity": "common" }\n'
-            ']'
-        )
         self._item_editor = ItemEditor()
         self._item_editor.changed.connect(self._item_save_timer.start)
         self._item_preview = ItemPreview()
-        self._item_preview.import_button.clicked.connect(self._item_editor._on_pick_image)
         self._item_preview.image_dropped.connect(self._item_editor._on_image_set)
 
         self._items_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -173,15 +200,7 @@ class ItemsSkillsPanel(QWidget):
         )
         self._skill_list.new_requested.connect(self._on_new_skill)
         self._skill_list.selected.connect(self._on_skill_selected)
-        self._skill_list.json_apply.connect(self._on_skills_json)
         self._skill_list.delete_requested.connect(self._on_skill_delete)
-        self._skill_list.set_json_template(
-            '[\n'
-            '  { "name": "Bola de Fogo", "category": "Ataque", "rarity": "rare",\n'
-            '    "level": 5, "cooldown": 8, "mana_cost": 30, "element": "Fogo" },\n'
-            '  { "name": "Escudo Sagrado", "category": "Defesa", "rarity": "epic" }\n'
-            ']'
-        )
         self._skill_editor = SkillEditor(skills_provider=lambda: self._skills)
         self._skill_editor.changed.connect(self._skill_save_timer.start)
         self._skill_tree = SkillTreeCanvas(self._uow, skills_provider=lambda: self._skills)
@@ -217,7 +236,15 @@ class ItemsSkillsPanel(QWidget):
         self._rows_splitter.addWidget(self._items_splitter)
         self._rows_splitter.addWidget(self._skills_splitter)
         self._rows_splitter.splitterMoved.connect(lambda p, i: self._on_splitter_moved(self._rows_splitter, p, i))
-        outer.addWidget(self._rows_splitter, 1)
+
+        # ── Body stack: normal Itens/Habilidades view vs. the Importar/
+        # Exportar tools panel (see ItemsImportExportMixin) — the module
+        # has no spare column to take over like MobsPanel's right column,
+        # so Importar/Exportar swap the whole body instead. ──
+        self._body_stack = QStackedWidget()
+        self._body_stack.addWidget(self._rows_splitter)
+        self._body_stack.addWidget(self._build_tools_panel())
+        outer.addWidget(self._body_stack, 1)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -301,6 +328,7 @@ class ItemsSkillsPanel(QWidget):
                 "level": it.get("level_req", 1),
                 "code": it.get("code", ""),
                 "icon": _ITEM_CAT_ICONS.get(it.get("item_type"), "📦"),
+                "image_path": resolve_asset_path(self._project_dir, it.get("image_path") or ""),
             })
         self._item_list.set_rows(rows)
         if select_id:
@@ -321,7 +349,35 @@ class ItemsSkillsPanel(QWidget):
         display["image_path"] = resolve_asset_path(self._project_dir, record.get("image_path") or "")
         return display
 
+    def _flush_item_save(self):
+        """Commits a pending debounced edit (see _item_save_timer) before
+        the selection moves elsewhere — otherwise the timer fires 400ms
+        later against whatever item/skill is selected *then*, silently
+        dropping the edit the user just made (e.g. picking an image and
+        immediately clicking another item in the list)."""
+        if self._item_save_timer.isActive():
+            self._item_save_timer.stop()
+            self._save_item()
+
+    def _flush_skill_save(self):
+        if self._skill_save_timer.isActive():
+            self._skill_save_timer.stop()
+            self._save_skill()
+
+    def flush_pending_saves(self):
+        """Called by MainLayout before it tears down this panel — whether
+        the user clicked the panel's own ✕ or just navigated to another
+        menu — so a debounced edit in flight (see _item_save_timer/
+        _skill_save_timer) isn't silently lost."""
+        self._flush_item_save()
+        self._flush_skill_save()
+
+    def _on_close_clicked(self):
+        self.flush_pending_saves()
+        self.closed.emit()
+
     def _on_item_selected(self, item_id: str):
+        self._flush_item_save()
         record = self._item_by_id(item_id)
         if not record:
             return
@@ -333,6 +389,7 @@ class ItemsSkillsPanel(QWidget):
     def _on_new_item(self):
         if not self._uow:
             return
+        self._flush_item_save()
         item_id = str(uuid.uuid4())
         code = self._next_code("ITM_", [i.get("code", "") for i in self._items], start=1001)
         self._uow.items.create(
@@ -361,6 +418,8 @@ class ItemsSkillsPanel(QWidget):
     def _on_item_delete(self, item_id: str):
         if not self._uow:
             return
+        if self._current_item_id == item_id:
+            self._item_save_timer.stop()  # about to delete this row — discard, don't save
         record = self._item_by_id(item_id)
         name = record.get("name") if record else item_id
         reply = QMessageBox.question(
@@ -395,6 +454,7 @@ class ItemsSkillsPanel(QWidget):
                 "level": sk.get("level", 1),
                 "code": sk.get("code", ""),
                 "icon": sk["icon"],
+                "image_path": resolve_asset_path(self._project_dir, sk.get("image_path") or ""),
             })
         self._skill_list.set_rows(rows)
         if hasattr(self, "_skill_editor"):
@@ -409,6 +469,7 @@ class ItemsSkillsPanel(QWidget):
         return next((s for s in self._skills if s["id"] == skill_id), None)
 
     def _on_skill_selected(self, skill_id: str):
+        self._flush_skill_save()
         record = self._skill_by_id(skill_id)
         if not record:
             return
@@ -424,6 +485,7 @@ class ItemsSkillsPanel(QWidget):
     def _on_new_skill(self):
         if not self._uow:
             return
+        self._flush_skill_save()
         skill_id = str(uuid.uuid4())
         code = self._next_code("SKL_", [s.get("code", "") for s in self._skills], start=1, width=3)
         # "category" não tem mais campo no editor — fica um valor interno
@@ -461,6 +523,8 @@ class ItemsSkillsPanel(QWidget):
     def _on_skill_delete(self, skill_id: str):
         if not self._uow:
             return
+        if self._current_skill_id == skill_id:
+            self._skill_save_timer.stop()  # about to delete this row — discard, don't save
         record = self._skill_by_id(skill_id)
         name = record.get("name") if record else skill_id
         reply = QMessageBox.question(
@@ -479,15 +543,16 @@ class ItemsSkillsPanel(QWidget):
 
     # ── JSON bulk create ──
 
-    def _on_items_json(self, text: str):
-        try:
-            records = self._parse_json_list(text)
-        except ValueError as exc:
-            self._item_list.json_show_error(str(exc))
-            return
+    def _import_item_records(self, records: list[dict]) -> str | None:
+        """The actual item-create loop, used by the Importar cards
+        (ItemsImportExportMixin)."""
+        if not self._uow:
+            return None
         existing = [i.get("code", "") for i in self._items]
         last_id = None
         for rec in records:
+            if not isinstance(rec, dict) or not rec.get("name"):
+                continue
             item_id = str(uuid.uuid4())
             code = self._next_code("ITM_", existing, start=1001)
             existing.append(code)
@@ -503,19 +568,19 @@ class ItemsSkillsPanel(QWidget):
                                  ensure_ascii=False),
             )
             last_id = item_id
-        self._item_list.json_close()
         self._reload_items(select_id=last_id)
-        logger.info("Itens criados via JSON: %d", len(records))
+        return last_id
 
-    def _on_skills_json(self, text: str):
-        try:
-            records = self._parse_json_list(text)
-        except ValueError as exc:
-            self._skill_list.json_show_error(str(exc))
-            return
+    def _import_skill_records(self, records: list[dict]) -> str | None:
+        """The actual skill-create loop, used by the Importar cards
+        (ItemsImportExportMixin)."""
+        if not self._uow:
+            return None
         existing = [s.get("code", "") for s in self._skills]
         last_id = None
         for rec in records:
+            if not isinstance(rec, dict) or not rec.get("name"):
+                continue
             skill_id = str(uuid.uuid4())
             code = self._next_code("SKL_", existing, start=1, width=3)
             existing.append(code)
@@ -534,9 +599,8 @@ class ItemsSkillsPanel(QWidget):
                                  ensure_ascii=False),
             )
             last_id = skill_id
-        self._skill_list.json_close()
         self._reload_skills(select_id=last_id)
-        logger.info("Habilidades criadas via JSON: %d", len(records))
+        return last_id
 
     @staticmethod
     def _parse_json_list(text: str) -> list[dict]:

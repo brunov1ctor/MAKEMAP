@@ -34,6 +34,9 @@ class RegionSettingsPanel(QFrame):
     region_visibility_toggled = Signal(str, bool)  # region_id, visible
     region_paint_cleared = Signal(str)      # region_id
     region_terrain_changed = Signal(str, str)  # region_id, terrain_id ("" = Mapa Infinito)
+    region_image_changed = Signal(str, str)  # region_id, local file path (dropped/picked on the card)
+    region_hover_entered = Signal(str)      # region_id — mouse entered a card
+    region_hover_left = Signal(str)         # region_id — mouse left a card
     close_requested = Signal()
     content_changed = Signal()
 
@@ -174,9 +177,9 @@ class RegionSettingsPanel(QFrame):
     def add_region_card(self, region_id: str, name: str, category_label: str, color: QColor,
                          area_m2: float = 0.0, object_count: int = 0, visible: bool = True,
                          thumbnail=None, terrain_label: str = "Mapa Infinito",
-                         terrain_id: str = "") -> RegionCard:
+                         terrain_id: str = "", photo=None) -> RegionCard:
         card = RegionCard(region_id, name, color, category_label, area_m2, object_count,
-                           visible, thumbnail, terrain_label, terrain_id)
+                           visible, thumbnail, terrain_label, terrain_id, photo)
         card.selected.connect(self._on_card_selected)
         card.deleted.connect(self._on_card_deleted)
         card.renamed.connect(self.region_renamed.emit)
@@ -185,6 +188,9 @@ class RegionSettingsPanel(QFrame):
         card.visibility_toggled.connect(self.region_visibility_toggled.emit)
         card.paint_cleared.connect(self.region_paint_cleared.emit)
         card.terrain_changed.connect(self.region_terrain_changed.emit)
+        card.image_changed.connect(self.region_image_changed.emit)
+        card.hover_entered.connect(self.region_hover_entered.emit)
+        card.hover_left.connect(self.region_hover_left.emit)
         card.set_terrain_options(self._terrain_options)
         self._list_layout.insertWidget(self._list_layout.count() - 1, card)
         self._cards[region_id] = card
@@ -208,6 +214,16 @@ class RegionSettingsPanel(QFrame):
     # ─── Card signal handlers ───
 
     def _on_card_selected(self, region_id: str):
+        if region_id == self._selected_id:
+            # Clicking the already-selected card again deselects it —
+            # emit "" so RegionMediator.on_card_clicked knows to disarm
+            # the brush and stop painting, instead of just re-arming the
+            # same região it was already targeting.
+            self._selected_id = ""
+            for card in self._cards.values():
+                card.set_selected(False)
+            self.region_selected.emit("")
+            return
         self._selected_id = region_id
         for card in self._cards.values():
             card.set_selected(card.region_id == region_id)

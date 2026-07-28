@@ -59,6 +59,229 @@ def _jagged_circle_path(center: QPointF, radius: float, roughness: float) -> QPa
     return path
 
 
+def _circular_offsets(radius: int, steps: int) -> list[tuple[int, int]]:
+    return [
+        (round(radius * math.cos(2 * math.pi * i / steps)),
+         round(radius * math.sin(2 * math.pi * i / steps)))
+        for i in range(steps)
+    ]
+
+
+def dilate(img: QImage, radius: int, steps: int = 16) -> QImage:
+    """Grows img's opaque silhouette outward by `radius` px in every
+    direction — a true morphological dilate (net size increase), NOT the
+    close below (which dilates then eroDES back, netting close to zero
+    boundary growth — good for smoothing bumps, useless for making two
+    adjacent-but-not-quite-overlapping masks actually overlap). `steps`
+    directional composites approximate a circular structuring element
+    (cheap vs a true per-pixel circular dilate); Lighten takes the max
+    alpha across all offset copies, i.e. the union.
+
+    Used by BrushTool's shoreline-blend pass to expand two different
+    terrain layers' masks so they genuinely overlap in a band around
+    their (already near-complementary, see build_stamp's docstring)
+    shared boundary — morphological_close was tried here first and does
+    NOT work for this: closing doesn't grow the outer silhouette at all,
+    so two masks that only just touch never end up overlapping no matter
+    how large the radius."""
+    offsets = _circular_offsets(radius, steps)
+    dilated = QImage(img.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    dilated.fill(QColor(0, 0, 0, 0))
+    dp = QPainter(dilated)
+    dp.setCompositionMode(QPainter.CompositionMode.CompositionMode_Lighten)
+    dp.drawImage(0, 0, img)
+    for dx, dy in offsets:
+        dp.drawImage(dx, dy, img)
+    dp.end()
+    return dilated
+
+
+def morphological_close(img: QImage, radius: int, steps: int = 16) -> QImage:
+    """Dilate then erode by `radius` px — fills small gaps/bumps between
+    overlapping brush stamps and rounds the union into one smooth blob,
+    WITHOUT growing its overall size (erode undoes dilate's own growth,
+    net effect is only filling small concavities/gaps up to `radius`
+    wide). Erode intersects the dilated copies (repeated DestinationIn).
+
+    Originally RegionLayer-only (its _bordered_result traces this into a
+    single smooth outline around one shape's own silhouette); moved here
+    so other callers in this package can reuse the same primitive."""
+    offsets = _circular_offsets(radius, steps)
+    dilated = dilate(img, radius, steps)
+
+    eroded = QImage(dilated)
+    ep = QPainter(eroded)
+    ep.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+    for dx, dy in offsets:
+        ep.drawImage(-dx, -dy, dilated)
+    ep.end()
+    return eroded
+
+
+# ─── Organic edge dithering (always on, see build_stamp) ────────────────
+# A raw QRadialGradient stamp has a perfectly smooth, geometric edge —
+# fine for one isolated layer, but two different terrain types meeting at
+# one always leaves a razor-clean curve, reading as an abrupt cut no
+# matter how soft the gradient's own falloff is. Punching small random
+# holes into the stamp's outer band (see build_stamp) breaks that up into
+# a hand-drawn, speckled edge instead — and because paint_at reuses this
+# SAME stamp to both paint the active layer and erase every other one
+# (see build_stamp's own docstring), whatever gets punched out here lets
+# the OTHER terrain's existing paint show through in exactly those spots,
+# so the two interleave a little at the border instead of butting up
+# against a clean line. Always active, no brush-panel control — the user
+# asked for this to just be how the brush behaves, not another slider.
+#
+# A dragged stroke lays down many overlapping stamps (spaced by
+# TERRAIN_SPACING_RATIO, see BrushTool). A hole punched by one stamp only
+# survives in the FINAL union if every OTHER overlapping stamp that also
+# covers that exact spot agrees it should be a hole too — otherwise
+# whichever stamp has full alpha there just paints over it, and the union
+# smooths back into a clean edge no matter how ragged each stamp looked
+# in isolation. That only happens if the noise is sampled by each output
+# PIXEL's own absolute world position, not by which stamp happens to be
+# asking — so this uses the exact same "tiled texture pinned to world
+# origin" trick TerrainLayer._create_texture_brush already uses for
+# terrain materials: a QBrush(tile) with its transform translated by
+# -world_pos, so Qt's own brush tiling samples the SAME fixed noise tile
+# at the SAME absolute position regardless of which stamp/layer is
+# painting — every overlapping stamp along a stroke then reinforces one
+# consistent ragged silhouette instead of separately-randomized ones
+# cancelling out.
+_DITHER_TILE_LOW = 12    # px — raw random source (pre-smoothing)
+_DITHER_TILE_SIZE = 48   # px — final tileable pixmap (smoothed once, cached)
+_DITHER_STRENGTH = 200  # 0-255 — how deep the punched holes can go
+_dither_tile: QPixmap | None = None
+
+
+def _get_dither_tile() -> QPixmap:
+    """Cached once per process — a small random field smoothed up once
+    into a reusable tileable pixmap, then sampled via brush tiling (see
+    _apply_edge_dither) rather than regenerated per stamp."""
+    global _dither_tile
+    if _dither_tile is None:
+        raw = QImage(_DITHER_TILE_LOW, _DITHER_TILE_LOW, QImage.Format.Format_ARGB32_Premultiplied)
+        for y in range(_DITHER_TILE_LOW):
+            for x in range(_DITHER_TILE_LOW):
+                raw.setPixelColor(x, y, QColor(255, 255, 255, random.randint(0, 255)))
+        smooth = raw.scaled(_DITHER_TILE_SIZE, _DITHER_TILE_SIZE,
+                             Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        _dither_tile = QPixmap.fromImage(smooth)
+    return _dither_tile
+
+
+def _apply_edge_dither(img: QImage, center: QPointF, gradient_r: float, world_pos: QPointF | None):
+    """Punches noise-shaped holes into `img`'s outer band (a fixed
+    plateau from 45%-92% of gradient_r, regardless of softness/roughness
+    so the gradient stops stay validly ordered no matter what those
+    params are set to) — see the module comment above for why this
+    happens unconditionally, and why reusing one stamp for paint+erase
+    (Fase A) makes this a safe, seam-free interleaving instead of a new
+    gap."""
+    size = img.width()
+    ring = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    ring.fill(QColor(0, 0, 0, 0))
+    rp = QPainter(ring)
+    rp.setRenderHint(QPainter.RenderHint.Antialiasing)
+    ring_gradient = QRadialGradient(center, gradient_r)
+    ring_gradient.setColorAt(0.0, QColor(255, 255, 255, 0))
+    ring_gradient.setColorAt(0.45, QColor(255, 255, 255, 0))
+    ring_gradient.setColorAt(0.62, QColor(255, 255, 255, _DITHER_STRENGTH))
+    ring_gradient.setColorAt(0.92, QColor(255, 255, 255, _DITHER_STRENGTH))
+    ring_gradient.setColorAt(1.0, QColor(255, 255, 255, 0))
+    rp.setPen(Qt.PenStyle.NoPen)
+    rp.setBrush(QBrush(ring_gradient))
+    rp.drawEllipse(center, gradient_r, gradient_r)
+    rp.end()
+
+    # Clip the ring's alpha by the world-locked noise tile — SourceIn
+    # keeps the noise pattern's own shape but scaled down by the ring's
+    # alpha, so holes can only appear within that band, never at the
+    # core or past the outer edge.
+    noise = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    noise.fill(QColor(0, 0, 0, 0))
+    npt = QPainter(noise)
+    npt.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    brush = QBrush(_get_dither_tile())
+    if world_pos is not None:
+        # Stamp-local pixel (0,0) sits at world (world_pos - center) — pin
+        # the tile's own (0,0) there so every stamp samples the same
+        # absolute grid regardless of its own center.
+        transform = QTransform()
+        transform.translate(-(world_pos.x() - center.x()), -(world_pos.y() - center.y()))
+        brush.setTransform(transform)
+    npt.setBrush(brush)
+    npt.setPen(Qt.PenStyle.NoPen)
+    npt.drawRect(0, 0, size, size)
+    npt.end()
+
+    rp2 = QPainter(ring)
+    rp2.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    rp2.drawImage(0, 0, noise)
+    rp2.end()
+
+    painter = QPainter(img)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
+    painter.drawImage(0, 0, ring)
+    painter.end()
+
+
+def build_stamp(radius: float, params: TerrainBrushParams, world_pos: QPointF | None = None) -> QImage:
+    """Renders one brush stamp's alpha shape (a soft radial-gradient
+    circle, or a jagged version when `params.roughness > 0`) into its own
+    small ARGB image, centered in the middle of that image, instead of
+    drawing straight onto a target mask.
+
+    Callers composite this SAME QImage (via drawImage, see paint_at's
+    `stamp` param) onto every mask it touches for one brush point — the
+    active layer via SourceOver, every other terrain layer via
+    DestinationOut (see BrushTool._erase_other_layers) — rather than each
+    target independently recomputing its own gradient/jagged path. Two
+    independently recomputed shapes were never guaranteed pixel-
+    identical (roughness > 0 in particular calls `random.uniform` fresh
+    each time via `_jagged_circle_path`), which is what produced a
+    visible double-edge/seam between two adjacent terrain types instead
+    of one clean, pixel-complementary boundary.
+
+    `world_pos` (scene coords — the same for every layer touched by one
+    brush point, unlike each layer's own local coords, which can drift
+    apart once a layer independently expands) drives the organic-edge
+    dither's noise sampling (see _apply_edge_dither/_dither_noise) so
+    consecutive overlapping stamps along a dragged stroke read the same
+    underlying pattern instead of each rolling independent randomness."""
+    gradient_r = radius * (1.0 + params.roughness * _ROUGHNESS_JITTER) if params.roughness > 0 else radius
+    half = math.ceil(gradient_r) + 2
+    size = half * 2
+    img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(QColor(0, 0, 0, 0))
+    center = QPointF(half, half)
+
+    painter = QPainter(img)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    gradient = QRadialGradient(center, gradient_r)
+    alpha = int(255 * params.opacity)
+    hardness = 1.0 - params.softness
+    if hardness >= 0.99:
+        gradient.setColorAt(0.0, QColor(255, 255, 255, alpha))
+        gradient.setColorAt(1.0, QColor(255, 255, 255, alpha))
+    else:
+        gradient.setColorAt(0.0, QColor(255, 255, 255, alpha))
+        gradient.setColorAt(max(0.01, hardness), QColor(255, 255, 255, alpha))
+        gradient.setColorAt(1.0, QColor(255, 255, 255, 0))
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(gradient))
+    if params.roughness > 0:
+        painter.drawPath(_jagged_circle_path(center, radius, params.roughness))
+    else:
+        painter.drawEllipse(center, radius, radius)
+    painter.end()
+
+    _apply_edge_dither(img, center, gradient_r, world_pos)
+    return img
+
+
 class TerrainLayer:
     """A single terrain layer: mask + tiled texture → composited pixmap item.
 
@@ -151,12 +374,35 @@ class TerrainLayer:
 
     # ─── Painting ────────────────────────────────────────────────────────
 
-    def paint_at(self, pos: QPointF, params: TerrainBrushParams):
-        """Paint circular stamp into the appropriate mask."""
+    def paint_at(self, pos: QPointF, params: TerrainBrushParams, clip_path: QPainterPath | None = None,
+                 stamp: QImage | None = None):
+        """Paint circular stamp into the appropriate mask.
+
+        `stamp`, when given, is a pre-built alpha-stamp image (see
+        build_stamp()) drawn as-is instead of building a new gradient/
+        jagged-path here — this is what BrushTool passes so the exact
+        same footprint gets SourceOver'd into the active layer AND
+        DestinationOut'd out of every other terrain layer for one brush
+        point (see BrushTool._erase_other_layers), guaranteeing two
+        adjacent terrain types meet at a single pixel-complementary
+        boundary instead of each independently computing its own (and,
+        with roughness > 0, independently randomized) edge. When omitted,
+        a stamp is built internally exactly as before — single-layer
+        callers (e.g. RegionLayer) are unaffected.
+
+        `clip_path` (layer-local coords), when given, restricts the
+        actual painted pixels to it — used by RegionBrushTool so a
+        stroke dragged right up to (or slightly past) a bounded terrain's
+        edge still fills all the way to that edge instead of the whole
+        stamp being rejected the moment its center crosses the boundary
+        (see RegionBrushTool._paint)."""
         r = params.size / 2
         size = int(params.size)
         if size < 1:
             return
+
+        if stamp is None:
+            stamp = build_stamp(r, params, world_pos=pos)
 
         cx, cy = pos.x(), pos.y()
 
@@ -173,6 +419,11 @@ class TerrainLayer:
             # Shift accumulated dirty rect to match new coordinate space
             if self._stroke_dirty is not None:
                 self._stroke_dirty.translate(int(shift_x), int(shift_y))
+            # clip_path was computed in the pre-expansion coordinate space —
+            # shift it the same way, or it'd clip against the wrong spot
+            # once the mask's origin moves.
+            if clip_path is not None:
+                clip_path = clip_path.translated(shift_x, shift_y)
 
         # Choose target: stencil (mask mode) or paint mask (paint/erase mode)
         if params.mask_only:
@@ -182,46 +433,29 @@ class TerrainLayer:
 
         painter = QPainter(target)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        if clip_path is not None:
+            painter.setClipPath(clip_path)
 
         if params.erase:
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
         else:
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
-        center = QPointF(cx, cy)
-        # When roughness bulges the drawn shape past r, the gradient's own
-        # radius has to reach at least as far, or those bulges would fall
-        # beyond its last color stop and paint fully transparent — making
-        # the jaggedness invisible instead of visible.
-        gradient_r = r * (1.0 + params.roughness * _ROUGHNESS_JITTER) if params.roughness > 0 else r
-        gradient = QRadialGradient(center, gradient_r)
-        alpha = int(255 * params.opacity)
-        hardness = 1.0 - params.softness
-
-        if hardness >= 0.99:
-            gradient.setColorAt(0.0, QColor(255, 255, 255, alpha))
-            gradient.setColorAt(1.0, QColor(255, 255, 255, alpha))
-        else:
-            gradient.setColorAt(0.0, QColor(255, 255, 255, alpha))
-            gradient.setColorAt(max(0.01, hardness), QColor(255, 255, 255, alpha))
-            gradient.setColorAt(1.0, QColor(255, 255, 255, 0))
-
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(gradient))
-        if params.roughness > 0:
-            painter.drawPath(_jagged_circle_path(center, r, params.roughness))
-        else:
-            painter.drawEllipse(center, r, r)
+        half_w = stamp.width() / 2.0
+        half_h = stamp.height() / 2.0
+        painter.drawImage(QPointF(cx - half_w, cy - half_h), stamp)
         painter.end()
 
         if params.mask_only:
             self._has_stencil = True
 
-        # Track dirty
-        x = max(0, int(cx - r))
-        y = max(0, int(cy - r))
-        w = min(self._width - x, size + 1)
-        h = min(self._height - y, size + 1)
+        # Track dirty — sized to the stamp's own bounding box (matters
+        # once roughness bulges it past the nominal radius r).
+        x = max(0, int(cx - half_w))
+        y = max(0, int(cy - half_h))
+        w = min(self._width - x, stamp.width() + 1)
+        h = min(self._height - y, stamp.height() + 1)
         stamp_rect = QRect(x, y, w, h)
 
         if self._stroke_dirty is None:
@@ -500,6 +734,18 @@ class TerrainLayer:
             int(min(w, (max_x + 1 + pad) * sx) - max(0, (min_x - pad) * sx)),
             int(min(h, (max_y + 1 + pad) * sy) - max(0, (min_y - pad) * sy)),
         )
+
+    def mask_crop(self, rect: QRect) -> QImage | None:
+        """A copy of `_mask` cropped to `rect` (layer-local pixel coords),
+        clamped to the mask's actual bounds — None if the clamped rect
+        ends up empty (rect entirely outside the mask). Used by
+        BrushTool's shoreline-blend pass to grab just the small region
+        where two different terrain layers' masks might overlap."""
+        bounds = QRect(0, 0, self._mask.width(), self._mask.height())
+        clamped = rect.intersected(bounds)
+        if clamped.width() <= 0 or clamped.height() <= 0:
+            return None
+        return self._mask.copy(clamped)
 
     def export_mask_png_base64(self) -> tuple[str, float, float]:
         """PNG-encode the cropped raw paint mask (base64 text, alpha only —

@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QToolButton,
     QLineEdit, QSizePolicy,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors
 from src.layouts.panels.assets.card import CategorySection
@@ -36,6 +36,7 @@ _SUPPORTED_IMG = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".mp4", ".we
 
 _CATEGORIES = [
     ("terrain", "🌍", "Terrain"),
+    ("water", "🌊", "Água"),
     ("trees", "🌲", "Trees"),
     ("rocks", "🪨", "Rocks"),
     ("mountains", "⛰", "Mountains"),

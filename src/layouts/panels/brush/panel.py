@@ -1,18 +1,23 @@
 """Brush Tool Panel — configuração de pincel (tamanho, material, transform).
 
-Asset browsing (category tabs + search + grid) lives in AssetBrowserPanel,
-shown alongside this one — see asset_browser.py for why they're split.
+Two sections sharing one floating panel/header (see __init__): "Parâmetros"
+(sliders) and "Assets" (material preview + mode + transform), swapped via a
+small tab row. The asset GRID itself (category tabs + search + thumbnails)
+isn't embedded here — it's a separate AssetBrowserPanel that rides next to
+this one, opened by clicking the big texture-preview rectangle on the
+Assets tab (same adjacent-panel pattern as Região's CRUD list +
+RegionEditPanel), not another tab/page inside this panel.
 """
 
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QFrame, QVBoxLayout, QHBoxLayout, QLabel,
+    QFrame, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QSizePolicy, QScrollArea, QWidget, QToolButton,
-    QCheckBox, QGraphicsDropShadowEffect, QComboBox,
+    QCheckBox, QComboBox, QStackedWidget,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPainter, QBrush, QPixmap, QColor
+from PySide6.QtGui import QPainter, QBrush, QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panels.brush.slider import BrushSlider
@@ -31,11 +36,9 @@ _TEXT_MUTED = Colors.TEXT_MUTED
 # ─── Texture Preview ────────────────────────────────────────────────────────
 
 class TexturePreviewWidget(QFrame):
-    """Large texture preview reflecting current brush settings.
-
-    Click opens the Assets browser panel — this is the one entry point for
-    it now (selecting the Brush tool no longer opens it automatically).
-    """
+    """Large texture preview reflecting current brush settings — click it
+    to open the adjacent AssetBrowserPanel (grid), same as clicking a card
+    opens Região's edit panel."""
 
     clicked = Signal()
 
@@ -43,15 +46,15 @@ class TexturePreviewWidget(QFrame):
         super().__init__(parent)
         self.setFixedHeight(60)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Clique para escolher um asset")
+        self.setToolTip("Escolher asset")
         self._hovered = False
-        self._apply_frame_style()
         self._pixmap: QPixmap | None = None
         self._scale = 1.0
         self._rotation = 0.0
         self._opacity = 1.0
+        self._update_style()
 
-    def _apply_frame_style(self):
+    def _update_style(self):
         border = _ACCENT if self._hovered else _BORDER
         self.setStyleSheet(f"""
             QFrame {{
@@ -63,27 +66,15 @@ class TexturePreviewWidget(QFrame):
 
     def enterEvent(self, event):
         self._hovered = True
-        self._apply_frame_style()
-        # Only one widget, generously spaced from its siblings — safe to use
-        # a real glow here (unlike the tightly-packed asset grid, where the
-        # same effect bled onto neighboring thumbnails).
-        glow = QGraphicsDropShadowEffect(self)
-        glow.setBlurRadius(20)
-        glow.setOffset(0, 0)
-        glow.setColor(QColor(_ACCENT))
-        self.setGraphicsEffect(glow)
-        super().enterEvent(event)
+        self._update_style()
 
     def leaveEvent(self, event):
         self._hovered = False
-        self._apply_frame_style()
-        self.setGraphicsEffect(None)
-        super().leaveEvent(event)
+        self._update_style()
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.pos()):
             self.clicked.emit()
-        super().mouseReleaseEvent(event)
 
     def set_texture(self, pixmap: QPixmap | None):
         self._pixmap = pixmap
@@ -140,8 +131,8 @@ class BrushToolPanel(QFrame):
 
     mode_changed = Signal(str)
     terrain_changed = Signal(str)  # terrain_id ("" = Mapa Infinito) — "Pintando em" dropdown
-    assets_requested = Signal()  # texture preview clicked — open the Assets browser
     close_requested = Signal()
+    assets_requested = Signal()  # texture preview clicked — MainLayout opens the adjacent AssetBrowserPanel
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -150,12 +141,26 @@ class BrushToolPanel(QFrame):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
 
+        self._current_section = "params"  # read by _refresh_section_tab_style, built below
+
         # layout raiz do QFrame — tudo dentro dele recebe o fundo glass via paintEvent
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(6)
 
-        # ── parte superior com scroll (sliders) ──
+        # ── header + aba Parâmetros/Assets: sempre visíveis, fora da área
+        # de scroll de qualquer uma das duas seções, já que servem às duas. ──
+        top_container = QWidget()
+        top_container.setStyleSheet("background: transparent;")
+        top_layout = QVBoxLayout(top_container)
+        top_layout.setContentsMargins(10, 6, 10, 0)
+        top_layout.setSpacing(4)
+        self._build_header(top_layout)
+        top_layout.addWidget(_separator())
+        self._build_section_tabs(top_layout)
+        root.addWidget(top_container)
+
+        # ── Seção "Parâmetros" (sliders) — com scroll ──
         self._top_scroll = QScrollArea()
         self._top_scroll.setWidgetResizable(True)
         self._top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -176,21 +181,20 @@ class BrushToolPanel(QFrame):
         self._layout.setSpacing(4)
         self._top_scroll.setWidget(top_w)
 
-        self._build_header()
         self._build_terrain_indicator()
         self._layout.addWidget(_separator())
         self._build_sliders_grid()
-        self._layout.addWidget(_separator())
-        self._build_material_section()
-        self._layout.addWidget(_separator())
-        self._build_transform_section()
         self._layout.addStretch()
 
-        root.addWidget(self._top_scroll, 1)
+        # ── Seção "Assets" (preview do material atual + modo + transform) ──
+        self._section_stack = QStackedWidget()
+        self._section_stack.addWidget(self._top_scroll)
+        self._section_stack.addWidget(self._build_assets_page())
+        root.addWidget(self._section_stack, 1)
 
         self._current_mode = "paint"
 
-    def _build_header(self):
+    def _build_header(self, layout):
         header = QHBoxLayout()
         header.setContentsMargins(0, 2, 0, 4)
         header.setSpacing(6)
@@ -220,7 +224,65 @@ class BrushToolPanel(QFrame):
         """)
         close_btn.clicked.connect(self.close_requested.emit)
         header.addWidget(close_btn)
-        self._layout.addLayout(header)
+        layout.addLayout(header)
+
+    def _build_section_tabs(self, layout):
+        """⚙ Parâmetros / 🎨 Assets — swaps which QStackedWidget page is
+        current. Note: "Assets" here is just material preview + mode +
+        transform — the actual asset GRID lives in a separate
+        AssetBrowserPanel opened by clicking the preview rectangle."""
+        row = QHBoxLayout()
+        row.setSpacing(4)
+
+        self._params_tab_btn = QToolButton()
+        self._params_tab_btn.setText("⚙ Parâmetros")
+        self._params_tab_btn.setCheckable(True)
+        self._params_tab_btn.setChecked(True)
+        self._params_tab_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._params_tab_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._params_tab_btn.clicked.connect(lambda: self.show_section("params"))
+        row.addWidget(self._params_tab_btn)
+
+        self._assets_tab_btn = QToolButton()
+        self._assets_tab_btn.setText("🎨 Assets")
+        self._assets_tab_btn.setCheckable(True)
+        self._assets_tab_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._assets_tab_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._assets_tab_btn.clicked.connect(lambda: self.show_section("assets"))
+        row.addWidget(self._assets_tab_btn)
+
+        layout.addLayout(row)
+        self._refresh_section_tab_style()
+
+    def show_section(self, section: str):
+        """Public so MainLayout (resetting to Parâmetros whenever the
+        Brush panel is reopened/closed) can drive it too."""
+        self._current_section = section
+        self._section_stack.setCurrentWidget(
+            self._assets_page if section == "assets" else self._top_scroll
+        )
+        self._params_tab_btn.setChecked(section == "params")
+        self._assets_tab_btn.setChecked(section == "assets")
+        self._refresh_section_tab_style()
+
+    def _refresh_section_tab_style(self):
+        active = f"""
+            QToolButton {{
+                border: none; border-radius: 4px; font-size: 10px; font-weight: bold;
+                color: {_ACCENT}; background: {_ACCENT_DIM};
+                padding: 5px 8px;
+            }}
+        """
+        inactive = f"""
+            QToolButton {{
+                border: none; border-radius: 4px; font-size: 10px;
+                color: {_TEXT_SEC}; background: transparent;
+                padding: 5px 8px;
+            }}
+            QToolButton:hover {{ background: #333; color: {_TEXT}; }}
+        """
+        self._params_tab_btn.setStyleSheet(active if self._current_section == "params" else inactive)
+        self._assets_tab_btn.setStyleSheet(active if self._current_section == "assets" else inactive)
 
     def _build_terrain_indicator(self):
         """"Pintando em" — a real dropdown (not just a label reflecting
@@ -276,19 +338,21 @@ class BrushToolPanel(QFrame):
         self._terrain_combo.blockSignals(False)
 
     def _build_sliders_grid(self):
-        # One column, not two — a 2-column grid in a 300px-wide panel doesn't
-        # leave enough room for the icon+label+value row of a BrushSlider,
-        # and since the panel's horizontal scrollbar is disabled, the excess
-        # width was silently clipped instead of scrolling into view. Each
-        # slider gets the full row instead.
-        col = QVBoxLayout()
-        col.setContentsMargins(0, 4, 0, 4)
-        col.setSpacing(2)
+        # 2 columns — each BrushSlider's name label wraps (see slider.py)
+        # so it survives the narrower ~130px column width instead of
+        # clipping, and this halves the number of rows vs. one long
+        # single-column stack, shrinking the panel's overall height.
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 4, 0, 4)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(2)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
-        self.size_slider = BrushSlider("Brush Size", "🖌", 1, 1000, 100, "m")
+        self.size_slider = BrushSlider("Size", "🖌", 1, 1000, 50, "m")
         self.opacity_slider = BrushSlider("Opacity", "💧", 0, 100, 100, "%")
         self.softness_slider = BrushSlider("Softness", "◎", 0, 100, 50, "%")
-        self.scale_slider = BrushSlider("Texture Scale", "🔲", 10, 500, 100, "%")
+        self.scale_slider = BrushSlider("Scale", "🔲", 0, 100, 50, "%")
         self.rotation_slider = BrushSlider("Rotation", "↻", 0, 360, 0, "°")
         self.density_slider = BrushSlider("Density", "▣", 1, 20, 3, "")
         self.roughness_slider = BrushSlider("Roughness", "〰", 0, 100, 0, "%")
@@ -307,29 +371,17 @@ class BrushToolPanel(QFrame):
             self.rotation_slider, self.density_slider,
             self.roughness_slider, self.smoothness_slider,
         ]
-        for slider in sliders:
-            col.addWidget(slider)
+        for i, slider in enumerate(sliders):
+            grid.addWidget(slider, i // 2, i % 2)
 
-        self._layout.addLayout(col)
+        self._layout.addLayout(grid)
 
-    def _build_material_section(self):
+    def _build_mode_section(self, target_layout):
+        """Paint/Mask/Erase — brush behavior, lives on the Assets tab
+        alongside the material preview/transform."""
         section = QVBoxLayout()
         section.setContentsMargins(0, 4, 0, 4)
         section.setSpacing(4)
-
-        # Material name gets its own row, elided — the 3 mode buttons below
-        # (109+99+109px unelided) were already wider than the whole 300px
-        # panel on their own; putting a name next to them made it worse. A
-        # long asset name now just truncates with "…" instead of pushing
-        # the buttons off the edge (panel's horizontal scrollbar is off, so
-        # overflow was silently invisible, not scrollable).
-        self._material_label = QLabel("")
-        self._material_label.setStyleSheet(f"""
-            color: {_TEXT}; font-size: 11px; font-weight: bold;
-            background: transparent; border: none;
-        """)
-        self._material_label.setMinimumWidth(0)
-        section.addWidget(self._material_label)
 
         mat_row = QHBoxLayout()
         mat_row.setSpacing(4)
@@ -368,6 +420,7 @@ class BrushToolPanel(QFrame):
 
         self._erase_btn = QToolButton()
         self._erase_btn.setText("⌫ Erase")
+        self._erase_btn.setToolTip("Apaga qualquer asset sob o pincel.\nAtalho: clique direito apaga sem trocar o modo.")
         self._erase_btn.setStyleSheet(mode_style)
         self._erase_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._erase_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -375,11 +428,39 @@ class BrushToolPanel(QFrame):
         mat_row.addWidget(self._erase_btn)
 
         section.addLayout(mat_row)
+        target_layout.addLayout(section)
+
+    def _build_assets_page(self) -> QWidget:
+        """Material name + texture preview (click to open the adjacent
+        asset grid subpanel) + mode + transform."""
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 6, 10, 0)
+        layout.setSpacing(4)
+
+        # Elided — a long asset name shouldn't push the panel wider than
+        # PANEL_WIDTH (the panel's horizontal scrollbar is off, so
+        # overflow would be silently invisible, not scrollable).
+        self._material_label = QLabel("")
+        self._material_label.setStyleSheet(f"""
+            color: {_TEXT}; font-size: 11px; font-weight: bold;
+            background: transparent; border: none;
+        """)
+        self._material_label.setMinimumWidth(0)
+        layout.addWidget(self._material_label)
 
         self.texture_preview = TexturePreviewWidget()
         self.texture_preview.clicked.connect(self.assets_requested.emit)
-        section.addWidget(self.texture_preview)
-        self._layout.addLayout(section)
+        layout.addWidget(self.texture_preview)
+        layout.addWidget(_separator())
+
+        self._build_mode_section(layout)
+        self._build_transform_section(layout)
+        layout.addStretch()
+
+        self._assets_page = page
+        return page
 
     def _set_mode(self, mode: str):
         self._current_mode = mode
@@ -403,7 +484,7 @@ class BrushToolPanel(QFrame):
         self._erase_btn.setStyleSheet(active if mode == "erase" else inactive)
         self.mode_changed.emit(mode)
 
-    def _build_transform_section(self):
+    def _build_transform_section(self, target_layout):
         section = QVBoxLayout()
         section.setContentsMargins(0, 4, 0, 4)
         section.setSpacing(2)
@@ -421,7 +502,7 @@ class BrushToolPanel(QFrame):
         """)
         self.random_rotation_check.setChecked(True)
         section.addWidget(self.random_rotation_check)
-        self._layout.addLayout(section)
+        target_layout.addLayout(section)
 
     # ─── Public API ──────────────────────────────────────────────────────
 
@@ -433,7 +514,6 @@ class BrushToolPanel(QFrame):
         elided = metrics.elidedText(name, Qt.TextElideMode.ElideRight, available)
         self._material_label.setText(elided)
         self._material_label.setToolTip(name)
-
 
     def set_texture_preview(self, pixmap: QPixmap | None):
         self.texture_preview.set_texture(pixmap)

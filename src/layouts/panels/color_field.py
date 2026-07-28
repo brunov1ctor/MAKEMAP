@@ -1,30 +1,30 @@
-"""ColorField — a swatch (quick pick via the native QColorDialog) plus a
-"Personalizar" button (opens the in-app ColorCustomizePanel riding sub-panel
-instead). Shared by the Texto and Estilo text panels (text color, shadow,
-outline, and glow colors all use the same swatch+picker control)."""
+"""ColorField — a non-interactive color preview swatch plus a "Personalizar"
+button (opens the in-app ColorCustomizePanel riding sub-panel — the only way
+to change the color, no native OS dialog involved). Shared by the Texto and
+Estilo text panels (text color, shadow, outline, and glow colors all use the
+same swatch+picker control)."""
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QToolButton, QColorDialog
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QToolButton
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
 
 from src.styles.tokens import Colors
 
 
 class ColorField(QWidget):
-    """A color swatch plus a "Personalizar" button; both open the same
-    QColorDialog. Emits color_changed(hex) only when the user actually
-    picks a new color — call set_color(..., emit=False) to sync from a
-    model without echoing the signal back."""
+    """A color preview swatch (display only) plus a "Personalizar" button
+    that opens the in-app color picker. Emits color_changed(hex) only when
+    the user actually picks a new color via "Personalizar" — call
+    set_color(..., emit=False) to sync from a model without echoing the
+    signal back."""
 
     color_changed = Signal(str)
     customize_requested = Signal()
 
-    def __init__(self, initial: str = "#FFFFFF", dialog_title: str = "Cor", parent=None):
+    def __init__(self, initial: str = "#FFFFFF", parent=None):
         super().__init__(parent)
         self._color = initial
-        self._dialog_title = dialog_title
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -32,8 +32,8 @@ class ColorField(QWidget):
 
         self.swatch = QToolButton()
         self.swatch.setFixedSize(28, 24)
-        self.swatch.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.swatch.clicked.connect(self._pick)
+        self.swatch.setCursor(Qt.CursorShape.ArrowCursor)
+        self.swatch.setEnabled(False)
         layout.addWidget(self.swatch)
 
         self.custom_btn = QToolButton()
@@ -52,11 +52,6 @@ class ColorField(QWidget):
         layout.addStretch()
 
         self._apply_swatch()
-
-    def _pick(self):
-        color = QColorDialog.getColor(QColor(self._color), self, self._dialog_title)
-        if color.isValid():
-            self.set_color(color.name(), emit=True)
 
     def set_color(self, hex_color: str, emit: bool = False):
         self._color = hex_color

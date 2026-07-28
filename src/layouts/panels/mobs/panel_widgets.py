@@ -5,11 +5,36 @@ live here instead of inline in panel.py.
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QToolButton, QWidget, QMenu, QFileDialog
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QToolButton, QWidget, QMenu
+from PySide6.QtCore import Qt, Signal, QSize, QRectF, QPoint, QMimeData
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QDrag, QPixmap, QPainter, QPainterPath
 
 from src.styles.tokens import Colors
+
+
+def _rounded_thumbnail(path: str, size: int) -> QPixmap | None:
+    """Square, rounded-corner crop of `path` for a _SidebarRow's icon slot
+    (used instead of the emoji glyph once a category has an image_path) —
+    same cover-fit + rounded-clip idea as _DropImageButton/MobCard's
+    thumbnail, just baked into a flat QPixmap since QLabel has no
+    paintEvent hook of its own to draw into."""
+    src = QPixmap(path)
+    if src.isNull():
+        return None
+    scaled = src.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+    x = max(0, (scaled.width() - size) // 2)
+    y = max(0, (scaled.height() - size) // 2)
+    cropped = scaled.copy(x, y, size, size)
+    result = QPixmap(size, size)
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    path_clip = QPainterPath()
+    path_clip.addRoundedRect(QRectF(0, 0, size, size), 4, 4)
+    painter.setClipPath(path_clip)
+    painter.drawPixmap(0, 0, cropped)
+    painter.end()
+    return result
 
 
 class _InlineNameEdit(QLineEdit):
@@ -48,11 +73,24 @@ class _SidebarRow(QFrame):
     clicked = Signal(str)
     rename_confirmed = Signal(str, str)  # key, new_name — only reachable via the ⋮ menu (show_menu=True)
     delete_requested = Signal(str)  # key — only reachable via the ⋮ menu (show_menu=True)
+    edit_requested = Signal(str)  # key — opens CategoryEditPanel, only via the ⋮ menu (show_menu=True)
+    reorder_requested = Signal(str, str)  # source_key, target_key — dropped source onto this row
 
-    def __init__(self, key: str, icon: str, label: str, parent=None, show_menu: bool = False):
+    # Manhattan-length threshold before a press-drag becomes an actual
+    # QDrag — same value/reasoning as TerrainCard's drag start (terrain_
+    # card.py), just without that card's border-only drag zone: rows are
+    # small and don't need a separate "click vs drag" region, only a
+    # "did the mouse actually move" one.
+    _DRAG_THRESHOLD = 10
+
+    def __init__(self, key: str, icon: str, label: str, parent=None, show_menu: bool = False,
+                 border_color: str = "", image_path: str = ""):
         super().__init__(parent)
         self.key = key
         self._selected = False
+        self._border_color = border_color
+        self._drag_start_pos: QPoint | None = None
+        self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         # Fixed, not left to sizeHint() — the emoji icon (📋/⭐/📁) pulls in
         # Windows' color-emoji font as a per-character fallback, and that
@@ -71,9 +109,15 @@ class _SidebarRow(QFrame):
         # cover this, but guaranteeing it directly removes any doubt about
         # whether that propagation is actually happening in a given
         # Qt build/platform — same reasoning as the old _FolderCard had.
-        icon_lbl = QLabel(icon)
+        icon_lbl = QLabel()
+        icon_lbl.setFixedSize(16, 16)
         icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         icon_lbl.setStyleSheet("font-size: 12px; background: transparent; border: none;")
+        thumb = _rounded_thumbnail(image_path, 16) if image_path else None
+        if thumb is not None:
+            icon_lbl.setPixmap(thumb)
+        else:
+            icon_lbl.setText(icon)
         lay.addWidget(icon_lbl)
         self._label = QLabel(label)
         self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -103,6 +147,7 @@ class _SidebarRow(QFrame):
                 QMenu {{ background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY}; border: 1px solid {Colors.BORDER}; }}
                 QMenu::item:selected {{ background: {Colors.ACCENT_DIM}; }}
             """)
+            menu.addAction("🎨 Editar", lambda: self.edit_requested.emit(self.key))
             menu.addAction("✏ Renomear", self.begin_rename)
             menu.addAction("🗑 Excluir", lambda: self.delete_requested.emit(self.key))
             menu_btn.setMenu(menu)
@@ -117,12 +162,16 @@ class _SidebarRow(QFrame):
         self._selected = sel
         self._refresh_style()
 
-    def _refresh_style(self):
+    def _refresh_style(self, drop_target: bool = False):
+        if drop_target:
+            self.setStyleSheet(f"QFrame {{ background: rgba(79,195,247,0.15); border: 1px dashed {Colors.ACCENT}; border-radius: 6px; }}")
+            return
+        border = f"border: 1px solid {self._border_color};" if self._border_color else "border: none;"
         if self._selected:
-            self.setStyleSheet(f"QFrame {{ background: {Colors.ACCENT_DIM}; border-radius: 6px; }}")
+            self.setStyleSheet(f"QFrame {{ background: {Colors.ACCENT_DIM}; {border} border-radius: 6px; }}")
             self._label.setStyleSheet(f"color: {Colors.ACCENT}; font-size: 11px; font-weight: bold; background: transparent; border: none;")
         else:
-            self.setStyleSheet("QFrame { background: transparent; border-radius: 6px; }"
+            self.setStyleSheet(f"QFrame {{ background: transparent; {border} border-radius: 6px; }}"
                                 "QFrame:hover { background: rgba(255,255,255,0.06); }")
             self._label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px; background: transparent; border: none;")
 
@@ -159,83 +208,65 @@ class _SidebarRow(QFrame):
         self._label.setVisible(True)
 
     def mousePressEvent(self, event):
+        # clicked now fires on release, not press — so a press-then-drag
+        # (see mouseMoveEvent) doesn't also navigate into the row being
+        # dragged before the drop even lands.
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self.key)
+            self._drag_start_pos = event.pos()
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event):
+        if (self._drag_start_pos is not None and
+                (event.pos() - self._drag_start_pos).manhattanLength() > self._DRAG_THRESHOLD):
+            drag = QDrag(self)
+            mime = QMimeData()
+            mime.setText(self.key)
+            drag.setMimeData(mime)
+            drag.exec(Qt.DropAction.MoveAction)
+            self._drag_start_pos = None
+        super().mouseMoveEvent(event)
 
-class _DropZone(QFrame):
-    """Big dashed-border area that accepts a dragged-in JSON/CSV/Excel
-    file (or a plain click, opening the same multi-format file picker as
-    a fallback for anyone who can't drag-and-drop) — replaces the old
-    file-dialog-only Importar flow with something that occupies the right
-    panel directly, per the reference behavior requested."""
-
-    file_chosen = Signal(str)  # local file path, either dropped or picked
-
-    _ACCEPTED_SUFFIXES = (".json", ".csv", ".xlsx")
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(f"""
-            QFrame {{ background: rgba(255,255,255,0.02); border: 2px dashed {Colors.BORDER_SUBTLE}; border-radius: 10px; }}
-        """)
-        lay = QVBoxLayout(self)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.setSpacing(8)
-        icon = QLabel("📥")
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet("font-size: 40px; background: transparent; border: none;")
-        lay.addWidget(icon)
-        hint = QLabel("Arraste um arquivo aqui\n(JSON, CSV ou Excel)")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px; font-weight: bold; background: transparent; border: none;")
-        lay.addWidget(hint)
-        sub = QLabel("ou clique para escolher um arquivo")
-        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
-        lay.addWidget(sub)
-
-    def _first_accepted_path(self, mime_data) -> str | None:
-        for url in mime_data.urls():
-            path = url.toLocalFile()
-            if path and path.lower().endswith(self._ACCEPTED_SUFFIXES):
-                return path
-        return None
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_start_pos is not None:
+            self.clicked.emit(self.key)
+        self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls() and self._first_accepted_path(event.mimeData()):
+        if event.mimeData().hasText() and event.mimeData().text() != self.key:
             event.acceptProposedAction()
-            self.setStyleSheet(f"""
-                QFrame {{ background: rgba(255,255,255,0.05); border: 2px dashed {Colors.ACCENT}; border-radius: 10px; }}
-            """)
-        else:
-            event.ignore()
+            self._refresh_style(drop_target=True)
 
     def dragLeaveEvent(self, event):
-        self.setStyleSheet(f"""
-            QFrame {{ background: rgba(255,255,255,0.02); border: 2px dashed {Colors.BORDER_SUBTLE}; border-radius: 10px; }}
-        """)
-        super().dragLeaveEvent(event)
+        self._refresh_style()
 
     def dropEvent(self, event: QDropEvent):
-        path = self._first_accepted_path(event.mimeData())
-        self.dragLeaveEvent(event)  # restore the idle style regardless of outcome
-        if path:
+        source_key = event.mimeData().text()
+        if source_key and source_key != self.key:
             event.acceptProposedAction()
-            self.file_chosen.emit(path)
-        else:
-            event.ignore()
+            self.reorder_requested.emit(source_key, self.key)
+        self._refresh_style()
+
+
+# Moved to src/layouts/panels/shared/import_export_helpers.py (zero
+# coupling to Mobs internals) so Items e Habilidades can reuse it too —
+# kept as an alias here so every existing `from
+# src.layouts.panels.mobs.panel_widgets import _DropZone` import keeps
+# working unchanged.
+from src.layouts.panels.shared.import_export_helpers import DropZone as _DropZone  # noqa: E402
+
+
+class _ClickableHeader(QFrame):
+    """A header row that toggles something on click — same "real subclass
+    with mousePressEvent as an actual method" requirement as
+    CollapsibleSection's _SectionHeader (src/layouts/panels/
+    collapsible_section.py): assigning to `.mousePressEvent` on a stock
+    QFrame() instance isn't reliably picked up by Qt's virtual dispatch."""
+
+    clicked = Signal()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            path, _selected = QFileDialog.getOpenFileName(
-                self, "Importar Mobs", "", "Todos os suportados (*.json *.csv *.xlsx);;JSON (*.json);;CSV (*.csv);;Excel (*.xlsx)",
-            )
-            if path:
-                self.file_chosen.emit(path)
+        self.clicked.emit()
         super().mousePressEvent(event)
 
 
@@ -243,7 +274,14 @@ class _SummaryCard(QFrame):
     """"Resumo Rápido" card — hides its legend (keeping just the donut)
     once there isn't enough height to show both without the legend's
     fixed-size rows overlapping the donut, instead of forcing a floor
-    size to guarantee they always fit.
+    size to guarantee they always fit. On top of that automatic shrink,
+    set_collapsed() lets the user manually fold the whole donut+legend
+    body away entirely (see panel_data_mixin.py's header/arrow toggle),
+    leaving just the "RESUMO RÁPIDO" title row — freeing that space for
+    CATEGORIAS above it to grow into (see _build_left_column's 2:1
+    stretch), same "responsive between the two" behavior the un-collapsed
+    2:1 split already had, just re-proportioned around whichever amount
+    of this card is actually showing right now.
 
     minimumSizeHint/sizeHint are deliberately capped to "just the donut,
     no legend" REGARDLESS of whether the legend is currently visible —
@@ -265,22 +303,51 @@ class _SummaryCard(QFrame):
     # spacing alone, with no legend — below this the legend would have
     # nowhere to go but overlap the donut, so it hides instead.
     _LEGEND_MIN_CARD_H = 170
-    _COLLAPSED_SIZE = QSize(150, 140)
+    _EXPANDED_SIZE = QSize(150, 140)
+    # Just the header row + card margins — collapsed state's actual floor
+    # AND ceiling (see set_collapsed's setMaximumHeight), so the 2:1
+    # QVBoxLayout stretch (categorias : this card) hands every pixel this
+    # card gives up straight to categorias instead of stretch alone still
+    # pulling this card back up toward its 1/3 share.
+    _COLLAPSED_H = 34
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._legend_container: QWidget | None = None
+        self._body: QWidget | None = None
+        self._collapsed = False
 
     def set_legend_container(self, widget: QWidget):
         self._legend_container = widget
 
+    def set_body(self, widget: QWidget):
+        """The donut+legend container as one unit — hidden entirely while
+        collapsed, distinct from set_legend_container's legend-only
+        auto-hide (which still applies normally whenever the body IS
+        visible, see resizeEvent)."""
+        self._body = widget
+
+    def set_collapsed(self, collapsed: bool):
+        self._collapsed = collapsed
+        if self._body is not None:
+            self._body.setVisible(not collapsed)
+        # The hard cap is what actually frees the space for categorias —
+        # a shrunk sizeHint alone doesn't stop a stretch-factor widget
+        # from still being pulled back up to fill its share of leftover
+        # layout space (see class docstring).
+        self.setMaximumHeight(self._COLLAPSED_H if collapsed else 16777215)
+        self.updateGeometry()
+
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
     def minimumSizeHint(self):
-        return self._COLLAPSED_SIZE
+        return QSize(self._EXPANDED_SIZE.width(), self._COLLAPSED_H) if self._collapsed else self._EXPANDED_SIZE
 
     def sizeHint(self):
-        return self._COLLAPSED_SIZE
+        return self.minimumSizeHint()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self._legend_container is not None:
+        if not self._collapsed and self._legend_container is not None:
             self._legend_container.setVisible(self.height() >= self._LEGEND_MIN_CARD_H)

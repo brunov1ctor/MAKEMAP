@@ -209,11 +209,13 @@ class GridFilterMixin:
         level_band = self._level_combo.currentData() or None
 
         def matches(m: dict) -> bool:
-            # Browsing inside a folder (see _navigate_into) restricts to
-            # mobs filed directly under it — like a file explorer only
-            # showing a directory's own files, not everything nested below.
-            if self._current_dir_id is not None and m.get("category") != self._current_dir_id:
-                return False
+            # Browsing the CATEGORIAS tree (see _navigate_into) is purely
+            # for organizing the category tree itself (create/rename/move
+            # subfolders) — it must NOT also filter the grid, that's what
+            # the "Categoria" combo above (category/category_ids, below)
+            # is for. A mob filed under a category shows up there via that
+            # combo regardless of which folder happens to be open in the
+            # sidebar.
             if search and search not in (m.get("name") or "").lower():
                 return False
             if tier and int(m.get("tier", 1) or 1) != tier:
@@ -264,15 +266,18 @@ class GridFilterMixin:
         zones = dict(self._zones_provider())
         target = self._grid_layout if self._view_mode == "grade" else self._list_layout
         for m in mobs:
+            zone_id = m.get("zone_id", "")
+            zone_image = self._zone_thumbnail_provider(zone_id) if zone_id else None
             if self._view_mode == "grade":
                 card = MobCard(m["id"])
                 card.set_data(
                     m.get("name", ""), int(m.get("level", 1) or 1), m.get("category", "outros"),
-                    m.get("rarity", "normal"), m.get("element", ""), zones.get(m.get("zone_id", ""), ""),
+                    m.get("element", ""), zones.get(zone_id, ""),
                     bool(m.get("favorite", 0)), resolve_asset_path(self._project_dir, m.get("image_path", "")),
+                    zone_image=zone_image,
                 )
             else:
-                card = self._build_list_row(m, zones)
+                card = self._build_list_row(m, zones, zone_image)
             card.set_selected(m["id"] == self._selected_id)
             card.selected.connect(self._on_card_selected)
             card.favorite_toggled.connect(self._on_favorite_toggled)
@@ -298,15 +303,16 @@ class GridFilterMixin:
         self._grid_layout.invalidate()
         self._grid_layout.activate()
 
-    def _build_list_row(self, m: dict, zones: dict) -> MobCard:
+    def _build_list_row(self, m: dict, zones: dict, zone_image=None) -> MobCard:
         """Reuses MobCard's signals/behavior but a full-width horizontal
         layout instead of the fixed-size grid tile — the "Lista" view."""
         from src.layouts.panels.mobs.mob_card import MobListRow
         row = MobListRow(m["id"])
         row.set_data(
             m.get("name", ""), int(m.get("level", 1) or 1), m.get("category", "outros"),
-            m.get("rarity", "normal"), m.get("element", ""), zones.get(m.get("zone_id", ""), ""),
+            m.get("element", ""), zones.get(m.get("zone_id", ""), ""),
             bool(m.get("favorite", 0)), resolve_asset_path(self._project_dir, m.get("image_path", "")),
+            zone_image=zone_image,
         )
         return row
 

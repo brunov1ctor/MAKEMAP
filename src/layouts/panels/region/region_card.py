@@ -15,14 +15,88 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QToolButton, QStackedWidget,
-    QLineEdit, QMenu, QSizePolicy, QComboBox,
+    QLineEdit, QMenu, QSizePolicy, QComboBox, QFileDialog,
 )
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtCore import Qt, Signal, QSize, QRectF
+from PySide6.QtGui import QColor, QPixmap, QPainter, QPainterPath, QDragEnterEvent, QDropEvent
 
 from src.styles.tokens import Colors
 
 _THUMB_W, _THUMB_H = 84, 72
+
+
+class _RegionThumbLabel(QLabel):
+    """RegionCard's thumbnail — accepts a dragged-in image file, or a
+    plain click to browse (fallback for no drag-and-drop), same idea as
+    the Mobs panel's portrait picker (_DropImageButton) — lets a região
+    carry a real reference photo instead of just the auto-generated
+    painted-mask preview/flat color swatch. Once a photo is set it takes
+    priority over both of those (see RegionCard.set_thumbnail/set_color)."""
+
+    image_dropped = Signal(str)  # local file path, dropped or picked
+
+    _ACCEPTED_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._photo_pixmap: QPixmap | None = None
+
+    def has_photo(self) -> bool:
+        return self._photo_pixmap is not None
+
+    def set_photo_pixmap(self, pixmap: QPixmap | None):
+        self._photo_pixmap = pixmap if pixmap and not pixmap.isNull() else None
+        self.update()
+
+    def paintEvent(self, event):
+        if self._photo_pixmap is None:
+            super().paintEvent(event)
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), 8, 8)
+        painter.setClipPath(path)
+        scaled = self._photo_pixmap.scaled(
+            self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation,
+        )
+        x = (self.width() - scaled.width()) // 2
+        y = (self.height() - scaled.height()) // 2
+        painter.drawPixmap(x, y, scaled)
+        painter.end()
+
+    def _first_accepted_path(self, mime_data) -> str | None:
+        for url in mime_data.urls():
+            path = url.toLocalFile()
+            if path and path.lower().endswith(self._ACCEPTED_SUFFIXES):
+                return path
+        return None
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls() and self._first_accepted_path(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        path = self._first_accepted_path(event.mimeData())
+        if path:
+            event.acceptProposedAction()
+            self.image_dropped.emit(path)
+        else:
+            event.ignore()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            path, _selected = QFileDialog.getOpenFileName(
+                self, "Selecionar Imagem da Região", "", "Imagens (*.png *.jpg *.jpeg *.webp)",
+            )
+            if path:
+                self.image_dropped.emit(path)
+        super().mousePressEvent(event)
 
 
 class RegionCard(QFrame):
@@ -36,11 +110,14 @@ class RegionCard(QFrame):
     visibility_toggled = Signal(str, bool)
     paint_cleared = Signal(str)  # "Apagar Pintura" — clears the mask, keeps the card
     terrain_changed = Signal(str, str)  # region_id, terrain_id ("" = Mapa Infinito)
+    image_changed = Signal(str, str)  # region_id, local file path (dropped or picked)
+    hover_entered = Signal(str)  # mouse entered the card — glow the matching região on the map
+    hover_left = Signal(str)
 
     def __init__(self, region_id: str, name: str, color: QColor, category_label: str = "",
                  area_m2: float = 0.0, object_count: int = 0, visible: bool = True,
                  thumbnail: QPixmap | None = None, terrain_label: str = "Mapa Infinito",
-                 terrain_id: str = "", parent=None):
+                 terrain_id: str = "", photo: QPixmap | None = None, parent=None):
         super().__init__(parent)
         self.region_id = region_id
         self._selected = False
@@ -59,15 +136,21 @@ class RegionCard(QFrame):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(8)
 
-        # ─── Left: panoramic thumbnail ───
-        self._thumb = QLabel()
+        # ─── Left: panoramic thumbnail — a user photo (dropped/picked via
+        # _RegionThumbLabel) takes priority over the auto painted-mask
+        # preview, which itself takes priority over the flat color swatch. ───
+        self._thumb = _RegionThumbLabel()
         self._thumb.setFixedSize(_THUMB_W, _THUMB_H)
         self._thumb.setScaledContents(True)
+        self._thumb.setToolTip("Clique ou arraste uma imagem")
         self._thumb.setStyleSheet(f"""
             background: {color.name()}; border-radius: 8px;
             border: 1px solid rgba(255,255,255,0.15);
         """)
-        if thumbnail is not None and not thumbnail.isNull():
+        self._thumb.image_dropped.connect(self._on_image_dropped)
+        if photo is not None and not photo.isNull():
+            self._thumb.set_photo_pixmap(photo)
+        elif thumbnail is not None and not thumbnail.isNull():
             self._thumb.setPixmap(thumbnail)
         layout.addWidget(self._thumb)
 
@@ -198,19 +281,31 @@ class RegionCard(QFrame):
             QToolButton:hover {{ background: rgba(255,255,255,0.08); color: {Colors.TEXT_PRIMARY}; }}
             QToolButton::menu-indicator {{ image: none; }}
         """)
-        menu = QMenu(self._menu_btn)
-        menu.setStyleSheet(f"""
+        menu_style = f"""
             QMenu {{
                 background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
                 border: 1px solid {Colors.BORDER}; padding: 4px;
             }}
             QMenu::item {{ padding: 4px 20px 4px 8px; border-radius: 3px; font-size: 10px; }}
             QMenu::item:selected {{ background: {Colors.ACCENT_DIM}; }}
-        """)
+        """
+        menu = QMenu(self._menu_btn)
+        menu.setStyleSheet(menu_style)
         menu.addAction("✎ Renomear", self._start_rename)
         menu.addAction("🖌 Editar", lambda: self.edit_requested.emit(self.region_id))
         menu.addAction("📍 Localizar", lambda: self.locate_requested.emit(self.region_id))
-        menu.addAction("🧹 Apagar Pintura", lambda: self.paint_cleared.emit(self.region_id))
+
+        # "Apagar Pintura" opens a submenu with the actual confirm action —
+        # keeps the confirmation contained inside the "..." menu itself
+        # (hovering it and clicking again is the deliberate two-step),
+        # instead of a banner elsewhere in the panel that's disconnected
+        # from which card it's about.
+        clear_menu = menu.addMenu("🧹 Apagar Pintura")
+        clear_menu.setStyleSheet(menu_style)
+        clear_menu.addAction(
+            "⚠ Confirmar — apagar toda a pintura", lambda: self.paint_cleared.emit(self.region_id)
+        )
+
         menu.addSeparator()
         menu.addAction("🗑 Excluir", lambda: self.deleted.emit(self.region_id))
         self._menu_btn.setMenu(menu)
@@ -223,6 +318,14 @@ class RegionCard(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self.selected.emit(self.region_id)
         super().mousePressEvent(event)
+
+    def enterEvent(self, event):
+        self.hover_entered.emit(self.region_id)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hover_left.emit(self.region_id)
+        super().leaveEvent(event)
 
     def set_selected(self, sel: bool):
         self._selected = sel
@@ -268,11 +371,6 @@ class RegionCard(QFrame):
         self._eye_btn.setText("👁" if self._visible else "🚫")
         self._eye_btn.setToolTip("Ocultar" if self._visible else "Mostrar")
 
-    def set_visible_state(self, visible: bool):
-        self._visible = visible
-        self._eye_btn.setChecked(visible)
-        self._refresh_eye()
-
     def set_name(self, name: str):
         self._name_label.setText(name)
 
@@ -315,15 +413,27 @@ class RegionCard(QFrame):
     def set_color(self, color: QColor):
         self._color = QColor(color)
         self._dot.setStyleSheet(f"background: {self._color.name()}; border-radius: 4px;")
-        if self._thumb.pixmap() is None or self._thumb.pixmap().isNull():
+        if not self._thumb.has_photo() and (self._thumb.pixmap() is None or self._thumb.pixmap().isNull()):
             self._thumb.setStyleSheet(f"""
                 background: {self._color.name()}; border-radius: 8px;
                 border: 1px solid rgba(255,255,255,0.15);
             """)
 
     def set_thumbnail(self, pixmap: QPixmap):
-        if pixmap and not pixmap.isNull():
+        """The auto-generated painted-mask preview — a no-op once a user
+        photo is set (see set_photo/_RegionThumbLabel), which always wins."""
+        if pixmap and not pixmap.isNull() and not self._thumb.has_photo():
             self._thumb.setPixmap(pixmap)
+
+    def set_photo(self, pixmap: QPixmap | None):
+        """The user-uploaded reference photo (dropped/picked on the
+        thumbnail, or loaded back from mobs.image_path-equivalent
+        painted_zones.image_path) — takes priority over both the mask
+        preview and the flat color swatch."""
+        self._thumb.set_photo_pixmap(pixmap)
+
+    def _on_image_dropped(self, path: str):
+        self.image_changed.emit(self.region_id, path)
 
     def set_stats(self, area_m2: float, object_count: int):
         self._area_m2 = area_m2
