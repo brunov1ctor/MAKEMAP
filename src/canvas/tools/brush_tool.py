@@ -1078,6 +1078,7 @@ class RegionBrushTool(BaseTool):
 
     name = "RegiãoPincel"
     cursor = Qt.CursorShape.CrossCursor
+    SPACING_RATIO = 0.08  # fraction of diameter between interpolated stamps along a drag
 
     def __init__(self, viewport: Viewport, history_engine=None):
         super().__init__(viewport)
@@ -1086,15 +1087,70 @@ class RegionBrushTool(BaseTool):
         self._active_boundary = None  # MapBoundary | None — constrains painting, like BrushTool
         self._mode = "add"  # "add" | "remove"
         self.radius = 50.0
-        self.softness = 0.5
+        # Hard-edged stamp (no radial alpha falloff) — a região's fill is
+        # meant to read as a solid, opaque area (Cities-Skylines district
+        # style), with "Opacidade" (RegionLayer.set_opacity) as the ONLY
+        # transparency control. The organic-looking silhouette still comes
+        # from _apply_edge_dither (always applied, regardless of softness)
+        # and the traced/morphological-closed outline in RegionLayer.
+        # _bordered_result — a soft internal gradient here would only
+        # leave the paint mask itself patchy/translucent in spots a single
+        # stamp didn't fully overlap, which read as "still see the terrain
+        # through it at 100% opacity" even though the slider was maxed.
+        self.softness = 0.0
         self._painting = False
         self._stroke_button: Qt.MouseButton | None = None
         self._before_state: dict | None = None
         self._stroke_finished_callbacks: list = []
+        self._minimap = None
+        self._cursor_item: QGraphicsEllipseItem | None = None
+        self._last_pos: QPointF | None = None
 
     def on_stroke_finished(self, callback):
         """Registra callback() chamado ao soltar o botão após pintar."""
         self._stroke_finished_callbacks.append(callback)
+
+    # ─── Cursor — same dashed-circle preview as BrushTool (see
+    # BrushTool._show_cursor/_hide_cursor above), diameter driven by
+    # radius*2 instead of a `size` property. ──────────────────────────
+
+    def set_minimap(self, minimap):
+        self._minimap = minimap
+
+    def update_cursor_size(self):
+        if self._cursor_item:
+            rect = self._cursor_item.rect()
+            cx = rect.x() + rect.width() / 2
+            cy = rect.y() + rect.height() / 2
+            d = self.radius * 2
+            self._cursor_item.setRect(cx - self.radius, cy - self.radius, d, d)
+
+    def activate(self):
+        super().activate()
+        self._show_cursor()
+
+    def deactivate(self):
+        super().deactivate()
+        self._hide_cursor()
+
+    def _show_cursor(self):
+        if self._cursor_item:
+            return
+        d = self.radius * 2
+        self._cursor_item = QGraphicsEllipseItem(-self.radius, -self.radius, d, d)
+        self._cursor_item.setPen(QPen(QColor(255, 255, 255, 150), 1.5, Qt.PenStyle.DashLine))
+        self._cursor_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        self._cursor_item.setZValue(10000)
+        self.viewport.scene().addItem(self._cursor_item)
+        if self._minimap:
+            self._minimap.register_hidden_item(self._cursor_item)
+
+    def _hide_cursor(self):
+        if self._cursor_item:
+            if self._minimap:
+                self._minimap.unregister_hidden_item(self._cursor_item)
+            self.viewport.scene().removeItem(self._cursor_item)
+            self._cursor_item = None
 
     def set_target(self, layer):
         """RegionLayer to paint into, or None to disarm painting."""
@@ -1136,6 +1192,7 @@ class RegionBrushTool(BaseTool):
     def set_params(self, radius: float | None = None, softness: float | None = None):
         if radius is not None:
             self.radius = max(1.0, radius)
+            self.update_cursor_size()
         if softness is not None:
             self.softness = max(0.0, min(1.0, softness))
 
@@ -1155,18 +1212,46 @@ class RegionBrushTool(BaseTool):
         if self._target is None:
             return
         params = self._params(erase)
-        # Deliberately always the soft circular stamp, never a grid-cell
-        # fill — a região is a freeform painted area (Cities Skylines
-        # style), not grid-tile placement. Snap/Grid is shared engine-wide
-        # (see CanvasEngine.snap) for the terrain Brush tool's own tile
+        # Deliberately always the circular stamp, never a grid-cell fill —
+        # a região is a freeform painted area (Cities Skylines style), not
+        # grid-tile placement. Snap/Grid is shared engine-wide (see
+        # CanvasEngine.snap) for the terrain Brush tool's own tile
         # alignment; this tool never wired into it, precisely so leaving
         # Snap on from terrain painting doesn't silently turn the next
         # região stroke into one giant rectangular grid-cell fill instead
-        # of a small soft stamp.
+        # of a small circular stamp.
         local = self._target.scene_to_local(scene_pos)
         clip_path = self._boundary_clip_path_local()
         self._target.paint_at(local, params, clip_path)
         self._target.update_live()
+
+    def _continue_paint(self, scene_pos: QPointF, erase: bool):
+        """Interpolates stamps between the last painted point and
+        `scene_pos` instead of stamping only at `scene_pos` itself — a
+        fast drag can jump farther between two mouse-move events than one
+        stamp's own footprint, leaving unpainted gaps inside the stroke
+        (worse now that stamps are hard-edged, see RegionBrushTool.
+        __init__'s softness note — there's no soft overlap to paper over
+        the seam anymore). Same gap-closing idea as BrushTool's own
+        _continue_terrain_stroke."""
+        if self._target is None or self._last_pos is None:
+            return
+        dx = scene_pos.x() - self._last_pos.x()
+        dy = scene_pos.y() - self._last_pos.y()
+        dist = math.hypot(dx, dy)
+        spacing = max(1.0, self.radius * 2 * self.SPACING_RATIO)
+        if dist < spacing:
+            return
+        params = self._params(erase)
+        clip_path = self._boundary_clip_path_local()
+        steps = max(1, math.ceil(dist / spacing))
+        for i in range(1, steps + 1):
+            t = i / steps
+            pt = QPointF(self._last_pos.x() + dx * t, self._last_pos.y() + dy * t)
+            local = self._target.scene_to_local(pt)
+            self._target.paint_at(local, params, clip_path)
+        self._target.update_live()
+        self._last_pos = scene_pos
 
     def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
         # Left = paint (add), Right = erase — no on-screen mode toggle
@@ -1180,16 +1265,23 @@ class RegionBrushTool(BaseTool):
         if self._history:
             self._before_state = self._target.capture_state()
         self._paint(scene_pos, erase=(self._stroke_button == Qt.MouseButton.RightButton))
+        self._last_pos = scene_pos
 
     def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
+        if self._cursor_item:
+            self._cursor_item.setRect(
+                scene_pos.x() - self.radius, scene_pos.y() - self.radius,
+                self.radius * 2, self.radius * 2,
+            )
         if self._painting:
-            self._paint(scene_pos, erase=(self._stroke_button == Qt.MouseButton.RightButton))
+            self._continue_paint(scene_pos, erase=(self._stroke_button == Qt.MouseButton.RightButton))
 
     def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
         if event.button() != self._stroke_button or not self._painting:
             return
         self._painting = False
         self._stroke_button = None
+        self._last_pos = None
         if self._target is not None:
             self._target.finish_stroke()
             if self._history and self._before_state is not None:

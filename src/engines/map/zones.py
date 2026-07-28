@@ -11,4 +11,4 @@ from __future__ import annotations
 
 from PySide6.QtGui import QColor
 
-DEFAULT_ZONE_COLOR = QColor(120, 200, 120, 90)
+DEFAULT_ZONE_COLOR = QColor(120, 200, 120, 255)

@@ -27,7 +27,7 @@ from src.layouts.panels.marker.edit_panel import MarkerEditPanel
 from src.layouts.panels.light.panel import LightPanel
 from src.layouts.panels.light.edit_panel import LightEditPanel
 from src.layouts.panels.assets.effects_panel import AssetEffectsPanel
-from src.layouts.panels.explorer import ExplorerPanel, FilterPanel
+from src.layouts.panels.explorer import ExplorerPanel
 from src.layouts.panels.canvas_area import CanvasArea
 from src.layouts.panels.inspector import InspectorPanel, QuestPanel, LayersPanel
 from src.layouts.panels.progression import ProgressionBar
@@ -322,9 +322,7 @@ class MainLayout(QWidget):
         left_lay.setContentsMargins(4, 4, 4, 4)
         left_lay.setSpacing(8)
         self.left_panel = ExplorerPanel()
-        self.filters_panel = FilterPanel()
         left_lay.addWidget(self.left_panel, 1)
-        left_lay.addWidget(self.filters_panel, 0)
         left_lay.addStretch()
         self.left_panel.collapsed_changed.connect(
             lambda collapsed: left_lay.setStretchFactor(self.left_panel, 0 if collapsed else 1)
@@ -364,6 +362,7 @@ class MainLayout(QWidget):
         self.minimap = MiniMap(self)
         self.minimap.set_viewport(self.canvas.engine.viewport)
         self.canvas.engine._brush_tool.set_minimap(self.minimap)
+        self.canvas.engine._region_brush_tool.set_minimap(self.minimap)
 
         # ═══ Floating Coordinator ═══
         # Shared obstacle-avoidance registry for every panel that can move or

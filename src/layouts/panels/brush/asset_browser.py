@@ -415,6 +415,21 @@ class AssetBrowserPanel(QFrame):
             btn.favorited.connect(self.favorite_toggled.emit)
             btn.effects_requested.connect(self.effects_requested.emit)
             self._grid_layout.addWidget(btn)
+            # QWidget.setParent() (which addWidget() does internally) hides
+            # the widget as a side effect — it only becomes visible again
+            # once Qt gets around to it, which isn't guaranteed to happen
+            # before FlowLayout._do_layout() runs below (it SKIPS anything
+            # not yet isVisible(), same check the search filter relies on
+            # to skip hidden cards). With a big grid (e.g. 17+ Terrain
+            # cards) enough is visible by chance/later passes that it looks
+            # fine; with exactly one card (e.g. a category with a single
+            # asset, like "Água" with just "Oceano") that race can lose
+            # outright — the card never gets positioned by our own layout
+            # and is left stuck at Qt's raw default (0, 0, 640, 480)
+            # geometry, rendering as a tiny detached icon with its name
+            # floating far outside the card. Showing it immediately here
+            # removes the race entirely.
+            btn.show()
             self._asset_buttons.append(btn)
 
         # FlowLayout's height only stays correct if _grid_container is

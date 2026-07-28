@@ -124,7 +124,7 @@ class RegionMediator:
             self._l.region_panel.add_region_card(
                 zone.id, zone.name, zone.category_key, zone.color,
                 area_m2=layer.area_m2(), object_count=self._count_objects_in(zone),
-                visible=zone.visible, thumbnail=layer.thumbnail(),
+                visible=zone.visible,
                 terrain_label=self._terrain_label(zone.terrain_id),
                 terrain_id=zone.terrain_id, photo=photo,
             )
@@ -166,7 +166,7 @@ class RegionMediator:
             return
         self._l.region_panel.add_region_card(
             zone.id, zone.name, zone.category_key, zone.color,
-            area_m2=0.0, object_count=0, visible=zone.visible, thumbnail=None,
+            area_m2=0.0, object_count=0, visible=zone.visible,
             terrain_label=self._terrain_label(zone.terrain_id),
         )
         self._persist_create(zone)
@@ -220,11 +220,11 @@ class RegionMediator:
         return zone.name if zone else ""
 
     def zone_thumbnail(self, zone_id: str, size: int = 24) -> QPixmap | None:
-        """Small preview image for `zone_id` — same "user photo, else
-        painted-mask preview" priority RegionCard's own thumbnail uses
-        (see RegionCard.__init__/set_thumbnail). Used by the Mobs module
-        to badge a mob's card with the actual look of the região it's
-        tagged to, image-only (no name/icon) — see MobCard.set_data."""
+        """Small preview image for `zone_id` — user photo if set, else a
+        painted-mask preview (unlike RegionCard's own thumbnail, which
+        never shows the mask — see RegionCard.set_color). Used by the Mobs
+        module to badge a mob's card with the actual look of the região
+        it's tagged to, image-only (no name/icon) — see MobCard.set_data."""
         zone = self._zones.get(zone_id)
         if not zone:
             return None
@@ -349,7 +349,6 @@ class RegionMediator:
         card = self._l.region_panel.get_card(zone.id)
         if card:
             card.set_stats(area_m2, object_count)
-            card.set_thumbnail(zone.layer.thumbnail())
         zone.layer.update_label(zone.name, zone.stars)
         self._persist_mask(zone)
 
@@ -401,7 +400,6 @@ class RegionMediator:
         card = self._l.region_panel.get_card(zone.id)
         if card:
             card.set_color(zone.color)
-            card.set_thumbnail(zone.layer.thumbnail())
         self._persist_fields(zone, color=color.name(QColor.NameFormat.HexArgb))
 
     def on_card_visibility_toggled(self, region_id: str, visible: bool):
@@ -452,7 +450,6 @@ class RegionMediator:
         card = self._l.region_panel.get_card(region_id)
         if card:
             card.set_stats(0.0, 0)
-            card.set_thumbnail(zone.layer.thumbnail())
         self._persist_mask(zone)
 
     def _on_radius_changed(self, radius: float):

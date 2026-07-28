@@ -19,6 +19,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsPixmapItem
 
 from src.engines.map.terrain_layer import TerrainLayer, TerrainBrushParams, morphological_close
+from src.engines.map.region_styles import apply_style
 from src.canvas.item_utils import suppress_selection_decoration, enable_hover_glow
 
 # Downsample size used for the cheap area/thumbnail-bounds scan — full-res
@@ -58,8 +59,17 @@ class RegionLayer:
         self._label_stars = 0
 
     def _apply_color_texture(self):
+        # Fill is always painted fully opaque — set_opacity's item-level
+        # opacity is the ONLY transparency knob for a região now. Any alpha
+        # baked into `self._color` itself (older regions persisted before
+        # this, or a translucent pick from the color picker's own "A"
+        # slider) would otherwise cap how opaque the fill could ever look,
+        # so dragging "Opacidade" to 100% still showed the terrain through
+        # — see set_opacity's own docstring for the same reasoning.
+        opaque_color = QColor(self._color)
+        opaque_color.setAlpha(255)
         pixmap = QPixmap(1, 1)
-        pixmap.fill(self._color)
+        pixmap.fill(opaque_color)
         self._terrain.set_texture(pixmap, scale=1.0, rotation=0.0)
         self._reapply_style()
 
@@ -103,29 +113,22 @@ class RegionLayer:
         self._style = style_key or "Nenhum"
         self._reapply_style()
 
-    def _reapply_style(self, live: bool = False):
+    def _reapply_style(self):
         """Re-derives the item's displayed pixmap from the plain composited
-        result — must be re-run after every recomposite (paint, color
-        change, mask reload), since those all reset the item's pixmap back
-        to the unstyled flat color.
+        (bordered) result — must be re-run after every non-live recomposite
+        (stroke finished, color change, mask reload), since those all reset
+        the item's pixmap back to the unstyled flat color.
 
-        `live=True` (called from update_live, i.e. every mouse-move while
-        dragging) skips the crisp-border pass — it's restricted to the
-        opaque bounding box so it's cheap, but not "every mouse-move on a
-        4096px layer" cheap. The border always reappears once the stroke
-        actually finishes.
-        """
-        img = QImage(self._terrain._result if live else self._bordered_result())
-        if self._style == "Vapor":
-            painter = QPainter(img)
-            # Heat-haze look: soften the fill (reduced alpha) and desaturate
-            # it toward a pale tint — "usa a cor mas diminui a opacidade e
-            # aplica vapor", per the requested effect.
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-            painter.fillRect(img.rect(), QColor(255, 255, 255, 150))
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceAtop)
-            painter.fillRect(img.rect(), QColor(235, 235, 220, 70))
-            painter.end()
+        The cheap per-mouse-move path lives in update_live() instead — it
+        used to call this same full-layer method on every drag tick (only
+        skipping the border pass), which meant a full 4096px image copy +
+        style pass + pixmap conversion on top of the one TerrainLayer.
+        update_live() already does, making a estilizada região noticeably
+        laggier to paint than plain terrain. update_live() now restyles
+        only the stroke's own dirty rect; the crisp border still only
+        reappears once the stroke actually finishes."""
+        img = QImage(self._bordered_result())
+        apply_style(self._style, img)
         self._terrain.item.setPixmap(QPixmap.fromImage(img))
 
     def _bordered_result(self) -> QImage:
@@ -226,7 +229,27 @@ class RegionLayer:
 
     def update_live(self):
         self._terrain.update_live()
-        self._reapply_style(live=True)
+        if self._style == "Nenhum":
+            return  # terrain's own live pixmap is already the final look
+        dirty = self._terrain._stroke_dirty
+        if not dirty:
+            return
+        bounds = QRect(0, 0, self._terrain._result.width(), self._terrain._result.height())
+        clamped = dirty.intersected(bounds)
+        if clamped.isEmpty():
+            return
+        # Restyle only the crop this stroke has actually touched so far,
+        # not the whole (possibly 4096px) layer — see _reapply_style's
+        # docstring for why the old always-full-layer version made
+        # estilizada regions laggy to paint.
+        crop = self._terrain._result.copy(clamped)
+        apply_style(self._style, crop)
+        pixmap = self._terrain.item.pixmap()
+        painter = QPainter(pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        painter.drawImage(clamped.topLeft(), crop)
+        painter.end()
+        self._terrain.item.setPixmap(pixmap)
 
     def finish_stroke(self):
         self._terrain.finish_stroke()

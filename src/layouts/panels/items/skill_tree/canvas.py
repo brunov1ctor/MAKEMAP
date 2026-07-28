@@ -69,6 +69,7 @@ from src.styles.tokens import Colors
 from src.layouts.panels.mobs.categories import item_rarity_color
 from src.layouts.panels.mobs.edit_widgets import _CatalogPickerDialog
 from src.layouts.panels.items.constants import panel_frame_style, sub_header, SKILL_FLAGS
+from src.engines.core.history import Command, HistoryEngine
 
 from .items import _parse_json_dict, _NodeItem, _EdgeItem, _ConnectPreviewItem
 from .view import _TreeView
@@ -76,6 +77,103 @@ from .stats import _TreeStatsPanel
 from .tab_creator import _TreeTabCreatePanel
 
 logger = logging.getLogger("MAKEMAP")
+
+
+# ── undo/redo commands (connection create/delete/redirect, node delete) ──
+# Kept private to this module — SkillTreeCanvas is the only thing that
+# constructs/pushes them, through its own HistoryEngine (see __init__).
+
+class _AddEdgeCommand(Command):
+    def __init__(self, canvas: "SkillTreeCanvas", src: _NodeItem, dst: _NodeItem):
+        self.canvas = canvas
+        self.src = src
+        self.dst = dst
+        self.edge: _EdgeItem | None = None
+        self.description = "Criar conexão"
+
+    def redo(self):
+        if self.edge is None:
+            self.edge = self.canvas._add_edge_item(self.src, self.dst)
+        else:
+            self.canvas._scene.addItem(self.edge)
+            self.canvas._edges.append(self.edge)
+        self.canvas._persist()
+
+    def undo(self):
+        self.canvas._scene.removeItem(self.edge)
+        self.canvas._edges.remove(self.edge)
+        self.canvas._persist()
+
+
+class _DeleteEdgesCommand(Command):
+    def __init__(self, canvas: "SkillTreeCanvas", edges: list[_EdgeItem]):
+        self.canvas = canvas
+        self.edges = edges
+        self.description = "Remover conexão" if len(edges) == 1 else f"Remover {len(edges)} conexões"
+
+    def redo(self):
+        for e in self.edges:
+            self.canvas._scene.removeItem(e)
+            self.canvas._edges.remove(e)
+        self.canvas._persist()
+
+    def undo(self):
+        for e in self.edges:
+            self.canvas._scene.addItem(e)
+            self.canvas._edges.append(e)
+        self.canvas._persist()
+
+
+class _RedirectEdgeCommand(Command):
+    def __init__(self, canvas: "SkillTreeCanvas", edge: _EdgeItem, end: str, old_node: _NodeItem, new_node: _NodeItem):
+        self.canvas = canvas
+        self.edge = edge
+        self.end = end
+        self.old_node = old_node
+        self.new_node = new_node
+        self.description = "Redirecionar conexão"
+
+    def _apply(self, node: _NodeItem):
+        setattr(self.edge, self.end, node)
+        self.edge.update_path()
+        self.canvas._persist()
+
+    def redo(self):
+        self._apply(self.new_node)
+
+    def undo(self):
+        self._apply(self.old_node)
+
+
+class _DeleteNodeCommand(Command):
+    """Cascades to every edge touching the node — captured up front so undo
+    can restore both the node and its exact connections in one step."""
+
+    def __init__(self, canvas: "SkillTreeCanvas", node: _NodeItem, edges: list[_EdgeItem]):
+        self.canvas = canvas
+        self.node = node
+        self.edges = edges
+        self.description = "Remover nó"
+
+    def redo(self):
+        for e in self.edges:
+            self.canvas._scene.removeItem(e)
+            self.canvas._edges.remove(e)
+        self.canvas._scene.removeItem(self.node)
+        self.canvas._nodes.pop(self.node.node_id, None)
+        if self.canvas._selected_node is self.node:
+            self.canvas._selected_node = None
+        self.canvas._persist()
+        self.canvas._refresh_tree_stats()
+
+    def undo(self):
+        self.canvas._scene.addItem(self.node)
+        self.canvas._nodes[self.node.node_id] = self.node
+        for e in self.edges:
+            self.canvas._scene.addItem(e)
+            self.canvas._edges.append(e)
+        self.canvas._persist()
+        self.canvas._refresh_tree_stats()
 
 
 class SkillTreeCanvas(QWidget):
@@ -94,7 +192,10 @@ class SkillTreeCanvas(QWidget):
         self._edges: list[_EdgeItem] = []
         self._selected_node: _NodeItem | None = None
         self._connecting_from: _NodeItem | None = None
+        self._redirecting_edge: _EdgeItem | None = None
+        self._redirecting_end: str | None = None
         self._temp_edge_line: "_ConnectPreviewItem | None" = None
+        self._history = HistoryEngine(self)
         self._zoom = 1.0
         self._active_theme_color = ""  # active tree's node border/chip theme, if set
         self._active_text_color = ""   # active tree's node name/rank text color, if set
@@ -194,7 +295,7 @@ class SkillTreeCanvas(QWidget):
         self._add_node_btn.clicked.connect(self._on_add_node_clicked)
         footer.addWidget(self._add_node_btn)
 
-        hints = QLabel("Arraste o card pra mover • +/− ajusta o rank • alça 🔗 conecta • Del remove a conexão selecionada")
+        hints = QLabel("Arraste o card pra mover • +/− ajusta o rank • alça 🔗 conecta • arraste a ponta da seta pra redirecionar • Del/✕ remove • Ctrl+Z desfaz")
         hints.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 8px; background: transparent; border: none;")
         # Don't let this long line dictate the column's minimum width (it would
         # break the 2×3 grid alignment) — it can clip if the column is narrow.
@@ -515,6 +616,10 @@ class SkillTreeCanvas(QWidget):
         self._nodes.clear()
         self._edges.clear()
         self._selected_node = None
+        # The scene.clear() above destroys every item any pushed Command
+        # still references (see _AddEdgeCommand etc.) — stale undo/redo
+        # entries from the previous tab would operate on dead objects.
+        self._history.clear()
         tree = self._active_tree()
         if not tree:
             self._active_theme_color = ""
@@ -562,7 +667,10 @@ class SkillTreeCanvas(QWidget):
         self._temp_edge_line = preview
 
     def _update_connect(self, scene_pos: QPointF):
-        if self._connecting_from and self._temp_edge_line:
+        # Shared by both the create-connection drag (_connecting_from) and
+        # the re-target drag (_redirecting_edge) below — the temp preview
+        # line's own presence is enough to know a drag is live.
+        if self._temp_edge_line:
             self._temp_edge_line.set_end(scene_pos)
 
     def _finish_connect(self, scene_pos: QPointF):
@@ -578,17 +686,66 @@ class SkillTreeCanvas(QWidget):
             None,
         )
         if dst and not self._edge_exists(src, dst):
-            self._add_edge_item(src, dst)
-            self._persist()
+            self._history.push(_AddEdgeCommand(self, src, dst))
 
     def _delete_selected_edges(self):
         selected = [e for e in self._edges if e.isSelected()]
         if not selected:
             return
-        for e in selected:
-            self._scene.removeItem(e)
-            self._edges.remove(e)
-        self._persist()
+        self._history.push(_DeleteEdgesCommand(self, selected))
+
+    def _delete_edge(self, edge: _EdgeItem):
+        """Single-edge variant used by the "✕" button drawn on a selected
+        edge (see _EdgeItem._draw_delete_button) — same command as Delete/
+        Backspace so both go through the same undo entry shape."""
+        if edge not in self._edges:
+            return
+        self._history.push(_DeleteEdgesCommand(self, [edge]))
+
+    def _delete_node(self, node: "_NodeItem | None"):
+        """Used by both the Delete key (selected node) and the "✕" button
+        drawn on a selected card — cascades to every edge touching it."""
+        if node is None or node.node_id not in self._nodes:
+            return
+        edges = [e for e in self._edges if e.src is node or e.dst is node]
+        self._history.push(_DeleteNodeCommand(self, node, edges))
+
+    # ── redirecting an existing connection's endpoint to another node ──
+
+    def _begin_redirect(self, edge: _EdgeItem, end: str, scene_pos: QPointF):
+        if self._temp_edge_line:
+            self._scene.removeItem(self._temp_edge_line)
+            self._temp_edge_line = None
+        self._redirecting_edge = edge
+        self._redirecting_end = end
+        anchor = edge.dst if end == "src" else edge.src  # the end NOT being dragged
+        preview = _ConnectPreviewItem(anchor.center(), scene_pos, self)
+        self._scene.addItem(preview)
+        self._temp_edge_line = preview
+
+    def _finish_redirect(self, scene_pos: QPointF):
+        edge = self._redirecting_edge
+        end = self._redirecting_end
+        self._redirecting_edge = None
+        self._redirecting_end = None
+        if self._temp_edge_line:
+            self._scene.removeItem(self._temp_edge_line)
+            self._temp_edge_line = None
+        if not edge:
+            return
+        fixed_node = edge.dst if end == "src" else edge.src
+        old_node = getattr(edge, end)
+        target = next(
+            (n for n in self._nodes.values() if n is not fixed_node and n.sceneBoundingRect().contains(scene_pos)),
+            None,
+        )
+        if not target or target is old_node:
+            return
+        prospective_src = target if end == "src" else edge.src
+        prospective_dst = target if end == "dst" else edge.dst
+        if self._edge_exists_excluding(edge, prospective_src, prospective_dst):
+            return
+        self._history.push(_RedirectEdgeCommand(self, edge, end, old_node, target))
 
     # ── interaction ──
 
@@ -670,6 +827,12 @@ class SkillTreeCanvas(QWidget):
 
     def _edge_exists(self, a: _NodeItem, b: _NodeItem) -> bool:
         return any((e.src is a and e.dst is b) or (e.src is b and e.dst is a) for e in self._edges)
+
+    def _edge_exists_excluding(self, exclude: _EdgeItem, a: _NodeItem, b: _NodeItem) -> bool:
+        return any(
+            e is not exclude and ((e.src is a and e.dst is b) or (e.src is b and e.dst is a))
+            for e in self._edges
+        )
 
     def _on_node_moving(self, node: _NodeItem):
         for e in self._edges:

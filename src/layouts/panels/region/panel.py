@@ -176,10 +176,10 @@ class RegionSettingsPanel(QFrame):
 
     def add_region_card(self, region_id: str, name: str, category_label: str, color: QColor,
                          area_m2: float = 0.0, object_count: int = 0, visible: bool = True,
-                         thumbnail=None, terrain_label: str = "Mapa Infinito",
+                         terrain_label: str = "Mapa Infinito",
                          terrain_id: str = "", photo=None) -> RegionCard:
         card = RegionCard(region_id, name, color, category_label, area_m2, object_count,
-                           visible, thumbnail, terrain_label, terrain_id, photo)
+                           visible, terrain_label, terrain_id, photo)
         card.selected.connect(self._on_card_selected)
         card.deleted.connect(self._on_card_deleted)
         card.renamed.connect(self.region_renamed.emit)

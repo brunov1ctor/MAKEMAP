@@ -29,9 +29,10 @@ class _RegionThumbLabel(QLabel):
     """RegionCard's thumbnail — accepts a dragged-in image file, or a
     plain click to browse (fallback for no drag-and-drop), same idea as
     the Mobs panel's portrait picker (_DropImageButton) — lets a região
-    carry a real reference photo instead of just the auto-generated
-    painted-mask preview/flat color swatch. Once a photo is set it takes
-    priority over both of those (see RegionCard.set_thumbnail/set_color)."""
+    carry a real reference photo instead of just the flat color swatch.
+    Once a photo is set it takes priority over the swatch (see
+    RegionCard.set_color) and stays fixed regardless of how the região
+    itself is painted — it's a reference image, not a live preview."""
 
     image_dropped = Signal(str)  # local file path, dropped or picked
 
@@ -116,7 +117,7 @@ class RegionCard(QFrame):
 
     def __init__(self, region_id: str, name: str, color: QColor, category_label: str = "",
                  area_m2: float = 0.0, object_count: int = 0, visible: bool = True,
-                 thumbnail: QPixmap | None = None, terrain_label: str = "Mapa Infinito",
+                 terrain_label: str = "Mapa Infinito",
                  terrain_id: str = "", photo: QPixmap | None = None, parent=None):
         super().__init__(parent)
         self.region_id = region_id
@@ -137,8 +138,10 @@ class RegionCard(QFrame):
         layout.setSpacing(8)
 
         # ─── Left: panoramic thumbnail — a user photo (dropped/picked via
-        # _RegionThumbLabel) takes priority over the auto painted-mask
-        # preview, which itself takes priority over the flat color swatch. ───
+        # _RegionThumbLabel) takes priority over the flat color swatch;
+        # never the painted mask's own shape, which would make the
+        # thumbnail visibly change on every stroke instead of staying a
+        # stable "what this região represents" preview. ───
         self._thumb = _RegionThumbLabel()
         self._thumb.setFixedSize(_THUMB_W, _THUMB_H)
         self._thumb.setScaledContents(True)
@@ -150,8 +153,6 @@ class RegionCard(QFrame):
         self._thumb.image_dropped.connect(self._on_image_dropped)
         if photo is not None and not photo.isNull():
             self._thumb.set_photo_pixmap(photo)
-        elif thumbnail is not None and not thumbnail.isNull():
-            self._thumb.setPixmap(thumbnail)
         layout.addWidget(self._thumb)
 
         # ─── Center: name / tipo / stats ───
@@ -179,9 +180,8 @@ class RegionCard(QFrame):
         self._name_edit = QLineEdit(name)
         self._name_edit.setStyleSheet(f"""
             QLineEdit {{
-                color: {Colors.TEXT_PRIMARY}; font-size: 12px;
-                background: rgba(255,255,255,0.08); border: 1px solid {Colors.ACCENT};
-                border-radius: 3px; padding: 0 4px;
+                color: {Colors.TEXT_PRIMARY}; font-size: 12px; font-weight: bold;
+                background: transparent; border: none; padding: 0;
             }}
         """)
         self._name_edit.returnPressed.connect(self._finish_rename)
@@ -291,23 +291,23 @@ class RegionCard(QFrame):
         """
         menu = QMenu(self._menu_btn)
         menu.setStyleSheet(menu_style)
-        menu.addAction("✎ Renomear", self._start_rename)
-        menu.addAction("🖌 Editar", lambda: self.edit_requested.emit(self.region_id))
-        menu.addAction("📍 Localizar", lambda: self.locate_requested.emit(self.region_id))
+        menu.addAction("Renomear", self._start_rename)
+        menu.addAction("Editar", lambda: self.edit_requested.emit(self.region_id))
+        menu.addAction("Localizar", lambda: self.locate_requested.emit(self.region_id))
 
         # "Apagar Pintura" opens a submenu with the actual confirm action —
         # keeps the confirmation contained inside the "..." menu itself
         # (hovering it and clicking again is the deliberate two-step),
         # instead of a banner elsewhere in the panel that's disconnected
         # from which card it's about.
-        clear_menu = menu.addMenu("🧹 Apagar Pintura")
+        clear_menu = menu.addMenu("Apagar Pintura")
         clear_menu.setStyleSheet(menu_style)
         clear_menu.addAction(
-            "⚠ Confirmar — apagar toda a pintura", lambda: self.paint_cleared.emit(self.region_id)
+            "Confirmar — apagar toda a pintura", lambda: self.paint_cleared.emit(self.region_id)
         )
 
         menu.addSeparator()
-        menu.addAction("🗑 Excluir", lambda: self.deleted.emit(self.region_id))
+        menu.addAction("Excluir", lambda: self.deleted.emit(self.region_id))
         self._menu_btn.setMenu(menu)
         actions_col.addWidget(self._menu_btn)
         actions_col.addStretch()
@@ -413,24 +413,20 @@ class RegionCard(QFrame):
     def set_color(self, color: QColor):
         self._color = QColor(color)
         self._dot.setStyleSheet(f"background: {self._color.name()}; border-radius: 4px;")
-        if not self._thumb.has_photo() and (self._thumb.pixmap() is None or self._thumb.pixmap().isNull()):
+        if not self._thumb.has_photo():
             self._thumb.setStyleSheet(f"""
                 background: {self._color.name()}; border-radius: 8px;
                 border: 1px solid rgba(255,255,255,0.15);
             """)
 
-    def set_thumbnail(self, pixmap: QPixmap):
-        """The auto-generated painted-mask preview — a no-op once a user
-        photo is set (see set_photo/_RegionThumbLabel), which always wins."""
-        if pixmap and not pixmap.isNull() and not self._thumb.has_photo():
-            self._thumb.setPixmap(pixmap)
-
     def set_photo(self, pixmap: QPixmap | None):
         """The user-uploaded reference photo (dropped/picked on the
         thumbnail, or loaded back from mobs.image_path-equivalent
-        painted_zones.image_path) — takes priority over both the mask
-        preview and the flat color swatch."""
+        painted_zones.image_path) — takes priority over the flat color
+        swatch (see set_color)."""
         self._thumb.set_photo_pixmap(pixmap)
+        if pixmap is None or pixmap.isNull():
+            self.set_color(self._color)
 
     def _on_image_dropped(self, path: str):
         self.image_changed.emit(self.region_id, path)

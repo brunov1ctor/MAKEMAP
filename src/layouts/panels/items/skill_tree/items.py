@@ -15,7 +15,7 @@ import uuid
 from PySide6.QtWidgets import QGraphicsObject, QGraphicsPathItem
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QFont, QPixmap, QPolygonF,
+    QPainter, QColor, QPen, QBrush, QPainterPath, QPainterPathStroker, QFont, QPixmap, QPolygonF,
 )
 
 from src.styles.tokens import Colors
@@ -44,8 +44,10 @@ class _NodeItem(QGraphicsObject):
 
     NODE_W = 64   # card width (image area)
     NODE_H = 64   # card height (image area)
-    HANDLE_R = 9  # connect-handle radius
+    HANDLE_R = 9  # connect-handle radius (drawn size)
+    HANDLE_HIT_R = 13  # bigger, invisible grab radius — the drawn circle alone is a fussy target
     CONNECT_ICON = "🔗"  # deliberately different from the "+" used to add nodes
+    DELETE_BTN_R = 8  # radius of the "✕" button shown when selected (top-left corner)
 
     clicked = Signal(object, object)     # (self, Qt.KeyboardModifiers)
     moved = Signal(object)               # self (on drag release)
@@ -70,8 +72,9 @@ class _NodeItem(QGraphicsObject):
         self._connecting = False
         self._rank_button_press = False
         self._hovering = False
+        self._handle_hovering = False
         self.setAcceptHoverEvents(True)
-        self.setToolTip("Arraste o card para mover • arraste o 🔗 para conectar • +/− ajusta o rank")
+        self.setToolTip("Arraste o card para mover • arraste o 🔗 para conectar • +/− ajusta o rank • selecione e clique no ✕ para remover")
 
     def boundingRect(self) -> QRectF:
         hw, hh = self.NODE_W / 2, self.NODE_H / 2
@@ -81,7 +84,7 @@ class _NodeItem(QGraphicsObject):
         # margin here means Qt only clears part of what paint() actually
         # draws each frame, leaving a smeared "ghost" trail behind exactly
         # like the old value (4px) did for the handle/hover glow.
-        m = 10
+        m = 14
         return QRectF(-hw - m, -hh - m, self.NODE_W + 2 * m, self.NODE_H + 48)
 
     def center(self) -> QPointF:
@@ -99,6 +102,23 @@ class _NodeItem(QGraphicsObject):
         c = self._handle_center()
         hr = self.HANDLE_R
         return QRectF(c.x() - hr, c.y() - hr, 2 * hr, 2 * hr)
+
+    def _handle_hit_rect(self) -> QRectF:
+        """Larger than the drawn circle (_handle_rect) — grabbing the tiny
+        18px connect handle by its exact pixels was fussy; the extra margin
+        is invisible (no bigger circle painted) but still counts as a hit
+        in mousePressEvent/hoverMoveEvent below."""
+        c = self._handle_center()
+        hr = self.HANDLE_HIT_R
+        return QRectF(c.x() - hr, c.y() - hr, 2 * hr, 2 * hr)
+
+    def _delete_button_rect(self) -> QRectF:
+        """Top-left corner of the card — only meaningful (and only drawn/
+        hit-tested) while the node is selected, so it doesn't compete with
+        the connect handle (bottom-right) or the rank +/- buttons below."""
+        card = self._card_rect()
+        r = self.DELETE_BTN_R
+        return QRectF(card.left() - r * 0.4, card.top() - r * 0.4, 2 * r, 2 * r)
 
     def _rank_button_rects(self) -> tuple[QRectF, QRectF]:
         """(minus_rect, plus_rect) — hit targets flanking the rank text
@@ -257,13 +277,36 @@ class _NodeItem(QGraphicsObject):
             p.drawText(rect, Qt.AlignmentFlag.AlignCenter, symbol)
 
         # Connect handle — a distinct chain-link icon, not the "+" used to
-        # add nodes, so the two actions read as clearly different.
+        # add nodes, so the two actions read as clearly different. Grows +
+        # gets a glow ring while the cursor is over its (bigger, invisible)
+        # hit area (see _handle_hit_rect/hoverMoveEvent) — confirms to the
+        # user, before they even press, that this exact spot starts a drag.
         handle_rect = self._handle_rect()
+        if self._handle_hovering:
+            glow = handle_rect.adjusted(-4, -4, 4, 4)
+            glow_color = QColor(Colors.ACCENT)
+            glow_color.setAlpha(90)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(glow_color))
+            p.drawEllipse(glow)
+            handle_rect = handle_rect.adjusted(-1.5, -1.5, 1.5, 1.5)
         p.setPen(QPen(QColor(Colors.ACCENT), 1.5))
         p.setBrush(QBrush(QColor(20, 26, 40, 230)))
         p.drawEllipse(handle_rect)
         p.setFont(QFont("Segoe UI Emoji", 8))
         p.drawText(handle_rect, Qt.AlignmentFlag.AlignCenter, self.CONNECT_ICON)
+
+        # Delete button — only while selected, so it doesn't clutter every
+        # card at rest (see SkillTreeCanvas._delete_node, wired from
+        # mousePressEvent below).
+        if self._selected:
+            del_rect = self._delete_button_rect()
+            p.setPen(QPen(QColor("#F14C4C").darker(130), 1))
+            p.setBrush(QBrush(QColor("#F14C4C")))
+            p.drawEllipse(del_rect)
+            p.setPen(QColor("#FFFFFF"))
+            p.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            p.drawText(del_rect, Qt.AlignmentFlag.AlignCenter, "✕")
 
     def itemChange(self, change, value):
         if change == QGraphicsObject.GraphicsItemChange.ItemPositionHasChanged:
@@ -277,10 +320,38 @@ class _NodeItem(QGraphicsObject):
 
     def hoverLeaveEvent(self, event):
         self._hovering = False
-        self.update()
+        if self._handle_hovering:
+            self._handle_hovering = False
+            self.update()
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
         super().hoverLeaveEvent(event)
 
+    def hoverMoveEvent(self, event):
+        # Distinguishes the connect-handle spot from the rest of the card
+        # under the mouse *before* any click — a CrossCursor there signals
+        # "drag from here to connect" instead of the plain OpenHandCursor
+        # used for repositioning the card everywhere else.
+        over_handle = self._handle_hit_rect().contains(event.pos())
+        if over_handle != self._handle_hovering:
+            self._handle_hovering = over_handle
+            self.update()
+        if over_handle:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif self._selected and self._delete_button_rect().contains(event.pos()):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            minus_rect, plus_rect = self._rank_button_rects()
+            if minus_rect.contains(event.pos()) or plus_rect.contains(event.pos()):
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().hoverMoveEvent(event)
+
     def mousePressEvent(self, event):
+        if self._selected and self._delete_button_rect().contains(event.pos()):
+            self._canvas._delete_node(self)
+            event.accept()
+            return
         minus_rect, plus_rect = self._rank_button_rects()
         if minus_rect.contains(event.pos()) or plus_rect.contains(event.pos()):
             # Handled entirely on press — never calls the base class's
@@ -291,7 +362,7 @@ class _NodeItem(QGraphicsObject):
             self._canvas._adjust_node_rank(self, -1 if minus_rect.contains(event.pos()) else 1)
             event.accept()
             return
-        if self._handle_rect().contains(event.pos()):
+        if self._handle_hit_rect().contains(event.pos()):
             self._connecting = True
             self._canvas._begin_connect(self, self.mapToScene(event.pos()))
             event.accept()
@@ -355,16 +426,35 @@ class _EdgeItem(QGraphicsPathItem):
     # half-diagonal (√(32²+32²) ≈ 45px) keeps the tip visible outside the
     # card from any approach angle, corners included.
     NODE_CLEARANCE = 46
+    ENDPOINT_GRAB_RADIUS = 16  # click-near-tip radius that starts a re-target drag
+    HIT_WIDTH = 14             # width of the invisible click/hover strip around the thin drawn line
+    DELETE_BTN_R = 9           # radius of the "✕" button shown when selected
 
     def __init__(self, src: _NodeItem, dst: _NodeItem, canvas: "SkillTreeCanvas" = None):
         super().__init__()
         self.src = src
         self.dst = dst
         self._canvas = canvas
+        self._redirect_end: str | None = None  # "src"/"dst" while a re-target drag is live
+        self._hovering = False
+        self._hover_end: str | None = None  # "src"/"dst" while hovering near that endpoint
         self.setZValue(1)
         self.setFlag(QGraphicsPathItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setPen(QPen(QColor(Colors.ACCENT), self.LINE_WIDTH))
+        self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_path()
+
+    def shape(self):
+        # The drawn stroke is only LINE_WIDTH (2.4px) wide — QGraphicsPath-
+        # Item's default shape() hit-tests against that same pen, making
+        # the curve a fussy sliver to click/hover precisely. Stroke a much
+        # wider invisible band around the same path for hit-testing only
+        # (paint() still draws the thin line); doesn't affect boundingRect,
+        # which already has its own margin for the arrowhead/delete button.
+        stroker = QPainterPathStroker()
+        stroker.setWidth(self.HIT_WIDTH)
+        return stroker.createStroke(self.path())
 
     def _theme_color(self) -> QColor:
         theme = getattr(self._canvas, "_active_theme_color", "") if self._canvas else ""
@@ -388,8 +478,15 @@ class _EdgeItem(QGraphicsPathItem):
         # gets erased on the next frame: exactly the smeared "ghost trail"
         # this margin fixes (most visible while update_path() runs every
         # frame during a connected node's drag).
-        margin = self.ARROW_SIZE + 6
+        margin = self.ARROW_SIZE + 6 + self.DELETE_BTN_R
         return self.path().boundingRect().adjusted(-margin, -margin, margin, margin)
+
+    def _delete_button_rect(self) -> QRectF:
+        """Midpoint of the current curve — only meaningful (and only drawn/
+        hit-tested) while the edge is selected, see paint()/mousePressEvent."""
+        c = self.path().pointAtPercent(0.5)
+        r = self.DELETE_BTN_R
+        return QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
 
     def paint(self, p: QPainter, option, widget=None):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -398,6 +495,12 @@ class _EdgeItem(QGraphicsPathItem):
         if self.isSelected():
             line_color = base_color.lighter(145)
             p.setPen(QPen(line_color, self.LINE_WIDTH + 0.6, Qt.PenStyle.DashLine))
+        elif self._hovering:
+            # Hover-only brighten (no dashing, that's reserved for
+            # selection) — confirms the wider invisible shape() strip
+            # actually caught the cursor before the user commits to a click.
+            line_color = base_color.lighter(125)
+            p.setPen(QPen(line_color, self.LINE_WIDTH + 0.8))
         else:
             line_color = base_color
             pen_color = QColor(line_color)
@@ -406,6 +509,36 @@ class _EdgeItem(QGraphicsPathItem):
         p.drawPath(path)
         self._draw_arrowhead(p, path, line_color)
         self._draw_flow_light(p, path, line_color)
+        if self._hover_end:
+            self._draw_endpoint_hint(p, path, line_color)
+        if self.isSelected():
+            self._draw_delete_button(p)
+
+    def _draw_endpoint_hint(self, p: QPainter, path: QPainterPath, color: QColor):
+        """A soft ring around whichever endpoint the cursor is currently
+        close enough to grab (see ENDPOINT_GRAB_RADIUS/hoverMoveEvent) —
+        the redirect drag has no other visual cue before the user presses,
+        so without this a wrong connection's fix is easy to miss entirely."""
+        center = self.src.center() if self._hover_end == "src" else self.dst.center()
+        r = self.ENDPOINT_GRAB_RADIUS
+        ring = QColor(color)
+        ring.setAlpha(140)
+        p.setPen(QPen(ring, 2, Qt.PenStyle.DashLine))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(center, r, r)
+
+    def _draw_delete_button(self, p: QPainter):
+        """A small "✕" at the curve's midpoint, shown only while selected —
+        lets a wrong connection be removed with a click instead of having
+        to select it and reach for the Delete key (see SkillTreeCanvas.
+        _delete_selected_edges, wired from mousePressEvent below)."""
+        rect = self._delete_button_rect()
+        p.setPen(QPen(QColor("#F14C4C").darker(130), 1))
+        p.setBrush(QBrush(QColor("#F14C4C")))
+        p.drawEllipse(rect)
+        p.setPen(QColor("#FFFFFF"))
+        p.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, "✕")
 
     def _tip_percent(self, path: QPainterPath) -> float:
         """The path percentage that lands NODE_CLEARANCE px before the end
@@ -472,6 +605,76 @@ class _EdgeItem(QGraphicsPathItem):
         core_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(core_pen)
         p.drawPath(segment)
+
+    def _dist(self, a: QPointF, b: QPointF) -> float:
+        return math.hypot(a.x() - b.x(), a.y() - b.y())
+
+    def _endpoint_near(self, pos: QPointF) -> str | None:
+        dist_src = self._dist(pos, self.src.center())
+        dist_dst = self._dist(pos, self.dst.center())
+        if min(dist_src, dist_dst) <= self.ENDPOINT_GRAB_RADIUS:
+            return "dst" if dist_dst <= dist_src else "src"
+        return None
+
+    def hoverEnterEvent(self, event):
+        self._hovering = True
+        self.update()
+        super().hoverEnterEvent(event)
+
+    def hoverMoveEvent(self, event):
+        pos = event.pos()
+        if self.isSelected() and self._delete_button_rect().contains(pos):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            near = self._endpoint_near(pos)
+            if near != self._hover_end:
+                self._hover_end = near
+                self.update()
+            self.setCursor(Qt.CursorShape.SizeAllCursor if near else Qt.CursorShape.PointingHandCursor)
+        super().hoverMoveEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self._hovering = False
+        if self._hover_end:
+            self._hover_end = None
+        self.update()
+        super().hoverLeaveEvent(event)
+
+    def mousePressEvent(self, event):
+        pos = event.pos()
+        if self.isSelected() and self._delete_button_rect().contains(pos):
+            if self._canvas:
+                self._canvas._delete_edge(self)
+            event.accept()
+            return
+        near = self._endpoint_near(pos)
+        if near:
+            self._redirect_end = near
+            self._hover_end = None
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            if self._canvas:
+                self._canvas._begin_redirect(self, self._redirect_end, self.mapToScene(pos))
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._redirect_end and self._canvas:
+            self._canvas._update_connect(self.mapToScene(event.pos()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._redirect_end:
+            end_pos = self.mapToScene(event.pos())
+            self._redirect_end = None
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            if self._canvas:
+                self._canvas._finish_redirect(end_pos)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class _ConnectPreviewItem(QGraphicsPathItem):

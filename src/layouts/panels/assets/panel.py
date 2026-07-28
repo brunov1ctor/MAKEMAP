@@ -483,16 +483,29 @@ class AssetSoundManager(QWidget):
     def _rebuild_style_tabs(self):
         """Rebuilds the style tab row from list_styles() — the fixed 9
         slots plus any custom style folder the user created. Called after
-        add/delete so newly created or removed styles show up immediately."""
+        add/delete so newly created or removed styles show up immediately.
+
+        Each tab is a chip (label + inline "✕") — same shape as the
+        skill-tree's tab chips (see SkillTreeCanvas._make_tab_chip) — with
+        the "✕" only visible on the active chip, instead of one
+        always-on "delete current style" button floating off to the side
+        of "+" (unclear which style it acted on at a glance)."""
         while self._style_tab_flow.count():
             item = self._style_tab_flow.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
         self._style_buttons = []
+        self._style_close_buttons: list[QToolButton] = []
         self._style_keys = list_styles()
 
         for i, key in enumerate(self._style_keys):
+            chip = QWidget()
+            chip.setStyleSheet("background: transparent;")
+            chip_lay = QHBoxLayout(chip)
+            chip_lay.setContentsMargins(0, 0, 0, 0)
+            chip_lay.setSpacing(2)
+
             btn = QToolButton()
             btn.setText(key.capitalize())
             btn.setCheckable(True)
@@ -509,12 +522,29 @@ class AssetSoundManager(QWidget):
                 QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
             """)
             btn.clicked.connect(lambda checked, idx=i: self._on_style_tab_clicked(idx))
-            self._style_tab_flow.addWidget(btn)
+            chip_lay.addWidget(btn)
             self._style_buttons.append(btn)
+
+            close_btn = QToolButton()
+            close_btn.setText("✕")
+            close_btn.setFixedSize(14, 14)
+            close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            close_btn.setToolTip("Excluir este estilo")
+            close_btn.setStyleSheet(f"""
+                QToolButton {{ border: none; background: transparent;
+                    color: {Colors.TEXT_MUTED}; font-size: 9px; }}
+                QToolButton:hover {{ color: {Colors.ERROR}; }}
+            """)
+            close_btn.clicked.connect(lambda checked=False, k=key: self._on_delete_style(k))
+            chip_lay.addWidget(close_btn)
+            self._style_close_buttons.append(close_btn)
+
+            self._style_tab_flow.addWidget(chip)
 
         default_idx = self._style_keys.index(DEFAULT_STYLE) if DEFAULT_STYLE in self._style_keys else 0
         if self._style_buttons:
             self._style_buttons[default_idx].setChecked(True)
+        self._update_style_close_visibility()
 
         add_btn = QToolButton()
         add_btn.setText("+")
@@ -529,23 +559,19 @@ class AssetSoundManager(QWidget):
         add_btn.clicked.connect(self._add_style)
         self._style_tab_flow.addWidget(add_btn)
 
-        del_btn = QToolButton()
-        del_btn.setText("✕")
-        del_btn.setFixedSize(18, 18)
-        del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        del_btn.setToolTip("Excluir estilo atual")
-        del_btn.setStyleSheet(f"""
-            QToolButton {{ border: none; border-radius: 9px; font-size: 10px;
-                color: {Colors.TEXT_MUTED}; background: transparent; }}
-            QToolButton:hover {{ color: {Colors.ERROR}; background: rgba(239,83,80,0.2); }}
-        """)
-        del_btn.clicked.connect(self._on_delete_style)
-        self._style_tab_flow.addWidget(del_btn)
+    def _update_style_close_visibility(self):
+        """Keeps the "✕" attached to whichever chip is currently active —
+        called instead of a full _rebuild_style_tabs() on every plain
+        selection change, since the chips themselves don't need rebuilding,
+        just which one's close button is shown."""
+        for i, close_btn in enumerate(self._style_close_buttons):
+            close_btn.setVisible(i < len(self._style_buttons) and self._style_buttons[i].isChecked())
 
     def _select_style(self, key: str):
         idx = self._style_keys.index(key) if key in self._style_keys else 0
         for i, btn in enumerate(self._style_buttons):
             btn.setChecked(i == idx)
+        self._update_style_close_visibility()
         self._rebuild_category_sections()
 
     def _on_style_tab_clicked(self, index: int):
@@ -727,8 +753,8 @@ class AssetSoundManager(QWidget):
         self._category_sections.append(section)
         self._update_total()
 
-    def _on_delete_style(self):
-        style = self._current_style()
+    def _on_delete_style(self, style: str | None = None):
+        style = style or self._current_style()
         style_dir = _ASSETS_DIR / style
         assets = [
             f for f in style_dir.rglob("*")

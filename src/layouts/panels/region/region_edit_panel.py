@@ -27,8 +27,7 @@ from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.region.star_rating import StarRating
 from src.layouts.panels.collapsible_section import CollapsibleSection
 from src.layouts.panels.terrain.color_picker import HueBar, SatValSquare, ColorSlider
-
-ESTILOS = ["Nenhum", "Vapor"]
+from src.engines.map.region_styles import STYLE_NAMES as ESTILOS
 
 
 class RegionEditPanel(QFrame):
@@ -56,7 +55,7 @@ class RegionEditPanel(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
-        self._color = QColor(120, 200, 220, 90)
+        self._color = QColor(120, 200, 220, 255)
         self._mode = "add"
 
         outer = QVBoxLayout(self)

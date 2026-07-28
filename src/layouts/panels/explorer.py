@@ -1,4 +1,4 @@
-"""2. Explorer (painel) + 2.1 Filtros Rápidos (painel separado)."""
+"""2. Explorer (painel)."""
 
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton,
@@ -9,124 +9,9 @@ from PySide6.QtCore import Qt, Signal, QPoint
 
 from src.styles.tokens import Colors, Metrics, Typography
 from src.components.collapsible_panel import CollapsiblePanel
-from src.layouts.panels.brush.flow_layout import FlowLayout
 from src.engines.map.presets import PRESETS
 
 _PRESET_ICON = {"forest": "🌲", "mountain": "🏔", "village": "🏰", "desert": "🏜"}
-
-
-# ─── Filter Chip ───────────────────────────────────────────────────────────
-
-class _FilterChip(QFrame):
-    filter_toggled = Signal(str, bool)
-
-    def __init__(self, icon: str, label: str, key: str, parent=None):
-        super().__init__(parent)
-        self._key = key
-        self._checked = True
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet("background: transparent; border: none;")
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 2, 8, 2)
-        layout.setSpacing(4)
-
-        self._box = QLabel("✓")
-        self._box.setFixedSize(16, 16)
-        self._box.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._update_box_style()
-        layout.addWidget(self._box)
-
-        lbl = QLabel(f"{icon} {label}")
-        lbl.setStyleSheet(f"""
-            font-size: {Typography.SIZE_XXS}px;
-            color: {Colors.TEXT_SECONDARY};
-            background: transparent; border: none;
-        """)
-        layout.addWidget(lbl)
-
-    def _update_box_style(self):
-        if self._checked:
-            self._box.setStyleSheet(f"""
-                background: {Colors.ACCENT}; border: 1px solid {Colors.ACCENT};
-                border-radius: 3px; color: #ffffff; font-size: 10px; font-weight: bold;
-            """)
-            self._box.setText("✓")
-        else:
-            self._box.setStyleSheet(f"""
-                background: transparent; border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 3px; color: transparent; font-size: 10px;
-            """)
-            self._box.setText("")
-
-    def mousePressEvent(self, event):
-        self._checked = not self._checked
-        self._update_box_style()
-        self.filter_toggled.emit(self._key, self._checked)
-
-    def isChecked(self) -> bool:
-        return self._checked
-
-    def setChecked(self, checked: bool):
-        self._checked = checked
-        self._update_box_style()
-
-
-# ─── 2.1 Filter Panel ─────────────────────────────────────────────────────
-
-class FilterPanel(CollapsiblePanel):
-    """2.1 Filtros Rápidos — painel colapsável com chips."""
-
-    filter_toggled = Signal(str, bool)
-
-    def __init__(self, parent=None):
-        super().__init__(title="Filtros Rápidos", icon="⚡", parent=parent, radius=10)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-
-        # Toggle all button no header
-        self._toggle_all = QToolButton()
-        self._toggle_all.setText("Todos")
-        self._toggle_all.setFixedHeight(18)
-        self._toggle_all.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._toggle_all.setStyleSheet(f"""
-            QToolButton {{
-                border: none; font-size: 8px; color: {Colors.ACCENT};
-                padding: 2px 6px; border-radius: 4px; background: transparent;
-            }}
-            QToolButton:hover {{ background: {Colors.ACCENT_DIM}; }}
-        """)
-        # Inserir antes da seta no header
-        header_layout = self._main_layout.itemAt(0).layout()
-        header_layout.insertWidget(header_layout.count() - 1, self._toggle_all)
-
-        # Chips in flow layout
-        flow = FlowLayout(spacing=2)
-
-        categories = [
-            ("👹", "Mobs", "Mobs"), ("🧙", "NPCs", "NPCs"),
-            ("📜", "Quests", "Quests"), ("⚔", "Itens", "Itens"),
-            ("💀", "Bosses", "Bosses"), ("💎", "Recursos", "Recursos"),
-            ("🌿", "Vegetação", "Vegetação"),
-            ("⛏", "Minérios", "Minérios"), ("🏴", "PvP", "PvP"),
-        ]
-
-        self._chips = []
-        for icon, label, key in categories:
-            chip = _FilterChip(icon, label, key)
-            chip.filter_toggled.connect(self.filter_toggled.emit)
-            flow.addWidget(chip)
-            self._chips.append(chip)
-
-        grid_widget = QWidget()
-        grid_widget.setStyleSheet("background: transparent; border: none;")
-        grid_widget.setLayout(flow)
-        self.content_layout.addWidget(grid_widget)
-
-        self._toggle_all.clicked.connect(self._on_toggle_all)
-
-    def _on_toggle_all(self):
-        all_checked = all(c.isChecked() for c in self._chips)
-        for chip in self._chips:
-            chip.setChecked(not all_checked)
 
 
 # ─── Explorer Toolbar ──────────────────────────────────────────────────────
