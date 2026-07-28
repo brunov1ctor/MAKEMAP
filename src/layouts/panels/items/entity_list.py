@@ -68,6 +68,9 @@ class EntityListColumn(QFrame):
         new_label: str,
         filters: list[tuple[str, list[str]]] | None = None,
         drag_format: str | None = None,
+        rarity_header: str = "Raridade",
+        rarity_label_fn=item_rarity_label,
+        rarity_color_fn=item_rarity_color,
         parent=None,
     ):
         """`filters` is [(placeholder, options), ...] — up to two combos
@@ -75,6 +78,10 @@ class EntityListColumn(QFrame):
         first option of each is the "all" sentinel and is never filtered on.
         `drag_format`, if set, makes rows draggable carrying the row id under
         that MIME type (skill list → skill-tree canvas).
+        `rarity_header`/`rarity_label_fn`/`rarity_color_fn` let a caller
+        rebrand the 3rd column for its own vocabulary — Habilidades uses
+        this for "Tier" (skill_tier_label/skill_tier_color) instead of the
+        item loot-rarity scale, without needing a second list widget.
         """
         super().__init__(parent)
         self.setObjectName("subpanel")
@@ -82,6 +89,8 @@ class EntityListColumn(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumWidth(240)
 
+        self._rarity_label_fn = rarity_label_fn
+        self._rarity_color_fn = rarity_color_fn
         self._rows: list[dict] = []
         self._filtered: list[dict] = []
         self._page = 0
@@ -135,7 +144,7 @@ class EntityListColumn(QFrame):
             self._table = _DragTable(0, 6, drag_format)
         else:
             self._table = QTableWidget(0, 6)
-        self._table.setHorizontalHeaderLabels(["Nome", "Categoria", "Raridade", "Nível", "ID", ""])
+        self._table.setHorizontalHeaderLabels(["Nome", "Categoria", rarity_header, "Nível", "ID", ""])
         self._table.verticalHeader().setVisible(False)
         self._table.setShowGrid(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -219,7 +228,7 @@ class EntityListColumn(QFrame):
             for i, value in active_filters:
                 key = filter_keys[i]
                 if key == "rarity":
-                    if item_rarity_label(row.get("rarity", "")) != value:
+                    if self._rarity_label_fn(row.get("rarity", "")) != value:
                         return False
                 else:
                     if value not in (row.get(key, "") or ""):
@@ -257,8 +266,8 @@ class EntityListColumn(QFrame):
             self._table.setItem(r, 1, QTableWidgetItem(row.get("category", "") or "—"))
 
             rarity_key = row.get("rarity", "")
-            rarity_item = QTableWidgetItem(item_rarity_label(rarity_key))
-            rarity_item.setForeground(QColor(item_rarity_color(rarity_key)))
+            rarity_item = QTableWidgetItem(self._rarity_label_fn(rarity_key))
+            rarity_item.setForeground(QColor(self._rarity_color_fn(rarity_key)))
             self._table.setItem(r, 2, rarity_item)
 
             level_item = QTableWidgetItem(str(row.get("level", "") if row.get("level") is not None else ""))

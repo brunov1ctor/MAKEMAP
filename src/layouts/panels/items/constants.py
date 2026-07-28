@@ -67,6 +67,37 @@ SKILL_FLAGS = [
     ("generates_threat", "Gera Ameaça", True),
 ]
 
+# Replaces "Raridade" for habilidades — a raridade de loot (comum/raro/
+# épico...) não fazia sentido pra uma habilidade; um tier de progressão faz.
+# Mesmas chaves/cores de ITEM_RARITY_DEFS (o node da Árvore de Habilidades já
+# colore o anel do card via item_rarity_color(skill["rarity"]), ver
+# skill_tree.py._ensure_node — reaproveitar as chaves evita duplicar/migrar
+# a coluna `rarity` do banco), só com rótulos próprios de habilidade.
+SKILL_TIER_DEFS: list[tuple[str, str, str]] = [
+    ("common", "#9AA5B1", "Inicial"),
+    ("uncommon", "#66BB6A", "Intermediário"),
+    ("rare", "#4FC3F7", "Avançado"),
+    ("epic", "#AB47BC", "Elite"),
+    ("legendary", "#FFA726", "Lendário"),
+]
+SKILL_TIER_LABELS = {key: label for key, _color, label in SKILL_TIER_DEFS}
+SKILL_TIER_COLORS = {key: color for key, color, _label in SKILL_TIER_DEFS}
+
+# Tags de efeito da habilidade (aba "Tags" do editor) — só metadado/
+# documentação pro designer (ex.: Debuff "Queimadura", pra anotar que
+# Incinerar causa mais dano se o alvo já tiver essa tag); não existe motor
+# de jogo rodando aqui pra interpretar synergy entre habilidades.
+SKILL_TAG_TYPES: list[tuple[str, str, str]] = [
+    ("buff", "#66BB6A", "Buff"),
+    ("debuff", "#EF5350", "Debuff"),
+    ("bonus", "#FFA726", "Bônus"),
+    ("dot", "#AB47BC", "Dano sobre Tempo"),
+    ("cura", "#4FC3F7", "Cura"),
+    ("controle", "#9AA5B1", "Controle"),
+]
+SKILL_TAG_TYPE_LABELS = {key: label for key, _color, label in SKILL_TAG_TYPES}
+SKILL_TAG_TYPE_COLORS = {key: color for key, color, _label in SKILL_TAG_TYPES}
+
 # ─── Small shared widget builders ───────────────────────────────────────────
 
 def category_display(category: str, subcategory: str) -> str:
@@ -93,6 +124,32 @@ def rarity_pill(rarity_key: str) -> QLabel:
 def rarity_options() -> list[tuple[str, str]]:
     """(key, label) pairs for a raridade combo, catalog order."""
     return [(key, label) for key, _color, label in ITEM_RARITY_DEFS]
+
+
+def skill_tier_options() -> list[tuple[str, str]]:
+    """(key, label) pairs for the Tier picker, catalog order."""
+    return [(key, label) for key, _color, label in SKILL_TIER_DEFS]
+
+
+def skill_tier_label(key: str) -> str:
+    return SKILL_TIER_LABELS.get(key, "Inicial")
+
+
+def skill_tier_color(key: str) -> str:
+    return SKILL_TIER_COLORS.get(key, "#9AA5B1")
+
+
+def skill_tag_type_options() -> list[tuple[str, str]]:
+    """(key, label) pairs for the tag-type picker, catalog order."""
+    return [(key, label) for key, _color, label in SKILL_TAG_TYPES]
+
+
+def skill_tag_type_label(key: str) -> str:
+    return SKILL_TAG_TYPE_LABELS.get(key, key)
+
+
+def skill_tag_type_color(key: str) -> str:
+    return SKILL_TAG_TYPE_COLORS.get(key, "#9AA5B1")
 
 
 def panel_frame_style() -> str:

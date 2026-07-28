@@ -31,10 +31,10 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 
 from src.styles.tokens import Colors
 from src.services.project_assets import import_asset, resolve_asset_path
-from src.layouts.panels.mobs.categories import item_rarity_label
 from src.layouts.panels.items.constants import (
     ITEM_CATEGORY_NAMES, SKILL_CATEGORIES,
     category_display, rarity_options,
+    skill_tier_options, skill_tier_label, skill_tier_color,
 )
 from src.layouts.panels.items.entity_list import EntityListColumn
 from src.layouts.panels.items.item_editor import ItemEditor
@@ -70,6 +70,7 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
         self._project_dir = project_dir
         self._items: list[dict] = []
         self._skills: list[dict] = []
+        self._skill_catalog_rows: list[dict] = []  # resolved-image_path rows, feeds the tree's catalog pickers
         self._current_item_id = ""
         self._current_skill_id = ""
         self._user_dragged: set[int] = set()  # ids() of splitters the user adjusted
@@ -194,16 +195,26 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
         self._items_splitter.splitterMoved.connect(lambda p, i: self._on_splitter_moved(self._items_splitter, p, i))
 
         # ── Habilidades row ──
+        # "Tier" no lugar de "Raridade" — habilidade não tem raridade de
+        # loot, tem progressão (Inicial/Intermediário/.../Lendário). Mesmas
+        # chaves da escala de raridade dos itens por trás (ver
+        # constants.SKILL_TIER_DEFS), só com rótulo/coluna próprios.
+        tier_labels = [label for _key, label in skill_tier_options()]
         self._skill_list = EntityListColumn(
             "Habilidades", "+ Nova Habilidade",
-            filters=[("Todas as Categorias", SKILL_CATEGORIES), ("Todas as Raridades", rarity_labels)],
+            filters=[("Todas as Categorias", SKILL_CATEGORIES), ("Todos os Tiers", tier_labels)],
+            rarity_header="Tier", rarity_label_fn=skill_tier_label, rarity_color_fn=skill_tier_color,
         )
         self._skill_list.new_requested.connect(self._on_new_skill)
         self._skill_list.selected.connect(self._on_skill_selected)
         self._skill_list.delete_requested.connect(self._on_skill_delete)
         self._skill_editor = SkillEditor(skills_provider=lambda: self._skills)
         self._skill_editor.changed.connect(self._skill_save_timer.start)
-        self._skill_tree = SkillTreeCanvas(self._uow, skills_provider=lambda: self._skills)
+        self._skill_tree = SkillTreeCanvas(
+            self._uow, skills_provider=lambda: self._skills,
+            catalog_provider=lambda: self._skill_catalog_rows,
+            project_dir=self._project_dir,
+        )
 
         self._skills_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._skills_splitter.setChildrenCollapsible(False)
@@ -457,8 +468,9 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
                 "image_path": resolve_asset_path(self._project_dir, sk.get("image_path") or ""),
             })
         self._skill_list.set_rows(rows)
-        if hasattr(self, "_skill_editor"):
-            self._skill_editor.refresh_evolves_from_options()
+        # Mesma lista de rows (image_path já resolvido) usada pelos pickers
+        # de catálogo da Árvore de Habilidades ("+" de nova aba e "+ Nó").
+        self._skill_catalog_rows = rows
         if select_id:
             self._skill_list.select(select_id)
             self._on_skill_selected(select_id)
@@ -501,7 +513,6 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
         if not self._uow or not self._current_skill_id:
             return
         values = self._skill_editor.collect()
-        new_tab_name = values.pop("_new_tab_name", "")
         if values.get("image_path"):
             values["image_path"] = import_asset(
                 self._project_dir, values["image_path"], "assets/skills", self._current_skill_id)
@@ -511,14 +522,12 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
             record.update(values)
         self._reload_skills()
         self._skill_list.select(self._current_skill_id)
-        # "Evoluir de: Nenhuma (raiz)" + um nome digitado cria (ou reaproveita)
-        # a guia antes de garantir o nó — sem isso não haveria guia nenhuma
-        # pra colocar o nó de uma primeira habilidade raiz.
-        if not values.get("evolves_from") and new_tab_name and record:
-            self._skill_tree.create_tab_for_skill(record, new_tab_name)
-        # A árvore só ganha nó/conexão quando a habilidade é salva — reflete
-        # o que "Evoluir de:" descreve, não o contrário.
-        self._skill_tree.sync_skill_node(self._current_skill_id, values.get("evolves_from"))
+        # Nome/ícone do nó (se essa habilidade já tiver um em alguma aba)
+        # acompanham a edição — mas salvar não cria nó nem conexão nenhuma
+        # por conta própria (isso agora é só "+ Nova aba"/"+ Nó"/arrastar a
+        # alça, direto no canvas da árvore).
+        if record:
+            self._skill_tree.refresh_node_metadata(self._current_skill_id, record)
 
     def _on_skill_delete(self, skill_id: str):
         if not self._uow:

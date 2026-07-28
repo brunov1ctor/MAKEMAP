@@ -17,14 +17,14 @@ import json
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit,
     QComboBox, QSpinBox, QDoubleSpinBox, QGridLayout, QStackedWidget,
-    QScrollArea, QToolButton, QPushButton, QFrame, QFileDialog, QSizePolicy,
+    QScrollArea, QToolButton, QFrame, QFileDialog, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors
 from src.layouts.panels.mobs.categories import item_rarity_label
 from src.layouts.panels.items.constants import (
-    _spin, _dspin, _no_wheel, ITEM_CATEGORIES, ITEM_CATEGORY_NAMES,
+    _spin, _dspin, _no_wheel, _INPUT_STYLE, ITEM_CATEGORIES, ITEM_CATEGORY_NAMES,
     DAMAGE_TYPES, ELEMENT_OPTIONS, ALLOWED_CLASSES, ITEM_FLAGS, rarity_options,
 )
 from src.layouts.panels.items.editor_base import (
@@ -38,6 +38,16 @@ class ItemEditor(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Same fix as SkillEditor — a QComboBox built deep inside this
+        # scroll area's nested layouts can pop up unstyled (plain white
+        # list) instead of picking up the app-wide dark stylesheet; setting
+        # it locally too (same rule entity_list.py/MobEditPanel use)
+        # guarantees the popup gets it. The leading "background: transparent;
+        # border: none;" keeps THIS widget itself transparent — setStyleSheet()
+        # otherwise switches it to opaque style-sheet-driven background
+        # painting, which would peek out as square corners around
+        # editor_frame()'s rounded glass card.
+        self.setStyleSheet("background: transparent; border: none;" + _INPUT_STYLE)
         self._loading = True
         self._record: dict = {}
         self._tags: list[str] = []
@@ -99,15 +109,6 @@ class ItemEditor(QWidget):
         self._icon_btn.image_dropped.connect(self._on_image_set)
         self._icon_btn.setToolTip("Clique ou arraste uma imagem")
         icon_col.addWidget(self._icon_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
-        change_btn = QPushButton("Alterar Ícone")
-        change_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        change_btn.setStyleSheet(f"""
-            QPushButton {{ background: rgba(255,255,255,0.05); color: {Colors.TEXT_SECONDARY};
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 5px; padding: 3px 6px; font-size: 9px; }}
-            QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
-        """)
-        change_btn.clicked.connect(self._on_pick_image)
-        icon_col.addWidget(change_btn)
         row.addLayout(icon_col)
 
         name_col = QVBoxLayout()
