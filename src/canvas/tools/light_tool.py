@@ -80,7 +80,14 @@ class LightTool(BaseTool):
         props = self._properties_provider() if self._properties_provider else LightProperties()
         item = LightItem(props)
         item.setPos(scene_pos)
-        item.setZValue(9)
+        # Same "precise click target" z-value MarkerItem uses (60) — a
+        # light has no visible icon of its own, just a boundingRect square
+        # to click on, and used to sit at z=9, BELOW generic assets/mob
+        # stamps (z=10, some with a generous BoundingRectShape hitbox
+        # covering their whole padded canvas) — any light placed near one
+        # was completely unclickable, itemAt() always returning the
+        # asset/mob on top of it instead.
+        item.setZValue(60)
         self.viewport.scene().addItem(item)
         if self._history:
             self._history.push(PlaceObjectCommand(item))

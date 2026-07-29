@@ -53,6 +53,34 @@ class NPCRepository(BaseRepository):
         return self.get_all(city_id=city_id)
 
 
+class NPCCategoryRepository(BaseRepository):
+    """Directory-style tree for the NPCs panel's category sidebar — mirrors
+    MobCategoryRepository (see migration 27 in schema.py)."""
+    TABLE = "npc_categories"
+
+    def get_children(self, parent_id: str | None) -> list[dict]:
+        sql = f"SELECT * FROM {self.TABLE} WHERE parent_id IS ? ORDER BY sort_order, name"
+        return [dict(r) for r in self.db.fetchall(sql, (parent_id,))]
+
+    def get_path(self, category_id: str | None) -> list[dict]:
+        path = []
+        current = self.get(category_id) if category_id else None
+        while current:
+            path.append(current)
+            current = self.get(current["parent_id"]) if current.get("parent_id") else None
+        return list(reversed(path))
+
+
+class NPCAssetRepository(BaseRepository):
+    """Stamp assets attached to an NPC (see migration 27) — mirrors
+    MobAssetRepository; the Spawn tool's NPCs mode places one of these."""
+    TABLE = "npc_assets"
+
+    def get_by_npc(self, npc_id: str) -> list[dict]:
+        sql = f"SELECT * FROM {self.TABLE} WHERE npc_id = ? ORDER BY sort_order, created_at"
+        return [dict(r) for r in self.db.fetchall(sql, (npc_id,))]
+
+
 class MobRepository(BaseRepository):
     TABLE = "mobs"
 

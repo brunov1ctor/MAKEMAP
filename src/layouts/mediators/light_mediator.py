@@ -16,7 +16,7 @@ from PySide6.QtCore import QTimer
 
 from src.canvas.light_item import LightItem
 from src.canvas.lighting_overlay import GlobalLightingOverlay
-from src.engines.light import GLOBAL_TYPES, LightProperties, default_color
+from src.engines.light import GLOBAL_TYPES, LightProperties, default_color, default_intensity
 from src.layouts.panels.light.panel import LightPanel
 from src.layouts.panels.light.edit_panel import LightEditPanel
 from src.layouts.panels.light.sky_panel import SkyEditPanel
@@ -28,6 +28,10 @@ logger = logging.getLogger("MAKEMAP")
 
 _SYNC_DEBOUNCE_MS = 250
 _REFRESH_TICK_MS = 150
+# Periodic safety-net: force the overlay's lights-list cache to refresh
+# every N ticks regardless, bounding worst-case staleness for any light
+# add/remove path not explicitly hooked to mark_lights_dirty() below.
+_REFRESH_SAFETY_NET_TICKS = 20
 # The global "sky" setting isn't a canvas_items row (see GLOBAL_TYPES) — it
 # lives in the generic ui_state key/value store instead (UIStateRepository).
 _SKY_UI_STATE_KEY = "light_sky::default"  # matches LightMediator.MAP_ID
@@ -61,6 +65,7 @@ class LightMediator:
         edit.type_changed.connect(self._on_type_changed)
         edit.intensity_changed.connect(self._on_intensity_changed)
         edit.radius_changed.connect(self._on_radius_changed)
+        edit.falloff_changed.connect(self._on_falloff_changed)
         edit.color_changed.connect(self._on_color_changed)
         edit.shadows_changed.connect(self._on_shadows_changed)
         edit.volumetric_changed.connect(self._on_volumetric_changed)
@@ -73,6 +78,7 @@ class LightMediator:
         sky = SkyEditPanel(self._l)
         sky.hide()
         sky.close_requested.connect(self._l._close_sky_edit_panel)
+        sky.content_changed.connect(self._l._reposition)
         self._l.sky_edit_panel = sky
         sky.day_amount_changed.connect(self._on_sky_day_amount_changed)
         sky.color_changed.connect(self._on_sky_color_changed)
@@ -83,16 +89,33 @@ class LightMediator:
         self._overlay = GlobalLightingOverlay()
         self._overlay.set_sky(self._sky_props)
         self._l.canvas.engine.viewport.scene().addItem(self._overlay)
+        # Every LightItem (however constructed — placed fresh or loaded from
+        # the DB) reports straight to this overlay when it moves, instead of
+        # the overlay only finding out up to _REFRESH_TICK_MS later.
+        LightItem.bind_overlay(self._overlay)
+        # Assets/mobs (the things lights can be occluded by) moving is the
+        # other half of "something changed" the periodic tick used to be the
+        # only way to catch — TransformEngine already emits these for every
+        # drag/rotate/resize, so reuse them instead of polling blind.
+        self._l.canvas.engine.transform.items_moved.connect(self._on_occluders_moved)
+        self._l.canvas.engine.transform.transform_finished.connect(self._on_occluders_moved)
 
         self._sync_timer = QTimer()
         self._sync_timer.setSingleShot(True)
         self._sync_timer.timeout.connect(self._sync_to_db)
         self._l.canvas.engine.history.history_changed.connect(self._schedule_sync)
+        # history_changed also fires for light placement/deletion (both go
+        # through the generic undo stack — PlaceObjectCommand and generic
+        # multi-select delete — with no dedicated LightMediator.on_removed
+        # choke point), so it's reused here to keep the overlay's lights
+        # cache in sync with the scene's actual light set.
+        self._l.canvas.engine.history.history_changed.connect(self._overlay.mark_lights_dirty)
 
         self._sky_sync_timer = QTimer()
         self._sky_sync_timer.setSingleShot(True)
         self._sky_sync_timer.timeout.connect(self._sync_sky_to_db)
 
+        self._refresh_tick_count = 0
         self._refresh_timer = QTimer()
         self._refresh_timer.timeout.connect(self._tick_refresh)
         self._refresh_timer.start(_REFRESH_TICK_MS)
@@ -109,7 +132,10 @@ class LightMediator:
         self._l.canvas.engine.tool_manager.activate("Luz")
 
     def _provide_properties(self) -> LightProperties:
-        return LightProperties(light_type=self._pending_type, color=default_color(self._pending_type))
+        return LightProperties(
+            light_type=self._pending_type, color=default_color(self._pending_type),
+            intensity=default_intensity(self._pending_type),
+        )
 
     # ─── Sky panel -> global setting mutation + persistence ───
 
@@ -144,11 +170,28 @@ class LightMediator:
 
     # ─── Edit panel -> item mutation + persistence ───
 
+    def _refresh_handles(self, item: LightItem):
+        """Re-sync the TransformEngine selection border/handles to the
+        item's current geometry — needed whenever a field that changes its
+        boundingRect (radius, cone angle/direction, type) is edited from
+        the panel, since that path only calls item.update()/
+        prepareGeometryChange() on the item itself and never re-runs
+        show_handles(); left alone, the purple selection box stays frozen
+        at whatever size it was when the item was first selected, visibly
+        drifting out of sync with the (now smaller/bigger/rotated) cone or
+        radius gizmo drawn on top of it."""
+        if item in self._l.canvas.engine.selection.selected_items:
+            self._l.canvas.engine.transform.show_handles([item])
+
     def _on_type_changed(self, key: str):
         item = self._selected_light()
         if item:
             item.props.light_type = key
+            item.prepareGeometryChange()
             item.update()
+            self._refresh_handles(item)
+            self._overlay.prepareGeometryChange()
+            self._overlay.update()
             self._schedule_sync()
 
     def _on_intensity_changed(self, value: float):
@@ -164,6 +207,20 @@ class LightMediator:
             item.props.radius = value
             item.prepareGeometryChange()
             item.update()
+            self._refresh_handles(item)
+            # The overlay's own boundingRect()/animated_footprint() unions
+            # each light's own radius-dependent footprint (see
+            # GlobalLightingOverlay._light_footprint) — its declared
+            # geometry needs to grow/shrink with it too.
+            self._overlay.prepareGeometryChange()
+            self._overlay.update()
+            self._schedule_sync()
+
+    def _on_falloff_changed(self, value: float):
+        item = self._selected_light()
+        if item:
+            item.props.falloff = value
+            self._overlay.update()
             self._schedule_sync()
 
     def _on_color_changed(self, hex_color: str):
@@ -192,6 +249,7 @@ class LightMediator:
         if item:
             item.props.direction_deg = value
             item.update()
+            self._refresh_handles(item)
             self._schedule_sync()
 
     def _on_cone_changed(self, value: float):
@@ -199,16 +257,39 @@ class LightMediator:
         if item:
             item.props.cone_angle_deg = value
             item.update()
+            self._refresh_handles(item)
             self._schedule_sync()
 
     # ─── Global illumination refresh ───
-    # Lights/occluders can move (drag) without going through the edit panel
-    # at all, so the overlay can't just react to signals — it needs a
-    # periodic repaint the same way shadows used to, just centralized here
-    # instead of per-LightItem.
+    # The overlay's own paint() animates (volumetric beam rotation — driven
+    # by time.monotonic(), see
+    # lighting_overlay.py), so it needs a periodic repaint tick regardless
+    # of whether anything actually moved — there's no "nothing changed,
+    # skip the tick" for an animated frame. What the tick no longer has to
+    # pay for is redoing the occluder-shadow math on every single fire: with
+    # GlobalLightingOverlay's per-light geometry cache (_light_cache),
+    # LightItem itself reporting moves instantly (bind_overlay/
+    # notify_light_moved) and occluders reporting via _on_occluders_moved
+    # below, a tick where nothing relevant changed just reuses cached
+    # geometry instead of re-querying the scene and rebuilding shadow
+    # polygons for every light.
 
     def _tick_refresh(self):
-        self._overlay.prepareGeometryChange()
+        self._refresh_tick_count += 1
+        if self._refresh_tick_count % _REFRESH_SAFETY_NET_TICKS == 0:
+            self._overlay.mark_lights_dirty()
+        rect = self._overlay.animated_footprint()
+        if rect is None:
+            return
+        self._overlay.update(rect)
+
+    def _on_occluders_moved(self, *_args):
+        """TransformEngine.items_moved (live, during a drag) / .transform_
+        finished (rotate, resize, end of drag) — an asset or mob that could
+        occlude a light just changed; bump the overlay's occluder
+        generation so cached shadow geometry is recomputed next paint
+        instead of only catching up whenever the next timer tick lands."""
+        self._overlay.bump_occluder_generation()
         self._overlay.update()
 
     # ─── Persistence ───
@@ -262,10 +343,11 @@ class LightMediator:
                     setattr(props, key, value)
             item = LightItem(props)
             item.setPos(row["position_x"], row["position_y"])
-            item.setZValue(9)
+            item.setZValue(60)  # matches light_tool.py's placement z — see its comment
             item.setData(1, row["id"])
             scene.addItem(item)
             self._items[row["id"]] = item
+        self._overlay.mark_lights_dirty()
 
     def _schedule_sync(self):
         self._sync_timer.start(_SYNC_DEBOUNCE_MS)

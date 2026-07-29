@@ -85,6 +85,9 @@ class SpawnPanel(QFrame):
     quantity_changed = Signal(int)
     close_requested = Signal()
     content_changed = Signal()
+    kind_changed = Signal(str)  # "mob" | "npc"
+
+    _KIND_LABELS = {"mob": ("🐾", "MOBS", "SPAWN DE MOBS"), "npc": ("🧙", "NPCS", "SPAWN DE NPCS")}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -95,6 +98,7 @@ class SpawnPanel(QFrame):
 
         self._category_rows: dict[str, _CategoryRow] = {}
         self._selected_category = ""
+        self._active_kind = "mob"
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -109,15 +113,15 @@ class SpawnPanel(QFrame):
 
         header = QHBoxLayout()
         header.setSpacing(6)
-        icon = QLabel("🐾")
-        icon.setStyleSheet("font-size: 14px; background: transparent; border: none;")
-        header.addWidget(icon)
-        title = QLabel("SPAWN DE MOBS")
-        title.setStyleSheet(f"""
+        self._header_icon = QLabel("🐾")
+        self._header_icon.setStyleSheet("font-size: 14px; background: transparent; border: none;")
+        header.addWidget(self._header_icon)
+        self._header_title = QLabel("SPAWN DE MOBS")
+        self._header_title.setStyleSheet(f"""
             color: {Colors.TEXT_PRIMARY}; font-size: 13px; font-weight: bold;
             background: transparent; border: none;
         """)
-        header.addWidget(title)
+        header.addWidget(self._header_title)
         header.addStretch()
         close_btn = QToolButton()
         close_btn.setText("✕")
@@ -133,6 +137,23 @@ class SpawnPanel(QFrame):
         close_btn.clicked.connect(self.close_requested.emit)
         header.addWidget(close_btn)
         top_layout.addLayout(header)
+
+        # ── Mobs/NPCs toggle ──
+        toggle_row = QHBoxLayout()
+        toggle_row.setSpacing(4)
+        self._kind_buttons: dict[str, QToolButton] = {}
+        for kind in ("mob", "npc"):
+            kind_icon, kind_label, _ = self._KIND_LABELS[kind]
+            btn = QToolButton()
+            btn.setText(f"{kind_icon} {kind_label}")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda _=False, k=kind: self._on_kind_clicked(k))
+            toggle_row.addWidget(btn, 1)
+            self._kind_buttons[kind] = btn
+        top_layout.addLayout(toggle_row)
+        self._apply_kind_button_styles()
+
         top_layout.addWidget(self._sep())
 
         self._top_container = container
@@ -245,6 +266,35 @@ class SpawnPanel(QFrame):
         body_h = self._body_widget.sizeHint().height()
         return top_h + body_h + 16
 
+    def _on_kind_clicked(self, kind: str):
+        if kind == self._active_kind:
+            return
+        self._active_kind = kind
+        self._apply_kind_button_styles()
+        icon, _, full_title = self._KIND_LABELS[kind]
+        self._header_icon.setText(icon)
+        self._header_title.setText(full_title)
+        self._no_categories_label.setText(
+            "Nenhuma categoria de mob ainda — crie uma no painel Mobs." if kind == "mob"
+            else "Nenhuma categoria de NPC ainda — crie uma no painel NPCs."
+        )
+        self.kind_changed.emit(kind)
+
+    def _apply_kind_button_styles(self):
+        for kind, btn in self._kind_buttons.items():
+            selected = kind == self._active_kind
+            btn.setChecked(selected)
+            bg = "rgba(79,195,247,0.16)" if selected else "rgba(255,255,255,0.03)"
+            border = Colors.ACCENT if selected else Colors.BORDER_SUBTLE
+            color = Colors.TEXT_PRIMARY if selected else Colors.TEXT_SECONDARY
+            btn.setStyleSheet(f"""
+                QToolButton {{
+                    background: {bg}; color: {color}; border: 1px solid {border};
+                    border-radius: 6px; padding: 5px 6px; font-size: 10px; font-weight: bold;
+                }}
+                QToolButton:hover {{ background: rgba(255,255,255,0.08); }}
+            """)
+
     def _sep(self) -> QFrame:
         sep = QFrame()
         sep.setFixedHeight(1)
@@ -280,8 +330,9 @@ class SpawnPanel(QFrame):
         self.category_selected.emit(category_id)
 
     def set_selected_mob(self, name: str, preview_pixmap: QPixmap | None):
-        self._preview_name.setText(name or "Nenhum mob selecionado")
-        self._preview_hint.setText("Clique no mapa para carimbar" if name else "Escolha uma categoria e um mob")
+        empty_label = "Nenhum mob selecionado" if self._active_kind == "mob" else "Nenhum NPC selecionado"
+        self._preview_name.setText(name or empty_label)
+        self._preview_hint.setText("Clique no mapa para carimbar" if name else "Escolha uma categoria e um mob/NPC")
         if preview_pixmap and not preview_pixmap.isNull():
             self._preview_thumb.setStyleSheet("background: transparent; border: none;")
             self._preview_thumb.setPixmap(preview_pixmap)

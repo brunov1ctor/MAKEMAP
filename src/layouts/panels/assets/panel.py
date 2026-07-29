@@ -41,7 +41,10 @@ _CATEGORIES = [
     ("rocks", "🪨", "Rocks"),
     ("mountains", "⛰", "Mountains"),
     ("buildings", "🏠", "Buildings"),
-    ("effects", "✨", "Effects"),
+    # "effects" deliberately excluded — those are procedural, brush-painted
+    # animated effects (Névoa, Poeira, ...) generated from code (see
+    # brush_effects.ANIMATED_EFFECTS), not real files in
+    # library/assets/<style>/effects/, so there's nothing here to manage.
     ("misc", "📦", "Misc"),
 ]
 

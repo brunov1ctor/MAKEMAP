@@ -57,6 +57,7 @@ class MainLayout(QWidget):
         self.select_panel.hide()
         self.select_panel.close_requested.connect(self._close_select_panel)
         self.select_panel.layers_changed.connect(self.canvas.engine.selection.set_layer_filter)
+        self.select_panel.color_changed.connect(self.canvas.engine.transform.set_selection_color)
 
         # ═══ Mediators ═══
         # Every other panel (Brush/AssetBrowser, Grid, Terrain, Região/
@@ -306,6 +307,17 @@ class MainLayout(QWidget):
         self._reposition()
 
     def _on_tool_selected(self, tool_name: str):
+        # Same "independent menus, not simultaneous" rule as
+        # _toggle_panel_exclusive: switching to a different tool clears
+        # whatever's selected on canvas (stale Select-tool border/highlight
+        # otherwise lingers on top of Brush/Spawn/etc.) — except when a
+        # marker or text item is selected, since Marcador/Texto's own edit
+        # panels are designed to stay open across tool switches (see the
+        # _selected_marker()/_text_selected_items() checks below).
+        if tool_name != "Selecionar" and not self._marker_med._selected_marker() \
+                and not self._text_med._text_selected_items():
+            self.canvas.engine.selection.clear()
+
         if tool_name == "Brush":
             self._panel_mgr.show("Brush")
         else:
@@ -365,11 +377,22 @@ class MainLayout(QWidget):
         if action:
             action()
 
+    def _toggle_panel_exclusive(self, name: str):
+        """Toggle a toolbar-action panel (Grid/Terrain/Region/Light) that
+        isn't a canvas tool of its own — these run independently from the
+        Select tool, so opening one clears whatever's currently selected on
+        canvas instead of leaving its stale selection border/highlight
+        floating on top (they're independent menus, not meant to work
+        simultaneously)."""
+        self._panel_mgr.toggle(name)
+        if self._panel_mgr.is_visible(name):
+            self.canvas.engine.selection.clear()
+        self._reposition()
+
     # ─── Grid Panel ───
 
     def _toggle_grid_panel(self):
-        self._panel_mgr.toggle("Grid")
-        self._reposition()
+        self._toggle_panel_exclusive("Grid")
 
     def _close_grid_panel(self):
         self._panel_mgr.hide("Grid")
@@ -384,8 +407,7 @@ class MainLayout(QWidget):
     # ─── Terrain Panel ───
 
     def _toggle_terrain_panel(self):
-        self._panel_mgr.toggle("Terrain")
-        self._reposition()
+        self._toggle_panel_exclusive("Terrain")
 
     def _close_terrain_panel(self):
         self._panel_mgr.hide("Terrain")
@@ -395,8 +417,7 @@ class MainLayout(QWidget):
     # ─── Região Panel ───
 
     def _toggle_region_panel(self):
-        self._panel_mgr.toggle("Region")
-        self._reposition()
+        self._toggle_panel_exclusive("Region")
 
     def _close_region_panel(self):
         self._panel_mgr.hide("Region")
@@ -405,8 +426,7 @@ class MainLayout(QWidget):
     # ─── Iluminação Panel ───
 
     def _toggle_light_panel(self):
-        self._panel_mgr.toggle("Light")
-        self._reposition()
+        self._toggle_panel_exclusive("Light")
 
     def _close_light_panel(self):
         self._panel_mgr.hide("Light")
@@ -482,7 +502,7 @@ class MainLayout(QWidget):
         viewport = self.canvas.engine.viewport
         center = viewport.mapToScene(viewport.viewport().rect().center())
         self.compass_hud.update_info(
-            self.terrain_panel.selected_terrain_name,
+            self.brush_panel.active_terrain_name(),
             float(self.terrain_panel.map_width), float(self.terrain_panel.map_height),
             center.x(), center.y(),
         )

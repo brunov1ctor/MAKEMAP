@@ -16,6 +16,13 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, Q
 
 _MAX_VISIBLE = 4
 
+# Fraction of the composed canvas a single (scale=1.0) portrait token's
+# diameter occupies — the rest is transparent margin around it (room for
+# the fan of smaller portraits behind the front one). Exported so shadow
+# occlusion (lighting_compositor.occluder_rects) can use the actual visible
+# circle instead of the full padded canvas as a mob stamp's silhouette.
+FRONT_TOKEN_SCALE = 0.60
+
 # (dx, dy, scale, rotation_degrees) as fractions of the final canvas size,
 # back-to-front paint order — the LAST entry in each list is the front/
 # center portrait (biggest, undimmed, drawn on top of the others).
@@ -103,7 +110,7 @@ def compose_group_portrait(face: QPixmap | None, quantity: int, size: int) -> QP
     placements = _LAYOUTS[visible]
     for i, (dx, dy, scale, rot) in enumerate(placements):
         is_front = i == len(placements) - 1
-        diameter = max(6, round(size * 0.60 * scale))
+        diameter = max(6, round(size * FRONT_TOKEN_SCALE * scale))
         portrait = _circular_portrait(face, diameter)
         if not is_front:
             portrait = _dimmed(portrait)

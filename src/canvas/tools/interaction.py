@@ -82,36 +82,102 @@ class ItemInteraction:
         Handle hits (resize/rotate/delete on an already-selected item) are
         unaffected — those are independent of what's directly under the
         cursor."""
+        if self.try_begin_handle(scene_pos):
+            return True
+
+        item = self.hit_selectable(scene_pos, item_filter)
+        if item is not None:
+            self.select_and_begin_drag(item, scene_pos, add)
+            return True
+
+        if not add and self.pos_in_selection_bounds(scene_pos):
+            self.begin_selection_drag(scene_pos)
+            return True
+
+        return False
+
+    def try_begin_handle(self, scene_pos: QPointF) -> bool:
+        """Delete/duplicate/rotate/resize handles on an already-selected
+        item — a small, precise, deliberate target, so this always commits
+        immediately (no drag-threshold deferral, unlike hit_selectable)."""
         if self.transform is None:
             return False
 
         selected = self.viewport.scene().selectedItems()
-        if selected:
-            handle = self.transform.handle_at(scene_pos)
-            if handle == HandleType.DELETE_ACTION:
-                self._delete_selected(selected)
-                return True
-            if handle == HandleType.DUPLICATE_ACTION:
-                self._duplicate_selected(selected)
-                return True
-            if handle == HandleType.ROTATION:
-                self._begin_rotate(selected, scene_pos)
-                return True
-            if handle in RESIZE_HANDLES:
-                self._begin_resize(selected, handle, scene_pos)
-                return True
+        if not selected:
+            return False
 
-        item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
-        if item and self.selection.is_selectable(item) and (item_filter is None or item_filter(item)):
-            if item not in selected:
-                if add:
-                    self.selection.toggle(item)
-                else:
-                    self.selection.select(item)
-            self._begin_drag(self.viewport.scene().selectedItems(), scene_pos)
+        handle = self.transform.handle_at(scene_pos)
+        if handle == HandleType.DELETE_ACTION:
+            self._delete_selected(selected)
+            return True
+        if handle == HandleType.DUPLICATE_ACTION:
+            self._duplicate_selected(selected)
+            return True
+        if handle == HandleType.ROTATION:
+            self._begin_rotate(selected, scene_pos)
+            return True
+        if handle in RESIZE_HANDLES:
+            self._begin_resize(selected, handle, scene_pos)
             return True
 
         return False
+
+    def hit_selectable(self, scene_pos: QPointF, item_filter=None):
+        """Pure test — the selectable item directly under scene_pos (honoring
+        the layer filter and item_filter), or None. Does not select or start
+        a drag; callers that want to defer the select/drag decision (e.g.
+        PanTool, to disambiguate a click from the start of a pan drag) test
+        with this first and commit later via select_and_begin_drag."""
+        if self.transform is None:
+            return None
+        item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
+        if item and self.selection.is_selectable(item) and (item_filter is None or item_filter(item)):
+            return item
+        return None
+
+    def select_and_begin_drag(self, item, scene_pos: QPointF, add: bool = False):
+        """Commit a hit_selectable() result: select `item` (unless already
+        selected) and start dragging it from scene_pos."""
+        selected = self.viewport.scene().selectedItems()
+        if item not in selected:
+            if add:
+                self.selection.toggle(item)
+            else:
+                self.selection.select(item)
+        self._begin_drag(self.viewport.scene().selectedItems(), scene_pos)
+
+    def pos_in_selection_bounds(self, scene_pos: QPointF) -> bool:
+        """Whether scene_pos falls inside one of the selected items' own
+        (tight, rotation-aware) bounds — used as a fallback so clicking
+        inside the selection still grabs/drags it even when itemAt() misses
+        (a hollow shape like a zone outline with no fill, a gap between
+        several selected items, ...), matching how a design app treats
+        "anywhere in the marquee" as a hit on the selection, not empty
+        canvas.
+
+        Tested per-item in each item's own local coordinates (not the
+        union's axis-aligned scene bounding box) — a rotated item's
+        sceneBoundingRect() is its axis-aligned envelope, which is
+        noticeably bigger than the rotated shape itself, so the union rect
+        would keep "grabbing" the selection (instead of deselecting) for
+        clicks that are visibly outside the rotated object but still inside
+        that envelope's empty corners."""
+        if self.transform is None:
+            return False
+        selected = self.viewport.scene().selectedItems()
+        for item in selected:
+            rect_fn = getattr(item, "selection_bounding_rect", None)
+            local_rect = rect_fn() if rect_fn else item.boundingRect()
+            if local_rect.contains(item.mapFromScene(scene_pos)):
+                return True
+        return False
+
+    def begin_selection_drag(self, scene_pos: QPointF):
+        """Start dragging the entire current selection from scene_pos,
+        without changing what's selected — the pos_in_selection_bounds()
+        fallback path."""
+        self._begin_drag(self.viewport.scene().selectedItems(), scene_pos)
 
     def move(self, scene_pos: QPointF) -> bool:
         if self.rotating:
@@ -153,7 +219,7 @@ class ItemInteraction:
             return
         delta = scene_pos - self._drag_last
         self.transform.move(self._drag_items, delta.x(), delta.y())
-        self.transform.show_handles(self._drag_items)
+        self.transform.reposition_handles(self._drag_items)
         self._drag_last = scene_pos
 
     def _end_drag(self, scene_pos: QPointF):
@@ -247,8 +313,26 @@ class ItemInteraction:
         delta = angle_now - self._rotate_start_angle
         self._rotate_start_angle = angle_now
         items = list(self._rotate_initial.keys())
-        self.transform.rotate(items, delta, self._rotate_center)
-        self.transform.show_handles(items)
+
+        # A light has no visible graphic of its own to spin — its cone's
+        # actual aim is props.direction_deg, read directly by
+        # GlobalLightingOverlay (never by the item's own QGraphicsItem
+        # transform). Rotating it the generic way (transform.rotate(),
+        # which calls item.setRotation()) only spun the invisible item
+        # transform — the on-canvas dashed gizmo (drawn in the item's own,
+        # now-rotated, local space) visibly followed the drag, but the
+        # REAL glow rendered elsewhere never moved, reading as "rotation
+        # doesn't do anything." Same fix pattern as _do_resize's own
+        # LightItem special-case for radius below.
+        lights = [it for it in items if isinstance(it, LightItem)]
+        others = [it for it in items if it not in lights]
+        for light in lights:
+            light.props.direction_deg = (light.props.direction_deg + delta) % 360
+            light.prepareGeometryChange()
+            light.update()
+        if others:
+            self.transform.rotate(others, delta, self._rotate_center)
+        self.transform.reposition_handles(items)
 
     def _end_rotate(self):
         if self.history and self._rotate_initial:
@@ -335,7 +419,7 @@ class ItemInteraction:
                 item.update()
             else:
                 self.transform.scale([item], sx, sy, self._resize_anchor)
-        self.transform.show_handles(self._resize_items)
+        self.transform.reposition_handles(self._resize_items)
 
     def _end_resize(self):
         self.transform.end_transform()

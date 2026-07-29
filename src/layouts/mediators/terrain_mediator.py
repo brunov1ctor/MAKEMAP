@@ -57,8 +57,10 @@ class TerrainMediator:
         # Deferred — same reasoning as Região's card list: a freshly
         # inserted TerrainCard's sizeHint() isn't settled synchronously.
         panel.content_changed.connect(lambda: QTimer.singleShot(0, self._l._reposition))
-        # Compass HUD shows the active terrain's name/size — keep it live.
-        panel.terrain_selected.connect(lambda _id: self._l._refresh_compass_hud())
+        # Compass HUD shows the map's own size (from this panel) alongside
+        # the brush's active "Pintando em" terrain name (from BrushMediator
+        # — see brush_mediator.py's own compass-refresh wiring) — a rename
+        # here can change that terrain's display name too, so keep it live.
         panel.terrain_renamed.connect(lambda _id, _name: self._l._refresh_compass_hud())
 
         # Map boundary overlays reference

@@ -41,6 +41,10 @@ class AtributosSectionMixin:
         self._resist_fisica_spin = _dspin(-100, 100, 0, " %")
         self._resist_magica_spin = _dspin(-100, 100, 0, " %")
         self._weight_spin = _dspin(0, 99999, 0, " kg")
+        # Used to scale how far a stamped mob's shadow reaches (see
+        # occluder_rects() in lighting_compositor.py) — a mob with 0
+        # altura casts no shadow at all, same as before this field existed.
+        self._height_spin = _dspin(0, 999, 0, " m")
         self._xp_spin = _spin(0, 9_999_999, 0)
         self._gold_spin = _spin(0, 9_999_999, 0)
         self._size_combo = _combo(SIZE_OPTIONS)
@@ -52,7 +56,7 @@ class AtributosSectionMixin:
         for spin_w in (self._hp_spin, self._mana_spin, self._damage_spin, self._defense_spin,
                        self._speed_spin, self._precision_spin, self._dodge_spin,
                        self._resist_fisica_spin, self._resist_magica_spin,
-                       self._weight_spin, self._xp_spin, self._gold_spin):
+                       self._weight_spin, self._height_spin, self._xp_spin, self._gold_spin):
             spin_w.setMaximumWidth(60)
         for w2 in (self._precision_spin, self._dodge_spin, self._resist_fisica_spin, self._resist_magica_spin):
             w2.setDecimals(1)
@@ -81,7 +85,8 @@ class AtributosSectionMixin:
         for label, widget in [
             ("Tamanho", self._size_combo),
             ("XP Concedida", self._xp_spin), ("Ouro Base", self._gold_spin),
-            ("Peso", self._weight_spin), ("Tipo de IA", self._ai_combo),
+            ("Peso", self._weight_spin), ("Altura", self._height_spin),
+            ("Tipo de IA", self._ai_combo),
             ("Comportamento", self._behavior_combo), ("Alinhamento", self._alignment_combo),
             ("Status", self._status_combo),
         ]:

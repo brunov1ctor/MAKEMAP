@@ -9,11 +9,91 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, QPointF, QRectF, QRect
 from PySide6.QtGui import (
     QImage, QPixmap, QPainter, QColor, QBrush, QTransform,
-    QRadialGradient, QPen, QPolygonF, QPainterPath,
+    QRadialGradient, QPen, QPolygonF, QPainterPath, QRegion, QBitmap,
 )
-from PySide6.QtWidgets import QGraphicsItem, QGraphicsPixmapItem, QGraphicsScene
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene
 
 from src.canvas.item_utils import suppress_selection_decoration
+
+
+class _LayerItem(QGraphicsItem):
+    """Drop-in replacement for QGraphicsPixmapItem used as a terrain/region
+    layer's scene item, with one addition: `update_region()` blits only a
+    dirty sub-rect into the cached pixmap and calls a bounded `update(rect)`,
+    instead of `QGraphicsPixmapItem.setPixmap()`'s only option — swapping in
+    a brand-new pixmap converted from the FULL layer QImage (multiple
+    megapixels once a map has grown) and repainting the item's whole
+    boundingRect, on every single mouse-move of a brush stroke. setPixmap()/
+    pixmap() are kept so existing full-image call sites (stroke-finish,
+    style/texture changes, RegionLayer's border compositing) work unchanged."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pixmap = QPixmap()
+        self._shape_cache: QPainterPath | None = None
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self._pixmap.width(), self._pixmap.height())
+
+    def shape(self) -> QPainterPath:
+        """Mask-based hit-test region (only the actually-painted/opaque
+        pixels), matching QGraphicsPixmapItem's default MaskShape — needed
+        so click-select and rubber-band box-select don't treat the whole
+        (possibly 4096px) layer bounding rect as "painted" and swallow
+        clicks/selections meant for whatever's underneath the unpainted
+        area. Computed lazily and cached: cheap on every repaint (just
+        drops the cache), only actually rebuilt the next time a hit-test
+        is needed (click / hover / box-select), not on every brush stamp."""
+        if self._shape_cache is None:
+            if self._pixmap.isNull():
+                self._shape_cache = QPainterPath()
+            else:
+                path = QPainterPath()
+                path.addRegion(QRegion(self._pixmap.mask()))
+                self._shape_cache = path
+        return self._shape_cache
+
+    def paint(self, painter, option, widget=None):
+        if self._pixmap.isNull():
+            return
+        exposed = option.exposedRect.intersected(self.boundingRect())
+        painter.drawPixmap(exposed, self._pixmap, exposed)
+
+    def setPixmap(self, pixmap: QPixmap):
+        prev_size = self._pixmap.size()
+        self._pixmap = pixmap
+        self._shape_cache = None
+        if pixmap.size() != prev_size:
+            self.prepareGeometryChange()
+        self.update()
+
+    def pixmap(self) -> QPixmap:
+        return self._pixmap
+
+    def invalidate_shape(self):
+        """Drop the cached hit-test shape — call after mutating the pixmap
+        returned by pixmap() directly (bypassing setPixmap/update_region)."""
+        self._shape_cache = None
+
+    def update_region(self, image: QImage, rect: QRect):
+        """Blit only `rect` from `image` into the cached pixmap and repaint
+        just that rect — the bounded-update fast path for live brush strokes.
+
+        If the layer's canvas just grew (map expanded to fit a stroke near
+        its edge), the cached pixmap no longer matches `image`'s size and a
+        rect-only blit would lose everything painted outside `rect` on the
+        new, bigger canvas — fall back to a full conversion in that case.
+        Expansion is rare (only when painting near the current edge), so
+        this cost is not part of the normal per-stamp hot path."""
+        if self._pixmap.size() != image.size():
+            self.setPixmap(QPixmap.fromImage(image))
+            return
+        painter = QPainter(self._pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        painter.drawImage(rect.topLeft(), image, rect)
+        painter.end()
+        self._shape_cache = None
+        self.update(QRectF(rect))
 
 
 @dataclass
@@ -323,7 +403,7 @@ class TerrainLayer:
         self._has_stencil = False
 
         # Scene item (child of parent_item if provided, so it moves with it)
-        self._item = QGraphicsPixmapItem(parent_item)
+        self._item = _LayerItem(parent_item)
         self._item.setZValue(1)
         self._item.setPos(0, 0)
         self._item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -336,12 +416,20 @@ class TerrainLayer:
         self._dirty_rect: QRect | None = None
         self._stroke_dirty: QRect | None = None
 
+        # Cache for _traced_silhouette() — the morphological close it runs
+        # is cheap-ish but not free, and effect_geometry() (BrushEffectsOverlay,
+        # for animated brush effects like Névoa, plus RegionLayer's border
+        # bake) can call it several times a second even while the mask
+        # itself sits still. Invalidated wherever the mask is mutated (see
+        # invalidate_traced_cache()).
+        self._traced_cache: tuple | None = None
+
     @property
     def mask(self) -> QImage:
         return self._mask
 
     @property
-    def item(self) -> QGraphicsPixmapItem:
+    def item(self) -> _LayerItem:
         return self._item
 
     @property
@@ -523,7 +611,7 @@ class TerrainLayer:
             return
 
         self._recomposite_rect(self._stroke_dirty)
-        self._item.setPixmap(QPixmap.fromImage(self._result))
+        self._item.update_region(self._result, self._stroke_dirty)
 
     def finish_stroke(self):
         """End of stroke — final full-quality update."""
@@ -736,6 +824,72 @@ class TerrainLayer:
             int(min(w, (max_x + 1 + pad) * sx) - max(0, (min_x - pad) * sx)),
             int(min(h, (max_y + 1 + pad) * sy) - max(0, (min_y - pad) * sy)),
         )
+
+    # Padding/smoothing for the traced silhouette (see _traced_silhouette) —
+    # shared constants so RegionLayer's border bake and effect_geometry()
+    # trace the exact same contour.
+    _TRACE_SMOOTH_RADIUS = 30  # px — morphological close radius
+    _TRACE_PAD = 38  # px — _TRACE_SMOOTH_RADIUS + border width + a couple px
+
+    def invalidate_traced_cache(self):
+        self._traced_cache = None
+
+    def _traced_silhouette(self) -> tuple[QPainterPath, QRect] | None:
+        """The smoothed, single-contour outline of the whole painted shape
+        — shared by RegionLayer's border bake and effect_geometry() (the
+        animated-effect clip, e.g. Névoa). A layer is painted as many
+        overlapping soft circular stamps — tracing their raw union directly
+        produces a bumpy, spray-paint-looking edge (every stamp's own
+        little bulge stays visible). A morphological close (dilate then
+        erode by the same radius, see morphological_close) first bridges
+        the gaps/bumps between stamps into one smooth blob, and only THEN
+        gets traced as a single QRegion-derived path — one clean contour
+        instead of following every stamp's edge. Restricted to the opaque
+        bounding box (not the full — possibly 4096x4096 — layer), so it
+        stays cheap regardless of the layer's overall size.
+
+        Returns (path, grown) where `path` is in `grown`-crop-local coords
+        (i.e. (0,0) is grown's top-left, NOT the layer's own origin) — every
+        caller already needs `grown`'s offset for its own painting, so
+        translating here would just make them undo it. None if nothing's
+        painted yet."""
+        if self._traced_cache is not None:
+            return self._traced_cache
+        bounds = self.opaque_bounds_local()
+        if bounds is None or bounds.width() <= 0 or bounds.height() <= 0:
+            return None
+
+        pad = self._TRACE_PAD
+        grown = bounds.adjusted(-pad, -pad, pad, pad).intersected(
+            QRect(0, 0, self._mask.width(), self._mask.height())
+        )
+        mask_crop = self._mask.copy(grown)
+        closed = morphological_close(mask_crop, self._TRACE_SMOOTH_RADIUS)
+
+        region = QRegion(QBitmap.fromImage(closed.createAlphaMask()))
+        path = QPainterPath()
+        path.addRegion(region)
+        # addRegion() adds every constituent scanline rectangle as its own
+        # sub-path — stroking that directly shows every internal rectangle
+        # seam as a stray line cutting across the shape. simplified()
+        # merges them into just the outer silhouette before we stroke it.
+        path = path.simplified()
+        self._traced_cache = (path, grown)
+        return self._traced_cache
+
+    def effect_geometry(self) -> tuple[QPainterPath, QRectF] | None:
+        """Traced silhouette (see _traced_silhouette) in this layer's own
+        LOCAL item coords (unlike that method's raw return, already
+        translated by `grown`'s offset) plus its bounding rect — what
+        BrushEffectsOverlay clips an animated brush effect (e.g. Névoa) to,
+        via item.sceneTransform() to bring it into scene coords. None if
+        nothing's painted yet."""
+        traced = self._traced_silhouette()
+        if traced is None:
+            return None
+        path, grown = traced
+        path = QTransform().translate(grown.left(), grown.top()).map(path)
+        return path, QRectF(grown)
 
     def mask_crop(self, rect: QRect) -> QImage | None:
         """A copy of `_mask` cropped to `rect` (layer-local pixel coords),

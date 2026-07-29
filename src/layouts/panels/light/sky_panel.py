@@ -13,7 +13,19 @@ from PySide6.QtCore import Qt, Signal
 from src.styles.tokens import Colors, Typography
 from src.layouts.panel_manager import paint_glass_panel
 from src.layouts.panels.brush.slider import BrushSlider
-from src.layouts.panels.light.edit_panel import _ColorSwatch, _field_label
+from src.layouts.panels.light.edit_panel import _ColorField
+
+# Common night-sky tints — one click instead of hunting the HSV picker for
+# a color you already know you want (see _ColorField's ↺ revert button for
+# getting back a color you overwrote by accident).
+_NIGHT_PRESETS = [
+    "#0B1533",  # padrão do app (default_color("sky"))
+    "#0D2B45",  # azul petróleo
+    "#1B1035",  # roxo profundo
+    "#2C2C54",  # índigo
+    "#3A2E52",  # dusk acinzentado
+    "#000000",  # preto absoluto
+]
 
 
 class SkyEditPanel(QFrame):
@@ -22,6 +34,7 @@ class SkyEditPanel(QFrame):
     day_amount_changed = Signal(float)
     color_changed = Signal(str)
     close_requested = Signal()
+    content_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -70,14 +83,10 @@ class SkyEditPanel(QFrame):
         self.day_amount_slider.value_changed.connect(lambda v: self._emit(self.day_amount_changed, v))
         layout.addWidget(self.day_amount_slider)
 
-        color_row = QHBoxLayout()
-        color_row.setSpacing(8)
-        color_row.addWidget(_field_label("Cor da noite"))
-        self.color_swatch = _ColorSwatch()
-        self.color_swatch.color_changed.connect(lambda c: self._emit(self.color_changed, c))
-        color_row.addWidget(self.color_swatch)
-        color_row.addStretch()
-        layout.addLayout(color_row)
+        self.color_field = _ColorField("Cor da noite", presets=_NIGHT_PRESETS)
+        self.color_field.color_changed.connect(lambda c: self._emit(self.color_changed, c))
+        self.color_field.toggled.connect(self.content_changed.emit)
+        layout.addWidget(self.color_field)
 
     @staticmethod
     def _sep() -> QFrame:
@@ -93,7 +102,7 @@ class SkyEditPanel(QFrame):
     def set_data(self, props):
         self._syncing = True
         self.day_amount_slider.set_value(props.day_amount)
-        self.color_swatch.set_color(props.color)
+        self.color_field.set_color(props.color)
         self._syncing = False
 
     def paintEvent(self, event):

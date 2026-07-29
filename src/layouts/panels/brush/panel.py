@@ -142,6 +142,7 @@ class BrushToolPanel(QFrame):
         self.setStyleSheet("background: transparent; border: none;")
 
         self._current_section = "params"  # read by _refresh_section_tab_style, built below
+        self._terrain_names: dict[str, str] = {}  # terrain_id -> name, kept by set_terrain_options — see active_terrain_name()
 
         # layout raiz do QFrame — tudo dentro dele recebe o fundo glass via paintEvent
         root = QVBoxLayout(self)
@@ -331,11 +332,26 @@ class BrushToolPanel(QFrame):
         self._terrain_combo.blockSignals(True)
         self._terrain_combo.clear()
         self._terrain_combo.addItem("🌍 Mapa Infinito", "")
+        self._terrain_names = {}
         for terrain_id, name in options:
             self._terrain_combo.addItem(f"🗺 {name}", terrain_id)
+            self._terrain_names[terrain_id] = name
         idx = self._terrain_combo.findData(current)
         self._terrain_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._terrain_combo.blockSignals(False)
+
+    def active_terrain_name(self) -> str:
+        """Display name of the currently-selected "Pintando em" target —
+        "Mapa Infinito" itself is a real answer (unbounded is still a
+        selected target, not "nothing selected"), not "" — what the compass
+        HUD's TERRENO field reads, so it tracks which terrain the brush is
+        actually bounded to painting into right now, not whatever's
+        separately selected over in the Terrain panel's own (unrelated)
+        card list."""
+        terrain_id = self._terrain_combo.itemData(self._terrain_combo.currentIndex()) or ""
+        if not terrain_id:
+            return "Mapa Infinito"
+        return self._terrain_names.get(terrain_id, "Mapa Infinito")
 
     def _build_sliders_grid(self):
         # 2 columns — each BrushSlider's name label wraps (see slider.py)

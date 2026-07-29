@@ -2,29 +2,122 @@
 
 from __future__ import annotations
 
+import math
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QObject, Signal, QPointF, QRectF
+from PySide6.QtCore import Qt, QObject, Signal, QPointF, QRectF, QTimer
 from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsEllipseItem,
     QGraphicsPathItem, QGraphicsSimpleTextItem,
 )
-from PySide6.QtGui import QPen, QColor, QTransform, QPainterPath
+from PySide6.QtGui import QPen, QColor, QTransform, QPainterPath, QPainterPathStroker
 
 from src.styles.tokens import Colors
 
 
+def _inverse_color(color: QColor) -> QColor:
+    """High-contrast complement of `color` — used for the pulse glow and
+    hover highlight so both always read clearly against whatever selection
+    color the user picked (see SelectToolPanel's color field)."""
+    return QColor(255 - color.red(), 255 - color.green(), 255 - color.blue())
+
+
+def _lerp_color(a: QColor, b: QColor, t: float) -> QColor:
+    t = max(0.0, min(1.0, t))
+    return QColor(
+        round(a.red() + (b.red() - a.red()) * t),
+        round(a.green() + (b.green() - a.green()) * t),
+        round(a.blue() + (b.blue() - a.blue()) * t),
+    )
+
+
 class _SelectionBorder(QGraphicsPathItem):
-    """Purely decorative selection outline. QGraphicsPathItem's default
-    shape() adds the raw (closed) path back on top of the stroke outline —
-    meant to keep a filled shape clickable across its whole interior even
-    with no brush — which made this border, sitting above everything else
-    at z=9999, swallow every click meant for the handles/object beneath it.
-    It should never be hit-tested at all."""
+    """Selection outline. QGraphicsPathItem's default shape() adds the raw
+    (closed) path back on top of the stroke outline — meant to keep a
+    filled shape clickable across its whole interior even with no brush —
+    which made this border, sitting above everything else at z=9999,
+    swallow every click meant for the handles/object beneath it. shape()
+    is overridden to a thin band hugging just the stroke line instead, so
+    it stays hoverable (cursor feedback + a brighter pulse — see
+    hoverEnterEvent/TransformEngine._on_pulse_tick) without blocking clicks
+    anywhere except right on the line itself — handles still win there too
+    since they sit at a higher z-value."""
+
+    HOVER_MARGIN = 6  # px on each side of the line, in scene units (pen is cosmetic)
+
+    def __init__(self, path: QPainterPath):
+        super().__init__(path)
+        self.setAcceptHoverEvents(True)
+        self.hovering = False
 
     def shape(self) -> QPainterPath:
-        return QPainterPath()
+        stroker = QPainterPathStroker()
+        stroker.setWidth(self.HOVER_MARGIN)
+        return stroker.createStroke(self.path())
+
+    def hoverEnterEvent(self, event):
+        self.hovering = True
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self.hovering = False
+        self.unsetCursor()
+        super().hoverLeaveEvent(event)
+
+
+class _HoverHandle(QGraphicsEllipseItem):
+    """Resize/rotate handle dot — grows and switches to the inverse-color
+    fill on hover, instead of sitting there as a flat, unresponsive circle."""
+
+    def __init__(self, x: float, y: float, size: float, base_pen: QPen, base_brush: QColor, hover_brush: QColor):
+        super().__init__(x, y, size, size)
+        self.setAcceptHoverEvents(True)
+        self.setTransformOriginPoint(x + size / 2, y + size / 2)
+        self._base_pen = base_pen
+        self._base_brush = base_brush
+        self._hover_brush = hover_brush
+        self.setPen(base_pen)
+        self.setBrush(base_brush)
+
+    def hoverEnterEvent(self, event):
+        self.setBrush(self._hover_brush)
+        self.setScale(1.3)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self.setBrush(self._base_brush)
+        self.setScale(1.0)
+        super().hoverLeaveEvent(event)
+
+
+class _HoverActionButton(QGraphicsEllipseItem):
+    """Rotate/duplicate/delete action button — same hover growth/color-swap
+    as _HoverHandle, plus flips its glyph label to stay legible against the
+    inverse-color fill."""
+
+    def __init__(self, size: float, base_pen: QPen, base_brush: QColor, hover_brush: QColor, label: QGraphicsSimpleTextItem):
+        super().__init__(0, 0, size, size)
+        self.setAcceptHoverEvents(True)
+        self.setTransformOriginPoint(size / 2, size / 2)
+        self._base_brush = base_brush
+        self._hover_brush = hover_brush
+        self._label = label
+        self.setPen(base_pen)
+        self.setBrush(base_brush)
+
+    def hoverEnterEvent(self, event):
+        self.setBrush(self._hover_brush)
+        self.setScale(1.2)
+        self._label.setBrush(QColor("#FFFFFF"))
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self.setBrush(self._base_brush)
+        self.setScale(1.0)
+        self._label.setBrush(QColor("#2C2C2C"))
+        super().hoverLeaveEvent(event)
 
 
 class HandleType(Enum):
@@ -103,6 +196,20 @@ class TransformEngine(QObject):
         self._transform_origin = QPointF()
         self._initial_positions: dict[QGraphicsItem, QPointF] = {}
         self._initial_transforms: dict[QGraphicsItem, QTransform] = {}
+        self._selection_color = QColor(Colors.PURPLE)
+        self._last_items: list[QGraphicsItem] = []
+        self._pulse_phase = 0.0
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(40)  # ~25fps — smooth without hogging the event loop
+        self._pulse_timer.timeout.connect(self._on_pulse_tick)
+
+    def set_selection_color(self, hex_color: str):
+        """Change the selection border/handle outline color — redraws
+        immediately if a selection is currently shown (see SelectToolPanel's
+        color field, wired in MainLayout)."""
+        self._selection_color = QColor(hex_color)
+        if self._border is not None:
+            self.show_handles(self._last_items)
 
     # --- Move ---
 
@@ -266,8 +373,10 @@ class TransformEngine(QObject):
         if not items:
             return
 
+        self._last_items = list(items)
         bounds = self._get_bounds(items)
-        accent = QColor(Colors.PURPLE)
+        accent = self._selection_color
+        inverse = _inverse_color(accent)
         pen = QPen(accent, 1.5)
         pen.setCosmetic(True)
 
@@ -310,9 +419,7 @@ class TransformEngine(QObject):
             HandleType.BOTTOM_RIGHT: bounds.bottomRight(),
         }
         for handle_type, pos in positions.items():
-            handle = QGraphicsEllipseItem(pos.x() - s / 2, pos.y() - s / 2, s, s)
-            handle.setPen(pen)
-            handle.setBrush(QColor("#FFFFFF"))
+            handle = _HoverHandle(pos.x() - s / 2, pos.y() - s / 2, s, pen, QColor("#FFFFFF"), inverse)
             handle.setZValue(10000)
             handle.setData(1, handle_type)
             handle.setCursor(_HANDLE_CURSORS[handle_type])
@@ -332,17 +439,8 @@ class TransformEngine(QObject):
         start_x = bounds.center().x() - total_w / 2
         for i, (handle_type, glyph) in enumerate(actions):
             cx = start_x + i * self.ACTION_SPACING
-            btn = QGraphicsEllipseItem(0, 0, d, d)
-            btn.setPos(cx - d / 2, bar_y)
-            btn.setPen(pen)
-            btn.setBrush(QColor(255, 255, 255, 235))
-            btn.setZValue(10000)
-            btn.setData(1, handle_type)
-            btn.setCursor(_HANDLE_CURSORS[handle_type])
-            self._scene.addItem(btn)
-            self._handles.append(btn)
 
-            label = QGraphicsSimpleTextItem(glyph, btn)
+            label = QGraphicsSimpleTextItem(glyph)
             label.setBrush(QColor("#2C2C2C"))
             font = label.font()
             font.setPointSize(9)
@@ -350,6 +448,70 @@ class TransformEngine(QObject):
             lb = label.boundingRect()
             label.setPos(d / 2 - lb.width() / 2, d / 2 - lb.height() / 2)
             label.setZValue(10001)
+
+            btn = _HoverActionButton(d, pen, QColor(255, 255, 255, 235), inverse, label)
+            btn.setPos(cx - d / 2, bar_y)
+            btn.setZValue(10000)
+            btn.setData(1, handle_type)
+            btn.setCursor(_HANDLE_CURSORS[handle_type])
+            label.setParentItem(btn)
+            self._scene.addItem(btn)
+            self._handles.append(btn)
+
+        self._pulse_timer.start()
+
+    def reposition_handles(self, items: list[QGraphicsItem]):
+        """Cheap per-move-tick update for an active drag/rotate/resize: moves
+        the already-built border/handles/action-buttons to match the current
+        bounds instead of show_handles()'s destroy-and-rebuild (~15
+        scene.addItem/removeItem calls) on every single mouse-move. Falls
+        back to a full show_handles() if the selection itself isn't the one
+        the handles were last built for (identity/order/count changed) —
+        reposition only makes sense while dragging the same items."""
+        if items != self._last_items or self._border is None:
+            self.show_handles(items)
+            return
+        if not items:
+            return
+
+        bounds = self._get_bounds(items)
+
+        border_path = QPainterPath()
+        border_path.addRoundedRect(bounds, 4, 4)
+        self._border.setPath(border_path)
+
+        for item_border, item in zip(self._item_borders, items):
+            item_path = QPainterPath()
+            item_path.addRoundedRect(self._item_bounds(item), 3, 3)
+            item_border.setPath(item_path)
+
+        s = self.HANDLE_SIZE
+        positions = {
+            HandleType.TOP_LEFT: bounds.topLeft(),
+            HandleType.TOP_CENTER: QPointF(bounds.center().x(), bounds.top()),
+            HandleType.TOP_RIGHT: bounds.topRight(),
+            HandleType.MIDDLE_LEFT: QPointF(bounds.left(), bounds.center().y()),
+            HandleType.MIDDLE_RIGHT: QPointF(bounds.right(), bounds.center().y()),
+            HandleType.BOTTOM_LEFT: bounds.bottomLeft(),
+            HandleType.BOTTOM_CENTER: QPointF(bounds.center().x(), bounds.bottom()),
+            HandleType.BOTTOM_RIGHT: bounds.bottomRight(),
+        }
+
+        bar_y = bounds.bottom() + self.ACTION_GAP
+        d = self.ACTION_SIZE
+        action_order = [HandleType.ROTATION, HandleType.DUPLICATE_ACTION, HandleType.DELETE_ACTION]
+        total_w = (len(action_order) - 1) * self.ACTION_SPACING
+        start_x = bounds.center().x() - total_w / 2
+
+        for handle in self._handles:
+            handle_type = handle.data(1)
+            pos = positions.get(handle_type)
+            if pos is not None:
+                handle.setRect(pos.x() - s / 2, pos.y() - s / 2, s, s)
+                handle.setTransformOriginPoint(pos.x(), pos.y())
+            elif handle_type in action_order:
+                cx = start_x + action_order.index(handle_type) * self.ACTION_SPACING
+                handle.setPos(cx - d / 2, bar_y)
 
     def hide_handles(self):
         """Remove the selection border and all handles/action buttons."""
@@ -364,6 +526,39 @@ class TransformEngine(QObject):
         for item_border in self._item_borders:
             self._scene.removeItem(item_border)
         self._item_borders.clear()
+
+        self._pulse_timer.stop()
+
+    def _on_pulse_tick(self):
+        """Animate the selection border/outlines toward the inverse of the
+        chosen color and back — a continuous "breathing" glow instead of a
+        flat static line, so the selection stays visually alive while
+        idle (not just reactive to hover)."""
+        if self._border is None:
+            self._pulse_timer.stop()
+            return
+
+        # Hovering the line itself pulses faster and swings further toward
+        # the inverse color — the same idle "breathing" glow, turned up as
+        # direct feedback that the line is interactive right now (see
+        # _SelectionBorder.hoverEnterEvent).
+        hovering = self._border.hovering
+        self._pulse_phase = (self._pulse_phase + (0.16 if hovering else 0.08)) % (2 * math.pi)
+        peak = 1.0 if hovering else 0.6
+        t = (math.sin(self._pulse_phase) + 1) / 2 * peak
+        accent = self._selection_color
+        inverse = _inverse_color(accent)
+        pulsed = _lerp_color(accent, inverse, t)
+        width = (1.5 + t * 1.2) * (1.4 if hovering else 1.0)
+
+        pen = QPen(pulsed, width)
+        pen.setCosmetic(True)
+        self._border.setPen(pen)
+
+        item_pen = QPen(pulsed, 1 + t * 0.8, Qt.PenStyle.DashLine)
+        item_pen.setCosmetic(True)
+        for item_border in self._item_borders:
+            item_border.setPen(item_pen)
 
     def handle_at(self, scene_pos: QPointF) -> HandleType | None:
         """Check if a position hits a transform handle or action button."""

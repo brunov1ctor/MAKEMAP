@@ -144,12 +144,6 @@ class QuestsPanel(MenuPanel):
         self.add_empty_state("Crie missões e objetivos para seus jogadores.")
 
 
-class NPCsPanel(MenuPanel):
-    def __init__(self, parent=None):
-        super().__init__("NPCs", "🧙", parent)
-        self.add_empty_state("Gerencie personagens não-jogáveis do seu mundo.")
-
-
 class LorePanel(MenuPanel):
     def __init__(self, parent=None):
         super().__init__("Lore", "📖", parent)
@@ -166,13 +160,12 @@ class ConfigPanel(MenuPanel):
         self.content_layout.addWidget(manager)
 
 
-# Registry for easy lookup. "Itens" and "Dungeons" are intentionally absent —
-# they're handled directly in MenuViewMediator._show_menu_view by the full
-# ItemsSkillsPanel / DungeonsPanel (both need the project's UnitOfWork, like
-# Mobs), not by an empty-state placeholder.
+# Registry for easy lookup. "Itens", "Dungeons" and "NPCs" are intentionally
+# absent — they're handled directly in MenuViewMediator._show_menu_view by
+# the full ItemsSkillsPanel / DungeonsPanel / NPCsPanel (all need the
+# project's UnitOfWork, like Mobs), not by an empty-state placeholder.
 MENU_PANELS = {
     "Quests": QuestsPanel,
-    "NPCs": NPCsPanel,
     "Lore": LorePanel,
     "Config": ConfigPanel,
 }

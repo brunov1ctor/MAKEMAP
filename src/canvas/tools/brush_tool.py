@@ -7,7 +7,7 @@ import math
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtCore import Qt, QPointF, QRectF, QRect
 from PySide6.QtGui import (
     QMouseEvent, QPen, QColor, QBrush, QPainterPath, QPolygonF,
     QRadialGradient, QImage, QPixmap, QPainter,
@@ -45,6 +45,11 @@ class BrushTool(BaseTool):
     cursor = Qt.CursorShape.CrossCursor
     TERRAIN_SPACING_RATIO = 0.08  # fraction of brush size between stamps
     INITIAL_LAYER_SIZE = 2048     # starting layer dimensions
+    # asset_id prefix for the virtual "Effects" category assets (see
+    # BrushMediator.populate_assets) — these aren't real library files, so
+    # they're routed here by id prefix instead of a DB category lookup
+    # (see _check_is_terrain, which DOES hit the DB).
+    EFFECT_ASSET_PREFIX = "effect:"
     MAX_FADE_SECONDS = 3.0        # smoothness=1.0 fade-in duration, real seconds
     SHORELINE_DILATE = 70         # px — outer reach of the foam glow from a land/water boundary
     SHORELINE_SMOOTH = 12         # px — rounds the edge-dither's jagged notches before glowing
@@ -79,9 +84,17 @@ class BrushTool(BaseTool):
 
         # Terrain layers: asset_id -> TerrainLayer
         self._terrain_layers: dict[str, TerrainLayer] = {}
+        # Brush-painted animated effect layers (Névoa, Poeira, ...):
+        # asset_id ("effect:<key>") -> TerrainLayer, mask-only, painted
+        # per-frame by BrushEffectsOverlay instead of a static texture.
+        # Kept separate from _terrain_layers so painting terrain never
+        # erases an effect stroke (_erase_other_layers only loops
+        # _terrain_layers) and vice versa.
+        self._effect_layers: dict[str, TerrainLayer] = {}
         self._active_terrain_layer: TerrainLayer | None = None
         self._active_asset_id: str = ""
         self._is_terrain_mode = False
+        self._is_effect_mode = False
 
         # (water_asset_id, land_asset_id) -> the standalone foam overlay
         # item for that pair (see _apply_shoreline_blend) — recomputed
@@ -209,7 +222,8 @@ class BrushTool(BaseTool):
     def set_active_asset(self, asset_id: str):
         """Called when user selects an asset in the panel."""
         self._active_asset_id = asset_id
-        self._is_terrain_mode = self._check_is_terrain(asset_id)
+        self._is_effect_mode = asset_id.startswith(self.EFFECT_ASSET_PREFIX)
+        self._is_terrain_mode = False if self._is_effect_mode else self._check_is_terrain(asset_id)
 
     def _check_is_terrain(self, asset_id: str) -> bool:
         """Check if asset belongs to 'terrain' OR 'water' category — both
@@ -235,7 +249,7 @@ class BrushTool(BaseTool):
         if not self._is_within_bounds(scene_pos):
             return
 
-        is_terrain = self._is_terrain_mode or (self.mask_mode and self._active_asset_id)
+        is_terrain = self._is_terrain_mode or self._is_effect_mode or (self.mask_mode and self._active_asset_id)
         # Right-click is an "erase" shortcut — only meaningful for terrain
         # painting, which is the only mode that supports erasing.
         if is_right and not is_terrain:
@@ -302,7 +316,8 @@ class BrushTool(BaseTool):
         painted, stamp = self._paint_terrain_at(pos, layer, params)
         if painted:
             layer.update_live()
-            self._erase_other_layers(pos, params, stamp)
+            if not self._is_effect_mode:
+                self._erase_other_layers(pos, params, stamp)
 
     def _snapshot_layer(self, asset_id: str, layer: TerrainLayer):
         """Capture a layer's pre-stroke state once, for undo."""
@@ -358,7 +373,8 @@ class BrushTool(BaseTool):
             painted, stamp = self._paint_terrain_at(pos, layer, params)
             if painted:
                 layer.update_live()
-                self._erase_other_layers(pos, params, stamp)
+                if not self._is_effect_mode:
+                    self._erase_other_layers(pos, params, stamp)
             self._last_terrain_pos = pos
             return
 
@@ -383,8 +399,10 @@ class BrushTool(BaseTool):
             stamp = build_stamp(params.size / 2, params, world_pos=scene_pt)
             layer.paint_at(local, params, stamp=stamp)
             # Erase same area from other terrain layers, with the exact
-            # same stamp footprint just painted above.
-            self._erase_other_layers(scene_pt, params, stamp)
+            # same stamp footprint just painted above — skipped for an
+            # effect stroke (Névoa etc. shouldn't erase the grass under it).
+            if not self._is_effect_mode:
+                self._erase_other_layers(scene_pt, params, stamp)
 
         layer.update_live()
         self._last_terrain_pos = pos
@@ -421,11 +439,24 @@ class BrushTool(BaseTool):
             roughness=params.roughness,
             erase=True,
         )
+        r = params.size / 2
         for asset_id, layer in self._terrain_layers.items():
             if asset_id == self._active_asset_id:
                 continue
-            self._snapshot_layer(asset_id, layer)
             local = self._scene_to_layer(scene_pos, layer)
+            # Skip layers the stamp footprint doesn't even reach — cheap
+            # bounds check against the layer's own (downsampled, already-
+            # cached-by-caller-frequency-tolerant) opaque_bounds_local(),
+            # instead of unconditionally running snapshot+paint_at+
+            # update_live (a full erase pass) on every other terrain type
+            # ever used on the map, on every single mouse-move of a stroke.
+            bounds = layer.opaque_bounds_local()
+            if bounds is None:
+                continue
+            stamp_rect = QRect(int(local.x() - r), int(local.y() - r), int(params.size), int(params.size))
+            if not bounds.intersects(stamp_rect):
+                continue
+            self._snapshot_layer(asset_id, layer)
             layer.paint_at(local, erase_params, stamp=stamp)
             layer.update_live()
 
@@ -630,7 +661,7 @@ class BrushTool(BaseTool):
             return
         commands = []
         for asset_id, before_state in self._stroke_snapshots.items():
-            layer = self._terrain_layers.get(asset_id)
+            layer = self._terrain_layers.get(asset_id) or self._effect_layers.get(asset_id)
             if layer:
                 commands.append(PaintStrokeCommand(layer, before_state, layer.capture_state()))
         self._stroke_snapshots = {}
@@ -679,6 +710,8 @@ class BrushTool(BaseTool):
 
     def _get_or_create_terrain_layer(self, asset_id: str) -> TerrainLayer:
         """Get existing terrain layer for this asset or create new one."""
+        if asset_id.startswith(self.EFFECT_ASSET_PREFIX):
+            return self._get_or_create_effect_layer(asset_id)
         if asset_id in self._terrain_layers:
             layer = self._terrain_layers[asset_id]
             layer.set_mask_only(self.mask_mode)
@@ -712,6 +745,39 @@ class BrushTool(BaseTool):
                 layer.set_texture(pixmap, self.texture_scale, self.texture_rotation)
 
         self._terrain_layers[asset_id] = layer
+        return layer
+
+    def _get_or_create_effect_layer(self, asset_id: str) -> TerrainLayer:
+        """Brush-painted animated effect (Névoa, Poeira, ...) — `asset_id`
+        is "effect:<key>" (see EFFECT_ASSET_PREFIX). Always mask_only: it
+        has no texture of its own, and with no stencil set either, its
+        `_result` composites to fully empty (see TerrainLayer.
+        _recomposite_rect) — the item itself paints nothing, only its raw
+        `_mask` matters, read by BrushEffectsOverlay via effect_geometry()
+        to paint the actual animated look on top every frame."""
+        if asset_id in self._effect_layers:
+            return self._effect_layers[asset_id]
+        effect_key = asset_id[len(self.EFFECT_ASSET_PREFIX):]
+
+        parent_item = None
+        if self._active_boundary and self._active_boundary._item:
+            parent_item = self._active_boundary._item
+
+        map_size = self.INITIAL_LAYER_SIZE
+        layer = TerrainLayer(self.viewport.scene(), map_size, map_size, parent_item=parent_item)
+        layer.item.setPos(-map_size / 2, -map_size / 2)
+        layer.set_mask_only(True)
+        # Overrides TerrainLayer's own default {"item_type": "terrain"} —
+        # tagged "asset" (falls under the Select tool's "Assets" layer
+        # filter, same as any other brush-painted asset) plus the
+        # effect_key BrushEffectsOverlay scans for. data(3) is a
+        # self-reference (same back-reference pattern RegionLayer used to
+        # use) so the overlay can get from the bare scene item back to
+        # this TerrainLayer instance.
+        layer.item.setData(0, {"item_type": "asset", "effect_key": effect_key})
+        layer.item.setData(3, layer)
+
+        self._effect_layers[asset_id] = layer
         return layer
 
     def is_water_asset(self, asset_id: str) -> bool:

@@ -13,12 +13,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QPointF, QRect, QRectF
 from PySide6.QtGui import (
-    QColor, QPixmap, QPainter, QImage, QBitmap, QRegion, QPainterPath, QPen,
-    QFont, QFontMetrics,
+    QColor, QPixmap, QPainter, QImage, QPainterPath, QPen,
+    QFont, QFontMetrics, QTransform,
 )
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsPixmapItem
 
-from src.engines.map.terrain_layer import TerrainLayer, TerrainBrushParams, morphological_close
+from src.engines.map.terrain_layer import TerrainLayer, TerrainBrushParams
 from src.engines.map.region_styles import apply_style
 from src.canvas.item_utils import suppress_selection_decoration, enable_hover_glow
 
@@ -28,7 +28,6 @@ from src.canvas.item_utils import suppress_selection_decoration, enable_hover_gl
 _SCAN_SIZE = 64
 _ALPHA_THRESHOLD = 10
 _BORDER_WIDTH = 6  # px — stroke width of the traced outline
-_SMOOTH_RADIUS = 30  # px — morphological close radius, see terrain_layer.morphological_close
 _LABEL_MAX_STARS = 5
 
 
@@ -57,6 +56,7 @@ class RegionLayer:
         self._label_item: QGraphicsPixmapItem | None = None
         self._label_name = ""
         self._label_stars = 0
+
 
     def _apply_color_texture(self):
         # Fill is always painted fully opaque — set_opacity's item-level
@@ -113,6 +113,14 @@ class RegionLayer:
         self._style = style_key or "Nenhum"
         self._reapply_style()
 
+    @property
+    def estilo(self) -> str:
+        """Current "Estilo" key — one of region_styles.STYLE_NAMES, applied
+        as a static bake by _reapply_style/apply_style. Animated, time-
+        driven effects (Névoa, Poeira, ...) are a separate, brush-painted
+        concept now — see src/engines/map/brush_effects.py."""
+        return self._style
+
     def _reapply_style(self):
         """Re-derives the item's displayed pixmap from the plain composited
         (bordered) result — must be re-run after every non-live recomposite
@@ -127,22 +135,27 @@ class RegionLayer:
         laggier to paint than plain terrain. update_live() now restyles
         only the stroke's own dirty rect; the crisp border still only
         reappears once the stroke actually finishes."""
+        # Every caller of _reapply_style (stroke finished, color change,
+        # mask reload/clear/undo) is a point where the mask itself may
+        # have changed — see TerrainLayer._traced_cache's own docstring for
+        # why this needs invalidating here rather than left to go stale.
+        self._terrain.invalidate_traced_cache()
         img = QImage(self._bordered_result())
         apply_style(self._style, img)
         self._terrain.item.setPixmap(QPixmap.fromImage(img))
 
+    def effect_geometry(self) -> tuple[QPainterPath, QRectF] | None:
+        """Traced silhouette of the whole painted shape, in this layer's
+        own LOCAL item coords, plus its bounding rect — what
+        BrushEffectsOverlay would clip an animated brush effect to. Kept
+        as a thin passthrough to TerrainLayer.effect_geometry() (see there
+        for how the contour itself is derived) since _bordered_result below
+        needs the exact same traced contour for its border bake."""
+        return self._terrain.effect_geometry()
+
     def _bordered_result(self) -> QImage:
-        """Cities-Skylines-style single closed outline traced around the
-        whole painted shape. A região is painted as many overlapping soft
-        circular stamps — tracing their raw union directly produces a
-        bumpy, spray-paint-looking edge (every stamp's own little bulge
-        stays visible). A morphological close (dilate then erode by the
-        same radius, see terrain_layer.morphological_close) first bridges the gaps/bumps
-        between stamps into one smooth blob, and only THEN gets traced as a
-        single QRegion-derived path and stroked once — one clean contour
-        instead of following every stamp's edge. Restricted to the opaque
-        bounding box (not the full — possibly 4096x4096 — layer), so it
-        stays cheap regardless of the layer's overall size.
+        """See TerrainLayer._traced_silhouette for how the contour itself
+        is derived.
 
         The fill itself is also clipped to this same traced contour before
         the border is drawn — a soft/feathered stamp's alpha falls off
@@ -150,25 +163,10 @@ class RegionLayer:
         past the line that's supposed to bound it, reading as the spray
         "leaking" outside the border."""
         result = self._terrain._result.copy()
-        bounds = self._terrain.opaque_bounds_local()
-        if bounds is None or bounds.width() <= 0 or bounds.height() <= 0:
+        traced = self._terrain._traced_silhouette()
+        if traced is None:
             return result
-
-        pad = _SMOOTH_RADIUS + _BORDER_WIDTH + 2
-        grown = bounds.adjusted(-pad, -pad, pad, pad).intersected(
-            QRect(0, 0, self._terrain._mask.width(), self._terrain._mask.height())
-        )
-        mask_crop = self._terrain._mask.copy(grown)
-        closed = morphological_close(mask_crop, _SMOOTH_RADIUS)
-
-        region = QRegion(QBitmap.fromImage(closed.createAlphaMask()))
-        path = QPainterPath()
-        path.addRegion(region)
-        # addRegion() adds every constituent scanline rectangle as its own
-        # sub-path — stroking that directly shows every internal rectangle
-        # seam as a stray line cutting across the shape. simplified()
-        # merges them into just the outer silhouette before we stroke it.
-        path = path.simplified()
+        path, grown = traced
 
         # Clip the fill to the contour — draws a solid silhouette of `path`
         # into its own alpha-only stencil, then AND's the cropped fill
@@ -244,12 +242,17 @@ class RegionLayer:
         # estilizada regions laggy to paint.
         crop = self._terrain._result.copy(clamped)
         apply_style(self._style, crop)
+        # Paint straight into the item's cached pixmap (same object, by
+        # reference) and ask for a bounded repaint of just `clamped` —
+        # going through setPixmap() here would re-trigger a full-item
+        # update even though only this crop actually changed.
         pixmap = self._terrain.item.pixmap()
         painter = QPainter(pixmap)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
         painter.drawImage(clamped.topLeft(), crop)
         painter.end()
-        self._terrain.item.setPixmap(pixmap)
+        self._terrain.item.invalidate_shape()
+        self._terrain.item.update(QRectF(clamped))
 
     def finish_stroke(self):
         self._terrain.finish_stroke()

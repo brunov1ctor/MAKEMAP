@@ -235,12 +235,27 @@ class CanvasEngine(QWidget):
         BrushMediator to export/persist."""
         return self._brush_tool._terrain_layers
 
+    def effect_layers(self) -> dict[str, TerrainLayer]:
+        """All brush-painted animated effect layers (Névoa, Poeira, ...),
+        keyed by "effect:<key>" asset_id — for BrushMediator to
+        export/persist, same idea as terrain_layers()."""
+        return self._brush_tool._effect_layers
+
+    def get_or_create_effect_layer(self, asset_id: str) -> TerrainLayer:
+        """Effect-layer counterpart to get_or_create_terrain_layer() —
+        used by BrushMediator to reload a persisted effect stroke."""
+        return self._brush_tool._get_or_create_effect_layer(asset_id)
+
     def clear_terrain_layers(self):
-        """Removes every brush-painted terrain layer from the scene —
-        used when switching projects (see BrushMediator._load_from_db)."""
+        """Removes every brush-painted terrain AND effect layer from the
+        scene — used when switching projects (see
+        BrushMediator._load_from_db)."""
         for layer in self._brush_tool._terrain_layers.values():
             layer.remove_from_scene()
         self._brush_tool._terrain_layers.clear()
+        for layer in self._brush_tool._effect_layers.values():
+            layer.remove_from_scene()
+        self._brush_tool._effect_layers.clear()
         # The foam/opacity-blend overlays are purely derived from these
         # layers (see BrushTool._clear_all_blend_overlays) — without this
         # they'd linger in the scene, orphaned, after the layers they were

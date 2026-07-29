@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors
 from src.layouts.panel_manager import paint_glass_panel
+from src.layouts.panels.light.edit_panel import _ColorField
 
 # (key, label) — key matches the "item_type" tag set on scene items at
 # creation time (TerrainLayer, brush-stamped/generated assets, zones).
@@ -35,6 +36,7 @@ class SelectToolPanel(QFrame):
     PANEL_WIDTH = 190
 
     layers_changed = Signal(object)  # set[str] | None (None = no filtering)
+    color_changed = Signal(str)
     close_requested = Signal()
 
     def __init__(self, parent=None):
@@ -126,6 +128,18 @@ class SelectToolPanel(QFrame):
             cb.toggled.connect(self._on_toggle)
             layout.addWidget(cb)
             self._checks[key] = cb
+
+        sep2 = QFrame()
+        sep2.setFixedHeight(1)
+        sep2.setStyleSheet("background: rgba(255,255,255,0.10); border: none;")
+        layout.addWidget(sep2)
+
+        # ─── Selection outline color — was hardcoded pink (Colors.PURPLE)
+        # in TransformEngine.show_handles, now user-configurable ───
+        self.color_field = _ColorField("Cor da seleção")
+        self.color_field.set_color(Colors.PURPLE)
+        self.color_field.color_changed.connect(self.color_changed.emit)
+        layout.addWidget(self.color_field)
 
         scroll.setWidget(container)
 

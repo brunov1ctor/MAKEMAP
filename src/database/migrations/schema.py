@@ -959,6 +959,84 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         -- other two (see category_badge_color/category_tag_text_color).
         ALTER TABLE mob_categories ADD COLUMN tag_text_color TEXT DEFAULT '';
     """),
+    (25, "Mobs panel — height field, used to scale how much shadow a mob stamp casts", """
+        ALTER TABLE mobs ADD COLUMN altura REAL DEFAULT 0;
+    """),
+    (26, "Brush tool — animated effect strokes (Névoa, Poeira, Chuva, ...), reusing painted_terrain's mask storage", """
+        -- Painted with the Brush tool's "Effects" category, same mask
+        -- mechanism as terrain/water (see painted_terrain, migration 10),
+        -- just mask-only (no visible texture) — the animated look is
+        -- painted per-frame by BrushEffectsOverlay instead (see
+        -- src/engines/map/brush_effects.py). NULL for ordinary terrain/
+        -- water rows; set to an ANIMATED_EFFECTS key (e.g. "Névoa") for an
+        -- effect stroke.
+        ALTER TABLE painted_terrain ADD COLUMN effect_key TEXT DEFAULT NULL;
+    """),
+    (27, "NPCs panel — full parity with Mobs: category tree, stamp assets, extended fields", """
+        -- Mirrors migrations 3/4/5/8 for mobs, adapted to NPC semantics
+        -- (no aggro/damage stats; instead state/reaction/attackable/flees/
+        -- dies/respawns toggles matching the NPCs panel's Comportamento
+        -- section). No FK from npcs.category into npc_categories, same
+        -- loose-reference reasoning as mobs.category (migration 5).
+        ALTER TABLE npcs ADD COLUMN title TEXT DEFAULT '';
+        ALTER TABLE npcs ADD COLUMN npc_type TEXT DEFAULT 'Mercador';
+        ALTER TABLE npcs ADD COLUMN category TEXT DEFAULT '';
+        ALTER TABLE npcs ADD COLUMN subcategory TEXT DEFAULT '';
+        ALTER TABLE npcs ADD COLUMN zone_id TEXT DEFAULT '';
+        ALTER TABLE npcs ADD COLUMN level_recommended_min INTEGER DEFAULT 1;
+        ALTER TABLE npcs ADD COLUMN level_recommended_max INTEGER DEFAULT 1;
+        ALTER TABLE npcs ADD COLUMN health INTEGER DEFAULT 100;
+        ALTER TABLE npcs ADD COLUMN mana INTEGER DEFAULT 50;
+        ALTER TABLE npcs ADD COLUMN image_path TEXT DEFAULT '';
+        ALTER TABLE npcs ADD COLUMN favorite INTEGER DEFAULT 0;
+        ALTER TABLE npcs ADD COLUMN status TEXT DEFAULT 'ativo';
+        ALTER TABLE npcs ADD COLUMN position_z REAL DEFAULT 0;
+        ALTER TABLE npcs ADD COLUMN initial_state TEXT DEFAULT 'Neutro';
+        ALTER TABLE npcs ADD COLUMN player_reaction TEXT DEFAULT 'Neutro';
+        ALTER TABLE npcs ADD COLUMN can_be_attacked INTEGER DEFAULT 0;
+        ALTER TABLE npcs ADD COLUMN flees_when_attacked INTEGER DEFAULT 0;
+        ALTER TABLE npcs ADD COLUMN can_die INTEGER DEFAULT 1;
+        ALTER TABLE npcs ADD COLUMN can_respawn INTEGER DEFAULT 0;
+        ALTER TABLE npcs ADD COLUMN respawn_time INTEGER DEFAULT 0;
+        ALTER TABLE npcs ADD COLUMN spawn_radius REAL DEFAULT 0;
+        ALTER TABLE npcs ADD COLUMN shadow_pct REAL DEFAULT 0;
+        ALTER TABLE npcs ADD COLUMN visible_on_map INTEGER DEFAULT 1;
+        ALTER TABLE npcs ADD COLUMN shows_on_minimap INTEGER DEFAULT 1;
+        ALTER TABLE npcs ADD COLUMN shows_quest_icon INTEGER DEFAULT 1;
+        ALTER TABLE npcs ADD COLUMN uses_animations INTEGER DEFAULT 1;
+        ALTER TABLE npcs ADD COLUMN notes TEXT DEFAULT '';
+        CREATE INDEX IF NOT EXISTS idx_npcs_category ON npcs(category);
+        CREATE INDEX IF NOT EXISTS idx_npcs_zone ON npcs(zone_id);
+
+        CREATE TABLE IF NOT EXISTS npc_categories (
+            id TEXT PRIMARY KEY,
+            parent_id TEXT REFERENCES npc_categories(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            icon TEXT DEFAULT '🧙',
+            sort_order INTEGER DEFAULT 0,
+            border_color TEXT DEFAULT '',
+            image_path TEXT DEFAULT '',
+            image_border_color TEXT DEFAULT '',
+            tag_text_color TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_npc_categories_parent ON npc_categories(parent_id);
+
+        CREATE TABLE IF NOT EXISTS npc_assets (
+            id TEXT PRIMARY KEY,
+            npc_id TEXT NOT NULL REFERENCES npcs(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            asset_type TEXT DEFAULT 'Modelo 3D',
+            file_path TEXT DEFAULT '',
+            file_size INTEGER DEFAULT 0,
+            rarity TEXT DEFAULT 'common',
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_npc_assets_npc ON npc_assets(npc_id);
+    """),
 ]
 
 

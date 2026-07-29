@@ -23,7 +23,6 @@ Structure:
                 ├── mountains/       ← montanhas, colinas
                 ├── rocks/           ← pedras, rochas
                 ├── buildings/       ← casas, torres, castelos, ruínas
-                ├── effects/         ← nuvens, neblina, partículas
                 └── misc/            ← outros
 
 Usage:
@@ -80,7 +79,6 @@ CATEGORY_FOLDERS = [
     "mountains",
     "rocks",
     "buildings",
-    "effects",
     "misc",
 ]
 

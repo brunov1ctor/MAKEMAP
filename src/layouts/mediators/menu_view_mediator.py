@@ -119,6 +119,18 @@ class MenuViewMediator:
             )
             panel.closed.connect(self._hide_menu_view)
             layout.addWidget(panel)
+        elif menu_name == "NPCs":
+            from src.layouts.panels.npcs.panel import NPCsPanel
+            window = l.window()
+            uow = window.uow if window and hasattr(window, 'uow') else None
+            project_dir = window.project.path if window and getattr(window, 'project', None) else None
+            panel = NPCsPanel(
+                uow, zones_provider=l._region_med.zones_list,
+                zone_thumbnail_provider=l._region_med.zone_thumbnail,
+                project_dir=project_dir, parent=container,
+            )
+            panel.closed.connect(self._hide_menu_view)
+            layout.addWidget(panel)
         elif menu_name == "Itens":
             from src.layouts.panels.items.panel import ItemsSkillsPanel
             window = l.window()

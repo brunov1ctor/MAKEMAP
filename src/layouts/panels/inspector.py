@@ -286,7 +286,7 @@ _ATRIBUTOS_SPEC = [
     ("Ouro", "ouro", None),
     ("Peso", "peso", None),
     ("Facção", "faction", None),
-    ("Status", "status", None),
+    ("Altura", "altura", None),
 ]
 _IA_SPEC = [
     ("Tipo de IA", "ai_type", None),

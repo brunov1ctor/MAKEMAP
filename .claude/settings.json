@@ -86,7 +86,8 @@
       "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_radar2.py\")",
       "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_tree_stats.py\")",
       "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_req_arma.py\")",
-      "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_flags_row.py\")"
+      "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_flags_row.py\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/canvas/tools/defaults.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/canvas/tools/interaction.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ],
     "additionalDirectories": [
       "\\tmp",

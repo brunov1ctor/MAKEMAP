@@ -358,6 +358,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             self._resist_magica_spin.setValue(0)
             self._element_edit.clear()
             self._weight_spin.setValue(0)
+            self._height_spin.setValue(0)
             self._xp_spin.setValue(0)
             self._gold_spin.setValue(0)
             self._size_combo.setCurrentIndex(0)
@@ -455,6 +456,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
 
         self._element_edit.setText(mob.get("element", "") or "")
         self._weight_spin.setValue(float(mob.get("peso", 0) or 0))
+        self._height_spin.setValue(float(mob.get("altura", 0) or 0))
         self._xp_spin.setValue(int(mob.get("xp", 0) or 0))
         self._gold_spin.setValue(int(mob.get("ouro", 0) or 0))
         size = mob.get("tamanho", "Médio") or "Médio"
@@ -543,6 +545,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             resist_magica=self._resist_magica_spin.value(),
             element=self._element_edit.text().strip(),
             peso=self._weight_spin.value(),
+            altura=self._height_spin.value(),
             xp=self._xp_spin.value(),
             ouro=self._gold_spin.value(),
             tamanho=self._size_combo.currentText(),

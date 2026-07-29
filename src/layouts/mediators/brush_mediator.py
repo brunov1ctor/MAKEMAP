@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QPointF, QTimer
 from PySide6.QtGui import QPixmap
 
+from src.canvas.brush_effects_overlay import BrushEffectsOverlay
+from src.canvas.tools.brush_tool import BrushTool
+from src.engines.map.brush_effects import ANIMATED_EFFECTS
 from src.layouts.panels.brush.panel import BrushToolPanel
 from src.layouts.panels.brush.asset_browser import AssetBrowserPanel
 
@@ -21,6 +24,12 @@ logger = logging.getLogger("MAKEMAP")
 # a rapid back-to-back sequence (e.g. undo mashing) into one DB round trip
 # rather than gating on every single edit.
 _SYNC_DEBOUNCE_MS = 250
+
+# Repaint tick for BrushEffectsOverlay's animated effects (Névoa, Poeira,
+# ...) — same cadence/safety-net pattern RegionMediator used to drive its
+# own (now-removed) região effects overlay.
+_EFFECTS_TICK_MS = 150
+_EFFECTS_SAFETY_NET_TICKS = 20
 
 
 class BrushMediator:
@@ -55,6 +64,26 @@ class BrushMediator:
         self._sync_timer.timeout.connect(self._sync_to_db)
         self._l.canvas.engine.history.history_changed.connect(self._on_history_changed)
 
+        self._effects_overlay = BrushEffectsOverlay()
+        self._l.canvas.engine.viewport.scene().addItem(self._effects_overlay)
+        self._effects_tick_count = 0
+        self._effects_timer = QTimer()
+        self._effects_timer.timeout.connect(self._tick_effects)
+        self._effects_timer.start(_EFFECTS_TICK_MS)
+
+    def _tick_effects(self):
+        """Drives BrushEffectsOverlay's animated effects (Névoa's
+        breathe/drift) — the overlay's paint() is time.monotonic()-driven,
+        so it needs to actually repaint on a schedule, but only when some
+        stroke is actually animated; otherwise this is a no-op."""
+        self._effects_tick_count += 1
+        if self._effects_tick_count % _EFFECTS_SAFETY_NET_TICKS == 0:
+            self._effects_overlay.mark_dirty()
+        if not self._effects_overlay.has_active():
+            return
+        self._effects_overlay.prepareGeometryChange()
+        self._effects_overlay.update()
+
     # ─── Persistence wiring (called by application.py on project load) ───
 
     def set_uow(self, uow):
@@ -80,10 +109,15 @@ class BrushMediator:
             return
 
         for row in self._uow.painted_terrain.get_by_map(self.MAP_ID):
-            layer = engine.get_or_create_terrain_layer(row["asset_id"])
+            asset_id = row["asset_id"]
+            if asset_id.startswith(BrushTool.EFFECT_ASSET_PREFIX):
+                layer = engine.get_or_create_effect_layer(asset_id)
+            else:
+                layer = engine.get_or_create_terrain_layer(asset_id)
+                layer.set_texture_transform(row["texture_scale"], row["texture_rotation"])
             layer.import_mask_png_base64(row["mask_png"], row["mask_x"], row["mask_y"])
-            layer.set_texture_transform(row["texture_scale"], row["texture_rotation"])
-            self._terrain_rows[row["asset_id"]] = row["id"]
+            self._terrain_rows[asset_id] = row["id"]
+        self._effects_overlay.mark_dirty()
 
         # The water/land foam halo (BrushTool._apply_shoreline_blend) is
         # purely derived from the painted masks — never persisted itself
@@ -108,6 +142,11 @@ class BrushMediator:
 
     def _on_history_changed(self):
         self._sync_timer.start(_SYNC_DEBOUNCE_MS)
+        # Painting/erasing/undoing/redoing an effect stroke can grow, shrink
+        # or remove its mask — the overlay's cached active-layers list and
+        # bounds need to know, same "mark_dirty on every mutation" pattern
+        # RegionMediator used to run for its own (now-removed) effects.
+        self._effects_overlay.mark_dirty()
 
     def _sync_to_db(self):
         """Upserts every currently-painted terrain mask + object stamp into
@@ -130,10 +169,30 @@ class BrushMediator:
             else:
                 self._terrain_rows[asset_id] = self._uow.painted_terrain.create(map_id=self.MAP_ID, **fields)
 
+        for asset_id, layer in engine.effect_layers().items():
+            mask_png, mask_x, mask_y = layer.export_mask_png_base64()
+            fields = dict(
+                asset_id=asset_id, mask_png=mask_png, mask_x=mask_x, mask_y=mask_y,
+                effect_key=asset_id[len(BrushTool.EFFECT_ASSET_PREFIX):],
+            )
+            row_id = self._terrain_rows.get(asset_id)
+            if row_id:
+                self._uow.painted_terrain.update(row_id, **fields)
+            else:
+                self._terrain_rows[asset_id] = self._uow.painted_terrain.create(map_id=self.MAP_ID, **fields)
+
         seen_ids: set[str] = set()
         for item in engine.viewport.scene().items():
             data = item.data(0)
             if not isinstance(data, dict) or data.get("item_type") != "asset" or not item.isVisible():
+                continue
+            # An effect layer's own _LayerItem is ALSO tagged item_type
+            # "asset" (see BrushTool._get_or_create_effect_layer, so it
+            # falls under the Select tool's "Assets" filter) but it's a
+            # painted mask, not a placed object stamp — its mask already
+            # gets persisted in the painted_terrain loop above, so skip it
+            # here rather than writing a bogus canvas_items row for it.
+            if data.get("effect_key"):
                 continue
             center = item.mapToScene(item.boundingRect().center())
             fields = dict(
@@ -276,6 +335,7 @@ class BrushMediator:
 
     def _on_terrain_context_changed(self, *_args):
         self._l.brush_panel.set_terrain_options(self._terrain_options())
+        self._l._refresh_compass_hud()
 
     def _terrain_options(self) -> list[tuple[str, str]]:
         """(terrain_id, name) for every terrain that currently exists —
@@ -290,6 +350,7 @@ class BrushMediator:
         card, just driven independently from this panel."""
         boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
         self._l.canvas.engine._brush_tool.set_active_boundary(boundary)
+        self._l._refresh_compass_hud()
 
     def populate_assets(self, category: str = None):
         """Load asset thumbnails into the asset browser grid.
@@ -297,7 +358,22 @@ class BrushMediator:
         Filtered by both `category` (the browser's own tabs) and the style
         currently selected on the brush config panel — a "Cartoon" terrain
         pick shouldn't show up while browsing "Realistic" terrain.
+
+        "effects" is a special, style-agnostic category (see BrushTool.
+        EFFECT_ASSET_PREFIX/brush_effects.ANIMATED_EFFECTS): unlike a
+        terrain texture, an animated effect looks identical regardless of
+        which asset style is active, and it isn't a real library file at
+        all — so this branch never touches the library/style and instead
+        builds a fixed, procedurally-generated list straight from
+        ANIMATED_EFFECTS, same list every time.
         """
+        if category == "effects":
+            self._l.asset_browser_panel.set_assets([
+                {"id": f"{BrushTool.EFFECT_ASSET_PREFIX}{key}", "name": key}
+                for key in ANIMATED_EFFECTS
+            ])
+            return
+
         asset_engine = self._l.canvas.engine._asset_engine
         if not asset_engine or not hasattr(asset_engine, 'library'):
             return
@@ -336,6 +412,14 @@ class BrushMediator:
         engine.clear_assets()
         engine.add_asset(asset_id)
         self._l.canvas.engine._brush_tool.set_active_asset(asset_id)
+        if asset_id.startswith(BrushTool.EFFECT_ASSET_PREFIX):
+            # Not a real library asset — no pixmap/adjustments to look up,
+            # just show the effect's own name and clear any stale preview.
+            self._l.brush_panel.set_material_name(asset_id[len(BrushTool.EFFECT_ASSET_PREFIX):])
+            self._l.brush_panel.set_texture_preview(None)
+            self._l.asset_browser_panel.hide()
+            self._l._reposition()
+            return
         if self._l.canvas.engine._asset_engine:
             library = getattr(self._l.canvas.engine._asset_engine, 'library', None)
             if library:

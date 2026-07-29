@@ -104,8 +104,20 @@ class SelectionEngine(QObject):
     def set_layer_filter(self, allowed_types: set[str] | None):
         """Restrict box/lasso/click selection to items tagged with one of
         `allowed_types` (via item.data(0)["item_type"]). None clears the
-        filter (everything selectable again)."""
+        filter (everything selectable again). Also drops any currently
+        selected item that the new filter excludes — unchecking a layer in
+        SelectToolPanel should clear its already-selected objects too, not
+        just block new ones."""
         self._allowed_types = allowed_types
+        if allowed_types is None:
+            return
+        dropped = [item for item in self._selected if not self.is_selectable(item)]
+        if not dropped:
+            return
+        for item in dropped:
+            item.setSelected(False)
+            self._selected.remove(item)
+        self._emit()
 
     def is_selectable(self, item: QGraphicsItem) -> bool:
         """Whether `item` can currently be selected — the base Qt
