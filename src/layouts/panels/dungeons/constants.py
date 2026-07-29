@@ -134,12 +134,15 @@ def json_obj(raw) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def parse_json_records(text: str) -> list[dict]:
+def parse_json_records(text: str, required_keys: tuple[str, ...] = ("name",)) -> list[dict]:
     """Parser permissivo (tolera um objeto solto, comentários //, vírgula
     sobrando) → lista de dicts. Levanta ValueError com mensagem amigável.
     Compartilhado pelo bloco "{ } JSON" de Itens/Habilidades e agora de
     Construções/Dungeons, para os quatro módulos aceitarem exatamente o
-    mesmo texto colado."""
+    mesmo texto colado. `required_keys` defaults to the "name"-keyed shape
+    every caller but one uses — Árvores de Habilidade's node rows are keyed
+    by "tree"+"skill" instead (see panel_import_export_mixin.py), so that
+    one caller passes its own."""
     import re
     text = re.sub(r'//[^\n]*', '', text).strip()
     if not text:
@@ -153,7 +156,8 @@ def parse_json_records(text: str) -> list[dict]:
         raise ValueError(f"JSON inválido: {exc.msg}") from exc
     if not isinstance(data, list):
         raise ValueError("Esperava uma lista (array) de registros.")
-    records = [d for d in data if isinstance(d, dict) and d.get("name")]
+    records = [d for d in data if isinstance(d, dict) and all(d.get(k) for k in required_keys)]
     if not records:
-        raise ValueError("Nenhum registro válido (cada um precisa de \"name\").")
+        needed = " e ".join(f'"{k}"' for k in required_keys)
+        raise ValueError(f"Nenhum registro válido (cada um precisa de {needed}).")
     return records

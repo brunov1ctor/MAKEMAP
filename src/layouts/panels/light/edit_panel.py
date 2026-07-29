@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, Signal
 from src.styles.tokens import Colors, Typography
 from src.layouts.panel_manager import paint_glass_panel
 from src.layouts.panels.brush.slider import BrushSlider
-from src.engines.light import LIGHT_TYPES, POSITIONED_TYPES
+from src.engines.light import GLOBAL_TYPES, LIGHT_TYPES, POSITIONED_TYPES
 
 
 def _field_label(text: str) -> QLabel:
@@ -86,6 +86,8 @@ class LightEditPanel(QFrame):
     color_changed = Signal(str)
     shadows_changed = Signal(bool)
     volumetric_changed = Signal(bool)
+    direction_changed = Signal(float)
+    cone_changed = Signal(float)
     close_requested = Signal()
     content_changed = Signal()
 
@@ -140,7 +142,12 @@ class LightEditPanel(QFrame):
                 color: {Colors.TEXT_PRIMARY};
             }}
         """)
+        # "sky" isn't a placeable object (see GLOBAL_TYPES) — an already
+        # placed light can't be switched into being the map's single global
+        # day/night setting, so it's left out of this per-item dropdown.
         for key, icon, label in LIGHT_TYPES:
+            if key in GLOBAL_TYPES:
+                continue
             self.type_combo.addItem(f"{icon} {label}", key)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
         type_row.addWidget(self.type_combo, 1)
@@ -164,6 +171,16 @@ class LightEditPanel(QFrame):
         self.radius_slider = BrushSlider("Raio", "◎", 0, 2000, 50, "m")
         self.radius_slider.value_changed.connect(lambda v: self._emit(self.radius_changed, v))
         layout.addWidget(self.radius_slider)
+
+        # Only meaningful for "spot" (aims/narrows its cone) — hidden for
+        # every other type, same show/hide trick as _pos_widget below.
+        self.direction_slider = BrushSlider("Direção", "➤", 0, 360, 0, "°")
+        self.direction_slider.value_changed.connect(lambda v: self._emit(self.direction_changed, v))
+        layout.addWidget(self.direction_slider)
+
+        self.cone_slider = BrushSlider("Abertura", "◺", 5, 180, 45, "°")
+        self.cone_slider.value_changed.connect(lambda v: self._emit(self.cone_changed, v))
+        layout.addWidget(self.cone_slider)
 
         color_row = QHBoxLayout()
         color_row.setSpacing(8)
@@ -218,6 +235,9 @@ class LightEditPanel(QFrame):
     def _on_type_changed(self, index: int):
         key = self.type_combo.itemData(index)
         self._pos_widget.setVisible(key in POSITIONED_TYPES)
+        is_spot = key == "spot"
+        self.direction_slider.setVisible(is_spot)
+        self.cone_slider.setVisible(is_spot)
         self.content_changed.emit()
         if not self._syncing:
             self.type_changed.emit(key)
@@ -229,10 +249,15 @@ class LightEditPanel(QFrame):
         idx = self.type_combo.findData(props.light_type)
         self.type_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._pos_widget.setVisible(props.light_type in POSITIONED_TYPES)
+        is_spot = props.light_type == "spot"
+        self.direction_slider.setVisible(is_spot)
+        self.cone_slider.setVisible(is_spot)
         self.pos_x_row.set_value(f"{pos_x:.0f} m")
         self.pos_y_row.set_value(f"{pos_y:.0f} m")
         self.intensity_slider.set_value(props.intensity * 100)
         self.radius_slider.set_value(props.radius)
+        self.direction_slider.set_value(props.direction_deg)
+        self.cone_slider.set_value(props.cone_angle_deg)
         self.color_swatch.set_color(props.color)
         self.shadows_check.setChecked(props.shadows)
         self.volumetric_check.setChecked(props.volumetric)

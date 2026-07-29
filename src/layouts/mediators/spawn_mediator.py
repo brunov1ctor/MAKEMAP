@@ -16,6 +16,8 @@ from PySide6.QtCore import QPointF, QTimer
 from PySide6.QtGui import QPixmap
 
 from src.layouts.panels.spawn.portrait_compose import compose_group_portrait
+from src.layouts.panels.spawn.panel import SpawnPanel
+from src.layouts.panels.spawn.mob_sub_panel import SpawnMobSubPanel
 from src.services.project_assets import resolve_asset_path
 
 if TYPE_CHECKING:
@@ -43,12 +45,22 @@ class SpawnMediator:
         self._active_face: QPixmap | None = None
         self._stamp_items: dict[str, object] = {}  # canvas_items row id -> QGraphicsPixmapItem
 
-        panel = self._l.spawn_panel
+        # Spawn de Mobs — categories (SpawnPanel) + mob sub-panel, same
+        # adjacent-panel pattern as Brush/AssetBrowser: pick a category,
+        # SpawnMobSubPanel rides next to it, picking a mob there closes it
+        # back down.
+        panel = SpawnPanel(self._l)
+        panel.hide()
+        panel.close_requested.connect(self._l._close_spawn_panel)
+        self._l.spawn_panel = panel
         panel.category_selected.connect(self.on_category_selected)
         panel.size_changed.connect(self.on_size_changed)
         panel.quantity_changed.connect(self.on_quantity_changed)
 
-        sub_panel = self._l.spawn_mob_sub_panel
+        sub_panel = SpawnMobSubPanel(self._l)
+        sub_panel.hide()
+        sub_panel.close_requested.connect(self._l._toggle_spawn_mob_sub_panel)
+        self._l.spawn_mob_sub_panel = sub_panel
         sub_panel.mob_selected.connect(self.on_mob_selected)
 
         self._l.canvas.engine._spawn_tool.on_stamp_placed(self._on_stamp_placed)

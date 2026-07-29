@@ -32,7 +32,20 @@ EFFECTS: list[tuple[str, str]] = [
     ("brilho", "Brilho Mágico"),
 ]
 
-ICONS: list[str] = [icon for _key, icon, _label in CATEGORIES]
+# Full emoji palette offered by the icon picker (MarkerToolPanel/
+# MarkerEditPanel) — independent from CATEGORIES (whose icons are just each
+# category's *default*, still included here so every category has a match).
+# Deliberately large: the picker scrolls, so there's no reason to keep this
+# short.
+ICONS: list[str] = list(dict.fromkeys([
+    *[icon for _key, icon, _label in CATEGORIES],
+    "🚩", "🏁", "📌", "📍", "🧭", "🗺", "🏰", "🏯", "🏠", "🏚",
+    "⛺", "🌉", "🌋", "⛰", "🏔", "🌲", "🌳", "🍄", "🕳", "🌊",
+    "⚔", "🛡", "🏹", "🗡", "💣", "🔥", "☠", "👹", "🐉", "🐺",
+    "💰", "💎", "🗝", "📦", "🏆", "⚗", "📜", "🔮", "✨", "⭐",
+    "⚠", "☣", "🕸", "🚪", "⛩", "🗿", "⚓", "🛶", "🏪", "⚒",
+    "🔔", "❓", "❗", "💀", "👑", "🎯", "🧙", "🧝", "🐲",
+]))
 
 
 def category_for_icon(icon: str) -> str:
@@ -67,3 +80,7 @@ class MarkerProperties:
     description: str = ""
     effects: list[str] = field(default_factory=list)
     effect_radius: float = 100.0
+    # 0-100 — how "much" of the effect shows: element count/density, plus
+    # (for "nuvens") extra fog/lightning flourishes past ~55/80. See
+    # marker_item.py's _intensity_count and per-effect drawers.
+    effect_intensity: float = 50.0

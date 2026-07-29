@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QPointF
+from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QMouseEvent, QPen, QColor, QPainterPath
-from PySide6.QtWidgets import QGraphicsPathItem
+from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsRectItem
 
 from src.canvas.tools.base import BaseTool
 from src.canvas.tools.interaction import ItemInteraction
@@ -28,6 +29,10 @@ class SelectTool(BaseTool):
     shortcut = "V"
     cursor = Qt.CursorShape.ArrowCursor
 
+    # Below this (scene units), a press+release on empty space reads as a
+    # plain click (deselect + hand off to Pan) rather than a box-select drag.
+    _DRAG_THRESHOLD = 3
+
     def __init__(
         self,
         viewport: Viewport,
@@ -46,6 +51,8 @@ class SelectTool(BaseTool):
         self._lasso_points: list[QPointF] = []
         self._start: QPointF | None = None
         self._lasso_mode = False
+        self._box_pending = False  # press landed on empty space, drag not yet confirmed
+        self._box_item: QGraphicsRectItem | None = None
 
     def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
         if event.button() != Qt.MouseButton.LeftButton:
@@ -70,15 +77,12 @@ class SelectTool(BaseTool):
             self.viewport.scene().addItem(self._lasso_path)
             return
 
-        # Plain click landed on empty space — nothing here to select or
-        # drag. Matches every other tool's "does one thing, then steps
-        # aside" behavior (Texto/Spawn already hand off similarly): clear
-        # whatever was selected and hand control back to Pan instead of
-        # starting a box-select drag.
-        self._start = None
-        self._selection.clear()
-        if self._tool_manager:
-            self._tool_manager.activate("Pan")
+        # Press landed on empty space — could still turn into either a
+        # box-select drag (see mouse_move) or, if released without moving,
+        # a plain click that deselects and hands off to Pan (see
+        # mouse_release) — matches every other tool's "does one thing,
+        # then steps aside" behavior once nothing came of the press.
+        self._box_pending = True
 
     def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
         if self._interaction.move(scene_pos):
@@ -92,6 +96,19 @@ class SelectTool(BaseTool):
                 path.lineTo(pt)
             path.closeSubpath()
             self._lasso_path.setPath(path)
+            return
+
+        if self._box_pending and self._start is not None:
+            delta = scene_pos - self._start
+            if self._box_item is None:
+                if math.hypot(delta.x(), delta.y()) < self._DRAG_THRESHOLD:
+                    return
+                self._box_item = QGraphicsRectItem()
+                self._box_item.setPen(QPen(QColor(79, 195, 247, 180), 1.5, Qt.PenStyle.DashLine))
+                self._box_item.setBrush(QColor(79, 195, 247, 20))
+                self._box_item.setZValue(9999)
+                self.viewport.scene().addItem(self._box_item)
+            self._box_item.setRect(QRectF(self._start, scene_pos).normalized())
 
     def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
         add = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -109,6 +126,23 @@ class SelectTool(BaseTool):
             self._lasso_path = None
             self._lasso_points.clear()
             self._lasso_mode = False
+            self._start = None
+            return
+
+        if self._box_pending:
+            if self._box_item is not None:
+                # Real drag — box selection, stay on Select so the result
+                # can be immediately moved/resized (matches lasso above).
+                self._selection.select_by_rect(self._box_item.rect(), add=add)
+                self.viewport.scene().removeItem(self._box_item)
+                self._box_item = None
+            else:
+                # Released without moving — a plain click on empty space,
+                # nothing here to select or drag.
+                self._selection.clear()
+                if self._tool_manager:
+                    self._tool_manager.activate("Pan")
+            self._box_pending = False
             self._start = None
 
     def key_press(self, event):
@@ -177,24 +211,37 @@ class MoveTool(BaseTool):
 
 
 class PanTool(BaseTool):
-    """Pan the viewport by dragging."""
+    """Pan the viewport by dragging — except a press that actually lands on
+    a selectable item (a marker, light, asset stamp...) selects/drags it
+    instead, same as SelectTool's own click-to-select, via the shared
+    ItemInteraction. This is what lets clicking an object open its edit
+    panel (see e.g. MarkerMediator._on_selection_changed) without first
+    having to switch off Pan, the default active tool (see
+    CanvasEngine._register_default_tools)."""
 
     name = "Pan"
     shortcut = "H"
     cursor = Qt.CursorShape.OpenHandCursor
 
-    def __init__(self, viewport):
+    def __init__(self, viewport, selection_engine=None, transform_engine=None, history_engine=None):
         super().__init__(viewport)
         self._panning = False
         self._start = QPointF()
+        self._interaction = ItemInteraction(viewport, selection_engine, transform_engine, history_engine) \
+            if selection_engine and transform_engine else None
 
     def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._panning = True
-            self._start = event.position()
-            self.viewport.setCursor(Qt.CursorShape.ClosedHandCursor)
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._interaction and self._interaction.try_begin(scene_pos):
+            return
+        self._panning = True
+        self._start = event.position()
+        self.viewport.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
+        if self._interaction and self._interaction.move(scene_pos):
+            return
         if self._panning:
             delta = event.position() - self._start
             self._start = event.position()
@@ -206,6 +253,8 @@ class PanTool(BaseTool):
             )
 
     def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
+        if self._interaction and self._interaction.release(scene_pos):
+            return
         if self._panning:
             self._panning = False
             self.viewport.setCursor(Qt.CursorShape.OpenHandCursor)

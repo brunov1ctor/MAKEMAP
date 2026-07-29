@@ -21,6 +21,8 @@ from PySide6.QtGui import QColor, QPixmap
 
 from src.engines.map.region_layer import RegionLayer
 from src.engines.map.zones import DEFAULT_ZONE_COLOR
+from src.layouts.panels.region.panel import RegionSettingsPanel
+from src.layouts.panels.region.region_edit_panel import RegionEditPanel
 from src.services.project_assets import import_asset, resolve_asset_path
 
 if TYPE_CHECKING:
@@ -61,7 +63,10 @@ class RegionMediator:
         tool = self._l.canvas.engine._region_brush_tool
         tool.on_stroke_finished(self._on_stroke_finished)
 
-        panel = self._l.region_edit_panel
+        panel = RegionEditPanel(self._l)
+        panel.hide()
+        panel.content_changed.connect(self._l._reposition)
+        self._l.region_edit_panel = panel
         panel.name_changed.connect(self._on_name_changed)
         panel.terrain_changed.connect(self._on_terrain_changed)
         panel.category_changed.connect(self._on_category_changed)
@@ -75,7 +80,28 @@ class RegionMediator:
         panel.close_requested.connect(self.on_close_edit)
         panel.save_requested.connect(self.on_save_requested)
 
-        region_panel = self._l.region_panel
+        region_panel = RegionSettingsPanel(self._l)
+        region_panel.hide()
+        region_panel.close_requested.connect(self._l._close_region_panel)
+        self._l.region_panel = region_panel
+        region_panel.region_add_requested.connect(self.on_add_requested)
+        region_panel.region_renamed.connect(self.on_renamed)
+        region_panel.region_removed.connect(self.on_removed)
+        region_panel.region_selected.connect(self.on_card_clicked)
+        region_panel.region_edit_requested.connect(self.on_selected)
+        region_panel.region_locate_requested.connect(self.on_locate)
+        region_panel.region_visibility_toggled.connect(self.on_card_visibility_toggled)
+        region_panel.region_paint_cleared.connect(self.on_paint_cleared)
+        region_panel.region_image_changed.connect(self.on_card_image_changed)
+        region_panel.region_hover_entered.connect(self.on_card_hover_entered)
+        region_panel.region_hover_left.connect(self.on_card_hover_left)
+        # Deferred (not a direct connect): this one fires right after a
+        # brand-new RegionCard is inserted into the list layout, and a
+        # freshly-constructed child widget's sizeHint() isn't reliably
+        # settled until Qt's run an event-loop tick — reading it
+        # synchronously here would undercount and leave the panel too
+        # short to show the just-added card.
+        region_panel.content_changed.connect(lambda: QTimer.singleShot(0, self._l._reposition))
         region_panel.region_terrain_changed.connect(self._on_card_terrain_changed)
 
         # Refresh every "pintando em" dropdown (card list + edit panel)
@@ -184,15 +210,16 @@ class RegionMediator:
         stops painting instead of leaving it targeting a card that no
         longer reads as selected.
 
-        Deliberately does NOT switch the active canvas tool back to
-        "Selecionar" — RegionBrushTool safely no-ops on mouse events while
-        it has no target (see RegionBrushTool.mouse_press/_paint), so
-        painting is already stopped; switching tools would also flip the
-        "Selecionar" toolbar button on, which reads as if the user had
-        clicked it themselves."""
+        Also switches the active canvas tool back to "Selecionar" here —
+        leaving "RegiãoPincel" as the tool_manager's active tool with no
+        toolbar button checked left the round brush cursor/preview visible
+        and the canvas still "in brush mode" with nothing in the toolbar
+        showing it, even though painting itself already no-ops with no
+        target (see RegionBrushTool.mouse_press/_paint)."""
         if not region_id:
             self._active_id = None
             self._l.canvas.engine._region_brush_tool.set_target(None)
+            self._l.canvas.engine.tool_manager.activate("Selecionar")
             return
         zone = self._zones.get(region_id)
         if zone is None:
@@ -331,11 +358,18 @@ class RegionMediator:
                 self._zones.pop(zone.id, None)
             self._is_creating = False
         self._active_id = None
+        tool_manager = self._l.canvas.engine.tool_manager
         tool = self._l.canvas.engine._region_brush_tool
         tool.set_target(None)
         self._l.region_edit_panel.hide()
         self._l.region_panel.set_new_button_enabled(True)
-        self._l.canvas.engine.tool_manager.activate("Selecionar")
+        # Only force the tool back to "Selecionar" if the região brush is
+        # still the active tool — this also fires when the Região panel
+        # closes as a side effect of picking a DIFFERENT tool (Brush,
+        # Terreno, etc. are mutually exclusive panels), and forcing
+        # "Selecionar" there would immediately undo that tool switch.
+        if tool_manager.active_name == tool.name:
+            tool_manager.activate("Selecionar")
         self._l._reposition()
 
     # ─── Brush stroke → card creation / persistence ───

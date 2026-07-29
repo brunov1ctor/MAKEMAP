@@ -31,10 +31,16 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 
 from src.styles.tokens import Colors
 from src.services.project_assets import import_asset, resolve_asset_path
+from src.layouts.panels.mobs.categories import item_rarity_color
 from src.layouts.panels.items.constants import (
     ITEM_CATEGORY_NAMES, SKILL_CATEGORIES,
     category_display, rarity_options,
     skill_tier_options, skill_tier_label, skill_tier_color,
+)
+from src.layouts.panels.items.import_export_constants import (
+    _ITEM_DB_COLUMNS, _ITEM_JSON_FIELDS, _ITEM_BOOL_FIELDS,
+    _SKILL_DB_COLUMNS, _SKILL_JSON_FIELDS, _SKILL_BOOL_FIELDS,
+    coerce_import_stats,
 )
 from src.layouts.panels.items.entity_list import EntityListColumn
 from src.layouts.panels.items.item_editor import ItemEditor
@@ -208,7 +214,7 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
         self._skill_list.new_requested.connect(self._on_new_skill)
         self._skill_list.selected.connect(self._on_skill_selected)
         self._skill_list.delete_requested.connect(self._on_skill_delete)
-        self._skill_editor = SkillEditor(skills_provider=lambda: self._skills)
+        self._skill_editor = SkillEditor(skills_provider=lambda: self._skills, items_provider=lambda: self._items)
         self._skill_editor.changed.connect(self._skill_save_timer.start)
         self._skill_tree = SkillTreeCanvas(
             self._uow, skills_provider=lambda: self._skills,
@@ -551,7 +557,9 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
 
     def _import_item_records(self, records: list[dict]) -> str | None:
         """The actual item-create loop, used by the Importar cards
-        (ItemsImportExportMixin)."""
+        (ItemsImportExportMixin). Every key beyond _ITEM_DB_COLUMNS falls
+        into the `stats` JSON blob — see import_export_constants.py for why
+        that needs coerce_import_stats rather than a plain dict comprehension."""
         if not self._uow:
             return None
         existing = [i.get("code", "") for i in self._items]
@@ -562,15 +570,16 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
             item_id = str(uuid.uuid4())
             code = self._next_code("ITM_", existing, start=1001)
             existing.append(code)
+            stats_in = {k: v for k, v in rec.items() if k not in _ITEM_DB_COLUMNS}
             self._uow.items.create(
                 id=item_id, code=code,
                 name=str(rec.get("name") or "Novo Item"),
+                description=str(rec.get("description") or ""),
                 item_type=str(rec.get("category") or "Arma"),
                 subcategory=str(rec.get("subcategory") or ""),
                 rarity=str(rec.get("rarity") or "common"),
                 level_req=int(rec.get("level") or 1),
-                stats=json.dumps({k: v for k, v in rec.items()
-                                  if k not in ("name", "category", "subcategory", "rarity", "level")},
+                stats=json.dumps(coerce_import_stats(stats_in, _ITEM_JSON_FIELDS, _ITEM_BOOL_FIELDS),
                                  ensure_ascii=False),
             )
             last_id = item_id
@@ -579,7 +588,9 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
 
     def _import_skill_records(self, records: list[dict]) -> str | None:
         """The actual skill-create loop, used by the Importar cards
-        (ItemsImportExportMixin)."""
+        (ItemsImportExportMixin). Every key beyond _SKILL_DB_COLUMNS falls
+        into the `stats` JSON blob — see import_export_constants.py for why
+        that needs coerce_import_stats rather than a plain dict comprehension."""
         if not self._uow:
             return None
         existing = [s.get("code", "") for s in self._skills]
@@ -590,23 +601,173 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
             skill_id = str(uuid.uuid4())
             code = self._next_code("SKL_", existing, start=1, width=3)
             existing.append(code)
+            stats_in = {k: v for k, v in rec.items() if k not in _SKILL_DB_COLUMNS}
             self._uow.skills.create(
                 id=skill_id, code=code,
                 name=str(rec.get("name") or "Nova Habilidade"),
+                description=str(rec.get("description") or ""),
                 category=str(rec.get("category") or "Ataque"),
                 rarity=str(rec.get("rarity") or "common"),
                 level=int(rec.get("level") or 1),
                 cooldown=float(rec.get("cooldown") or 0),
                 mana_cost=int(rec.get("mana_cost") or 0),
                 element=str(rec.get("element") or ""),
-                stats=json.dumps({k: v for k, v in rec.items()
-                                  if k not in ("name", "category", "rarity", "level",
-                                               "cooldown", "mana_cost", "element")},
+                stats=json.dumps(coerce_import_stats(stats_in, _SKILL_JSON_FIELDS, _SKILL_BOOL_FIELDS),
                                  ensure_ascii=False),
             )
             last_id = skill_id
         self._reload_skills(select_id=last_id)
         return last_id
+
+    def _tree_export_rows(self) -> list[dict]:
+        """One row per node across every guia da Árvore de Habilidades —
+        trees are a graph (nodes+edges+per-guia theme), not a flat catalog
+        record like items/skills, so they don't fit _export_rows()'s
+        DB-column + stats-blob shape; this builds the flattened row shape
+        Importar/Exportar uses instead (see _TREE_TEMPLATE_FIELDS in
+        import_export_constants.py). Skill references are by NAME (not the
+        internal uuid) so the export is portable/human-editable, same
+        reasoning as "Item Requerido" in skill_editor.py."""
+        if not self._uow:
+            return []
+        skills_by_id = {s["id"]: s for s in self._skills}
+        rows: list[dict] = []
+        for tree in self._uow.skill_trees.get_all_ordered():
+            data = SkillTreeCanvas._parse_data(tree.get("data"))
+            nodes = data.get("nodes", [])
+            edges_by_src: dict[str, list[str]] = {}
+            for pair in data.get("edges", []):
+                if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                    edges_by_src.setdefault(pair[0], []).append(pair[1])
+            names_by_id = {n.get("id"): (skills_by_id.get(n.get("id")) or {}).get("name") or n.get("name", "")
+                           for n in nodes}
+            for node in nodes:
+                node_id = node.get("id")
+                connects = [names_by_id.get(dst, dst) for dst in edges_by_src.get(node_id, [])]
+                rows.append({
+                    "tree": tree.get("name", ""),
+                    "theme_color": data.get("theme_color", "") or "",
+                    "text_color": data.get("text_color", "") or "",
+                    "skill": names_by_id.get(node_id, ""),
+                    "rank_current": node.get("rank_current", 0),
+                    "rank_max": node.get("rank_max", 1),
+                    "pos_x": node.get("x", 0),
+                    "pos_y": node.get("y", 0),
+                    "connects_to": ";".join(c for c in connects if c),
+                })
+        return rows
+
+    def _import_tree_records(self, records: list[dict]) -> str | None:
+        """The actual guia-create/merge loop, used by the Importar cards.
+        Each row is one NODE (see _TREE_TEMPLATE_FIELDS) — rows sharing the
+        same "tree" name are grouped back into one guia, found-or-created by
+        the same `name.lower().replace(" ", "_")` tree_key slug
+        SkillTreeCanvas.create_tab_for_skill uses, so re-importing the same
+        export updates that guia instead of duplicating it. "skill" must
+        match an already-cadastrada Habilidade by name (a node can't exist
+        for a skill that doesn't exist); unmatched rows are skipped.
+        "connects_to" edges are only added between nodes THIS import
+        actually created/updated — a stray reference can't create a
+        dangling edge to a node that isn't in the row set."""
+        if not self._uow:
+            return None
+        skills_by_name = {}
+        for s in self._skills:
+            skills_by_name.setdefault((s.get("name") or "").strip().lower(), s)
+
+        trees_in_order: list[str] = []
+        grouped: dict[str, list[dict]] = {}
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            tree_name = str(rec.get("tree") or "").strip()
+            skill_name = str(rec.get("skill") or "").strip()
+            if not tree_name or not skill_name:
+                continue
+            grouped.setdefault(tree_name, [])
+            if tree_name not in trees_in_order:
+                trees_in_order.append(tree_name)
+            grouped[tree_name].append(rec)
+
+        existing_trees = {t["tree_key"]: t for t in self._uow.skill_trees.get_all_ordered()}
+        last_key = None
+        for tree_name in trees_in_order:
+            rows = grouped[tree_name]
+            key = tree_name.lower().replace(" ", "_")
+            existing = existing_trees.get(key)
+            prior_data = SkillTreeCanvas._parse_data(existing.get("data")) if existing else {"nodes": [], "edges": []}
+
+            theme_color = next((r.get("theme_color") for r in rows if r.get("theme_color")), prior_data.get("theme_color", ""))
+            text_color = next((r.get("text_color") for r in rows if r.get("text_color")), prior_data.get("text_color", ""))
+
+            nodes_by_skill_id: dict[str, dict] = {n.get("id"): n for n in prior_data.get("nodes", [])}
+            row_skill_ids: dict[str, str] = {}  # normalized skill name -> id, only for names seen THIS import
+            for row in rows:
+                skill = skills_by_name.get(str(row.get("skill") or "").strip().lower())
+                if not skill:
+                    continue
+                skill_id = skill["id"]
+                row_skill_ids[str(row.get("skill")).strip().lower()] = skill_id
+                rank_max_cap = SkillTreeCanvas._skill_rank_max(skill)
+                try:
+                    rank_max_row = int(float(row.get("rank_max"))) if row.get("rank_max") not in (None, "") else rank_max_cap
+                except (TypeError, ValueError):
+                    rank_max_row = rank_max_cap
+                rank_max_row = max(1, min(10, rank_max_row))
+                try:
+                    rank_current = max(0, min(rank_max_row, int(float(row.get("rank_current") or 0))))
+                except (TypeError, ValueError):
+                    rank_current = 0
+                try:
+                    x = float(row.get("pos_x") or 0)
+                except (TypeError, ValueError):
+                    x = 0.0
+                try:
+                    y = float(row.get("pos_y") or 0)
+                except (TypeError, ValueError):
+                    y = 0.0
+                nodes_by_skill_id[skill_id] = {
+                    "id": skill_id, "name": skill.get("name", ""), "icon": skill.get("icon") or "✨",
+                    "image_path": skill.get("image_path") or "",
+                    "color": item_rarity_color(skill.get("rarity", "common")),
+                    "x": x, "y": y,
+                    "rank_current": rank_current, "rank_max": rank_max_row,
+                }
+
+            edges: list[list[str]] = [
+                list(pair) for pair in prior_data.get("edges", [])
+                if isinstance(pair, (list, tuple)) and len(pair) == 2
+            ]
+            existing_edge_pairs = {tuple(e) for e in edges}
+            for row in rows:
+                src_id = row_skill_ids.get(str(row.get("skill") or "").strip().lower())
+                if not src_id:
+                    continue
+                targets = [t.strip() for t in str(row.get("connects_to") or "").split(";") if t.strip()]
+                for target_name in targets:
+                    dst_skill = skills_by_name.get(target_name.lower())
+                    dst_id = dst_skill["id"] if dst_skill else None
+                    if not dst_id or dst_id not in nodes_by_skill_id:
+                        continue  # no dangling edges to a node that isn't (and won't be) part of this tree
+                    pair = (src_id, dst_id)
+                    if pair not in existing_edge_pairs:
+                        edges.append(list(pair))
+                        existing_edge_pairs.add(pair)
+
+            tree_data = {
+                "nodes": list(nodes_by_skill_id.values()), "edges": edges,
+                "theme_color": theme_color or "", "text_color": text_color or "",
+            }
+            self._uow.skill_trees.upsert(
+                key, name=tree_name, icon=(existing.get("icon") if existing else "") or "✨",
+                sort_order=(existing.get("sort_order") if existing else len(existing_trees)),
+                data=json.dumps(tree_data, ensure_ascii=False),
+            )
+            existing_trees[key] = {"tree_key": key}
+            last_key = key
+
+        self._skill_tree.reload()
+        return last_key
 
     @staticmethod
     def _parse_json_list(text: str) -> list[dict]:

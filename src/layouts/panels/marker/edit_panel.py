@@ -8,7 +8,6 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QSizePolicy,
     QLineEdit, QComboBox, QStackedWidget, QWidget, QDoubleSpinBox, QMenu,
-    QButtonGroup,
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt, Signal
@@ -16,6 +15,8 @@ from PySide6.QtCore import Qt, Signal
 from src.styles.tokens import Colors, Typography
 from src.layouts.panel_manager import paint_glass_panel
 from src.layouts.panels.items.editor_base import EditorTabBar
+from src.layouts.panels.marker.icon_picker import IconPicker
+from src.layouts.panels.brush.slider import BrushSlider
 from src.engines.marker import CATEGORIES, EFFECTS, ICONS, category_label
 
 
@@ -81,6 +82,7 @@ class MarkerEditPanel(QFrame):
     description_changed = Signal(str)
     effects_changed = Signal(list)
     radius_changed = Signal(float)
+    effect_intensity_changed = Signal(float)
     close_requested = Signal()
     content_changed = Signal()
 
@@ -187,34 +189,12 @@ class MarkerEditPanel(QFrame):
         self.category_combo.currentIndexChanged.connect(self._on_category_changed)
         layout.addLayout(_field_row("Categoria", self.category_combo))
 
-        icons_row = QHBoxLayout()
-        icons_row.setSpacing(6)
-        self._icon_group = QButtonGroup(self)
-        self._icon_group.setExclusive(True)
-        self._icon_buttons: dict[str, QToolButton] = {}
-        for icon in ICONS:
-            btn = QToolButton()
-            btn.setText(icon)
-            btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedSize(30, 30)
-            btn.setStyleSheet(f"""
-                QToolButton {{
-                    border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 7px;
-                    background: rgba(255,255,255,0.04); font-size: 13px;
-                }}
-                QToolButton:hover {{ border-color: {Colors.BORDER_HOVER}; }}
-                QToolButton:checked {{ border-color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
-            """)
-            btn.clicked.connect(lambda _=False, ic=icon: self._emit(self.icon_changed, ic))
-            self._icon_group.addButton(btn)
-            self._icon_buttons[icon] = btn
-            icons_row.addWidget(btn)
-        icons_row.addStretch()
+        self._icon_picker = IconPicker(ICONS, button_size=30, max_height=150)
+        self._icon_picker.icon_picked.connect(lambda ic: self._emit(self.icon_changed, ic))
         icons_col = QVBoxLayout()
         icons_col.setSpacing(3)
         icons_col.addWidget(_field_label("Ícone"))
-        icons_col.addLayout(icons_row)
+        icons_col.addWidget(self._icon_picker)
         layout.addLayout(icons_col)
 
         self.description_edit = _line_edit()
@@ -277,6 +257,12 @@ class MarkerEditPanel(QFrame):
             self._effect_actions[key] = action
         self.effects_btn.setMenu(self._effects_menu)
         layout.addLayout(_field_row("Efeitos ao redor", self.effects_btn))
+
+        self.effect_intensity_slider = BrushSlider("Intensidade", "🌪", 0, 100, 50, "%")
+        self.effect_intensity_slider.value_changed.connect(
+            lambda v: self._emit(self.effect_intensity_changed, v)
+        )
+        layout.addWidget(self.effect_intensity_slider)
 
         self.radius_spin = QDoubleSpinBox()
         self.radius_spin.setRange(0, 2000)
@@ -341,9 +327,7 @@ class MarkerEditPanel(QFrame):
         self.name_edit.setText(props.name)
         idx = self.category_combo.findData(props.category)
         self.category_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        btn = self._icon_buttons.get(props.icon)
-        if btn:
-            btn.setChecked(True)
+        self._icon_picker.set_checked(props.icon)
         self.description_edit.setText(props.description)
         self.pos_x_row.set_value(f"{pos_x:.0f}")
         self.pos_y_row.set_value(f"{pos_y:.0f}")
@@ -351,6 +335,7 @@ class MarkerEditPanel(QFrame):
         for key, action in self._effect_actions.items():
             action.setChecked(key in props.effects)
         self._update_effects_label(list(props.effects))
+        self.effect_intensity_slider.set_value(props.effect_intensity)
         self.radius_spin.setValue(props.effect_radius)
         self._syncing = False
 

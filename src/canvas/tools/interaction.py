@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPointF
 
+from src.canvas.light_item import LightItem
 from src.engines.core.transform import HandleType, HORIZONTAL_HANDLES, VERTICAL_HANDLES
 
 if TYPE_CHECKING:
@@ -315,7 +316,18 @@ class ItemInteraction:
 
         for item in self._resize_items:
             props = getattr(item, "props", None)
-            if props is not None and hasattr(props, "font_size") and sx == sy:
+            if isinstance(item, LightItem):
+                # A light has no visible size of its own to stretch — its
+                # radius IS its size (GlobalLightingOverlay reads
+                # props.radius, not the item's QTransform), and a circle has
+                # no "horizontal" or "vertical" axis, so every handle (edge
+                # or corner) scales it uniformly by step_factor instead of
+                # applying a generic (possibly non-uniform) transform scale,
+                # or the glow would just sit there unchanged.
+                item.props.radius = max(4.0, item.props.radius * step_factor)
+                item.prepareGeometryChange()
+                item.update()
+            elif props is not None and hasattr(props, "font_size") and sx == sy:
                 # Proportional (corner) drag on text: scale the font size for
                 # a crisp re-render instead of stretching the glyph shapes.
                 props.font_size = max(4.0, props.font_size * sx)

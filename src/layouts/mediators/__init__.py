@@ -15,9 +15,10 @@ from src.layouts.mediators.text_mediator import TextMediator
 from src.layouts.mediators.marker_mediator import MarkerMediator
 from src.layouts.mediators.light_mediator import LightMediator
 from src.layouts.mediators.asset_effects_mediator import AssetEffectsMediator
+from src.layouts.mediators.menu_view_mediator import MenuViewMediator
 
 __all__ = [
     "BrushMediator", "TerrainMediator", "GridMediator", "ToolbarMediator",
     "RegionMediator", "SpawnMediator", "TextMediator", "MarkerMediator", "LightMediator",
-    "AssetEffectsMediator",
+    "AssetEffectsMediator", "MenuViewMediator",
 ]

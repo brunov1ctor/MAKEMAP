@@ -153,7 +153,7 @@ class CanvasEngine(QWidget):
         self.tool_manager.register(
             SelectTool(self.viewport, self.selection, self.transform, self.history, tool_manager=self.tool_manager)
         )
-        self.tool_manager.register(PanTool(self.viewport))
+        self.tool_manager.register(PanTool(self.viewport, self.selection, self.transform, self.history))
         self._text_tool = TextTool(
             self.viewport, self.tool_manager, self.history, self.selection, self.transform,
             on_committed=self.text_committed.emit,

@@ -338,7 +338,7 @@ class TopBar(QFrame):
 
     # "Projetos" always stays reachable (it's the only way to ever get a
     # project in the first place) and "Logs" doesn't need one (see
-    # MainLayout._on_menu_view) — every other module reads/writes through
+    # MenuViewMediator._on_menu_view) — every other module reads/writes through
     # window.uow, which is None until a project exists.
     _ALWAYS_ENABLED = {"Projetos", "Logs"}
 

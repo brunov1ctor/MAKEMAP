@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
         self._hide_projects()
         self._load_project(proj)
         # Also close fullscreen menu if open
-        self.layout_widget._hide_menu_view()
+        self.layout_widget._menu_med._hide_menu_view()
 
     def _load_project(self, proj: Project):
         """Make `proj` the active project without touching any panel visibility."""
@@ -399,8 +399,8 @@ class Application:
         self.window.showMaximized()
         if self.window.project is None:
             # Force the Projects screen up front instead of landing on Mapa
-            # with nothing to save into — see MainLayout._on_menu_view.
-            self.window.layout_widget._on_menu_view("Projetos")
+            # with nothing to save into — see MenuViewMediator._on_menu_view.
+            self.window.layout_widget._menu_med._on_menu_view("Projetos")
             # Fade out every other module button so there's nothing to
             # click into that would silently no-op every action without a
             # project loaded yet (re-enabled in _on_project_loaded).

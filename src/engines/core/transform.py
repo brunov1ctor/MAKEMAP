@@ -98,6 +98,7 @@ class TransformEngine(QObject):
         self._scene = scene
         self._handles: list[QGraphicsItem] = []
         self._border: QGraphicsPathItem | None = None
+        self._item_borders: list[QGraphicsPathItem] = []
         self._active_handle: HandleType | None = None
         self._transform_origin = QPointF()
         self._initial_positions: dict[QGraphicsItem, QPointF] = {}
@@ -279,6 +280,24 @@ class TransformEngine(QObject):
         self._scene.addItem(border)
         self._border = border
 
+        # With more than one item, also outline each one individually —
+        # the group border above only shows the union's outer edge, which
+        # reads as "one big selection" instead of making clear exactly
+        # which objects are selected. A single-item selection already gets
+        # that same outline from the group border, so skip the duplicate.
+        if len(items) > 1:
+            item_pen = QPen(accent, 1, Qt.PenStyle.DashLine)
+            item_pen.setCosmetic(True)
+            for item in items:
+                item_path = QPainterPath()
+                item_path.addRoundedRect(self._item_bounds(item), 3, 3)
+                item_border = _SelectionBorder(item_path)
+                item_border.setPen(item_pen)
+                item_border.setBrush(Qt.BrushStyle.NoBrush)
+                item_border.setZValue(9998)
+                self._scene.addItem(item_border)
+                self._item_borders.append(item_border)
+
         s = self.HANDLE_SIZE
         positions = {
             HandleType.TOP_LEFT: bounds.topLeft(),
@@ -342,6 +361,10 @@ class TransformEngine(QObject):
             self._scene.removeItem(self._border)
             self._border = None
 
+        for item_border in self._item_borders:
+            self._scene.removeItem(item_border)
+        self._item_borders.clear()
+
     def handle_at(self, scene_pos: QPointF) -> HandleType | None:
         """Check if a position hits a transform handle or action button."""
         for handle in self._handles:
@@ -379,18 +402,22 @@ class TransformEngine(QObject):
     # --- Helpers ---
 
     @staticmethod
-    def _get_bounds(items: list[QGraphicsItem]) -> QRectF:
-        """Union of each item's scene bounds for the selection border/
-        handles. Prefers an item's own selection_bounding_rect() (item-local
-        coords) over sceneBoundingRect() when present — some items pad their
+    def _item_bounds(item: QGraphicsItem) -> QRectF:
+        """A single item's own scene bounds. Prefers its
+        selection_bounding_rect() (item-local coords) over
+        sceneBoundingRect() when present — some items pad their
         boundingRect() beyond what's actually drawn (e.g. TextItem adds a
         hover margin), which would otherwise draw the purple selection
         border visibly larger than the object itself."""
+        rect_fn = getattr(item, "selection_bounding_rect", None)
+        if rect_fn:
+            return item.mapRectToScene(rect_fn())
+        return item.sceneBoundingRect()
+
+    @classmethod
+    def _get_bounds(cls, items: list[QGraphicsItem]) -> QRectF:
+        """Union of each item's scene bounds for the selection border/handles."""
         bounds = QRectF()
         for item in items:
-            rect_fn = getattr(item, "selection_bounding_rect", None)
-            if rect_fn:
-                bounds = bounds.united(item.mapRectToScene(rect_fn()))
-            else:
-                bounds = bounds.united(item.sceneBoundingRect())
+            bounds = bounds.united(cls._item_bounds(item))
         return bounds

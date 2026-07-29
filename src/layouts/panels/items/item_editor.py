@@ -145,7 +145,7 @@ class ItemEditor(QWidget):
         cat_row.addWidget(self._sub_combo, 1)
         grid.addLayout(self._labeled("Categoria", cat_row), 0, 0)
 
-        self._priority_spin = _spin(0, 999, 0)
+        self._priority_spin = _no_wheel(_spin(0, 999, 0))
         self._priority_spin.valueChanged.connect(self._emit_changed)
         grid.addLayout(self._labeled("Prioridade", self._priority_spin), 0, 1)
 
@@ -156,7 +156,7 @@ class ItemEditor(QWidget):
         self._rarity_combo.currentIndexChanged.connect(self._emit_changed)
         grid.addLayout(self._labeled("Raridade", self._rarity_combo), 1, 0)
 
-        self._level_spin = _spin(1, 999, 1)
+        self._level_spin = _no_wheel(_spin(1, 999, 1))
         self._level_spin.valueChanged.connect(self._emit_changed)
         grid.addLayout(self._labeled("Nível", self._level_spin), 1, 1)
         body.addLayout(grid)
@@ -313,9 +313,13 @@ class ItemEditor(QWidget):
         return page, grid
 
     def _num(self, widget):
-        """Wire a spin/dspin's valueChanged to _emit_changed and return it."""
+        """Wire a spin/dspin's valueChanged to _emit_changed and return it.
+        Also disables mouse-wheel on it (_no_wheel) — this form scrolls
+        internally (see the QScrollArea in __init__), and without this a
+        wheel scroll over any spin box silently bumped its value instead of
+        scrolling the page."""
         widget.valueChanged.connect(self._emit_changed)
-        return widget
+        return _no_wheel(widget)
 
     # ── data flow ──
 

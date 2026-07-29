@@ -5,11 +5,12 @@ afterward, on the placed marker, via MarkerEditPanel."""
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QSizePolicy, QButtonGroup
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QSizePolicy
 from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors
 from src.layouts.panel_manager import paint_glass_panel
+from src.layouts.panels.marker.icon_picker import IconPicker
 from src.engines.marker import ICONS
 
 
@@ -68,30 +69,10 @@ class MarkerToolPanel(QFrame):
         """)
         layout.addWidget(icons_label)
 
-        icons_row = QHBoxLayout()
-        icons_row.setSpacing(6)
-        self._group = QButtonGroup(self)
-        self._group.setExclusive(True)
-        for i, icon in enumerate(ICONS):
-            btn = QToolButton()
-            btn.setText(icon)
-            btn.setCheckable(True)
-            btn.setChecked(i == 0)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedSize(34, 34)
-            btn.setStyleSheet(f"""
-                QToolButton {{
-                    border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px;
-                    background: rgba(255,255,255,0.04); font-size: 15px;
-                }}
-                QToolButton:hover {{ border-color: {Colors.BORDER_HOVER}; }}
-                QToolButton:checked {{ border-color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
-            """)
-            btn.clicked.connect(lambda _=False, ic=icon: self._on_icon_clicked(ic))
-            self._group.addButton(btn, i)
-            icons_row.addWidget(btn)
-        icons_row.addStretch()
-        layout.addLayout(icons_row)
+        self._icon_picker = IconPicker(ICONS, button_size=34, max_height=170)
+        self._icon_picker.set_checked(self._icon)
+        self._icon_picker.icon_picked.connect(self._on_icon_clicked)
+        layout.addWidget(self._icon_picker)
 
     def _on_icon_clicked(self, icon: str):
         self._icon = icon

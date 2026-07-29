@@ -1,6 +1,6 @@
 """AssetEffectsMediator — populates the single shared AssetEffectsPanel for
 a given asset_id (wired from the Config screen's card "✨" button, see
-main_layout's _show_menu_view hook), persists the painted grid to
+MenuViewMediator._show_menu_view), persists the painted grid to
 asset_settings, and reactively attaches/refreshes AssetEffectsOverlay
 children on every placed "asset" stamp in the scene — all without touching
 brush_tool.py.
@@ -16,6 +16,7 @@ from PySide6.QtCore import QTimer
 
 from src.canvas.asset_effects_overlay import AssetEffectsOverlay
 from src.engines.asset_effects import empty_cells, has_any_effect
+from src.layouts.panels.assets.effects_panel import AssetEffectsPanel
 
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
@@ -31,7 +32,15 @@ class AssetEffectsMediator:
         self._uow = None
         self._cache: dict[str, list[str]] = {}  # asset_id -> cells (lazily loaded)
 
-        self._l.asset_effects_panel.saved.connect(self._on_saved)
+        # Asset effects editor (Config screen's card "✨" button) — single
+        # shared in-app panel, same "never a window outside the app" rule
+        # as ColorCustomizePanel; floats centered over whatever's showing
+        # instead of a QDialog.
+        panel = AssetEffectsPanel(self._l)
+        panel.hide()
+        panel.close_requested.connect(self._l._close_asset_effects_panel)
+        self._l.asset_effects_panel = panel
+        panel.saved.connect(self._on_saved)
 
         self._refresh_timer = QTimer()
         self._refresh_timer.timeout.connect(self._tick)

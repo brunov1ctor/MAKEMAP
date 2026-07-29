@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtGui import QColor
 
+from src.layouts.panels.grid_panel import GridSettingsPanel
+
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
 
@@ -15,6 +17,11 @@ class GridMediator:
 
     def __init__(self, layout: MainLayout):
         self._l = layout
+
+        panel = GridSettingsPanel(self._l)
+        panel.hide()
+        panel.close_requested.connect(self._l._close_grid_panel)
+        self._l.grid_panel = panel
 
     def connect_panel(self):
         grid = self._l.canvas.engine.grid

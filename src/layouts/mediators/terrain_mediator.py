@@ -6,8 +6,10 @@ import math
 import re
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QPointF
+from PySide6.QtCore import Qt, QPointF, QTimer
 from PySide6.QtGui import QColor, QPixmap
+
+from src.layouts.panels.terrain.panel import TerrainSettingsPanel
 
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
@@ -35,10 +37,32 @@ class TerrainMediator:
         from src.engines.map.parallax import get_parallax_library
         get_parallax_library().changed.connect(self._on_parallax_library_changed)
 
+        panel = TerrainSettingsPanel(self._l)
+        panel.hide()
+        panel.close_requested.connect(self._l._close_terrain_panel)
+        self._l.terrain_panel = panel
+
+        panel.infinite_toggled.connect(self.on_infinite)
+        panel.dimensions_changed.connect(self.on_dims)
+        panel.shape_changed.connect(self.on_shape)
+        panel.terrain_visibility.connect(self.on_visibility)
+        panel.terrain_added.connect(self.on_added)
+        panel.terrain_removed.connect(self.on_removed)
+        panel.terrain_selected.connect(self.on_selected)
+        panel.background_changed.connect(self.on_background)
         # Only Região/Brush listened to this before (for their own "which
         # terrain" dropdowns) — TerrainMediator itself needs it too now, to
         # persist a rename.
-        self._l.terrain_panel.terrain_renamed.connect(self.on_renamed)
+        panel.terrain_renamed.connect(self.on_renamed)
+        # Deferred — same reasoning as Região's card list: a freshly
+        # inserted TerrainCard's sizeHint() isn't settled synchronously.
+        panel.content_changed.connect(lambda: QTimer.singleShot(0, self._l._reposition))
+        # Compass HUD shows the active terrain's name/size — keep it live.
+        panel.terrain_selected.connect(lambda _id: self._l._refresh_compass_hud())
+        panel.terrain_renamed.connect(lambda _id, _name: self._l._refresh_compass_hud())
+
+        # Map boundary overlays reference
+        self._l._terrain_boundaries = self.boundaries
 
     # ─── Persistence wiring (called by application.py on project load) ───
 

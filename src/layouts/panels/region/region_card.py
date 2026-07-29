@@ -170,6 +170,10 @@ class RegionCard(QFrame):
 
         self._name_stack = QStackedWidget()
         self._name_stack.setFixedHeight(18)
+        # Without this, the card's own "QFrame { border/background }" style
+        # (see _build_style) cascades down onto this QStackedWidget too —
+        # it's a QFrame subclass — drawing the same box around the name.
+        self._name_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
 
         self._name_label = QLabel(name)
         self._name_label.setStyleSheet(f"""
@@ -182,6 +186,9 @@ class RegionCard(QFrame):
             QLineEdit {{
                 color: {Colors.TEXT_PRIMARY}; font-size: 12px; font-weight: bold;
                 background: transparent; border: none; padding: 0;
+            }}
+            QLineEdit:focus {{
+                background: transparent; border: none;
             }}
         """)
         self._name_edit.returnPressed.connect(self._finish_rename)

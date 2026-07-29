@@ -1090,13 +1090,14 @@ class RegionBrushTool(BaseTool):
         # Hard-edged stamp (no radial alpha falloff) — a região's fill is
         # meant to read as a solid, opaque area (Cities-Skylines district
         # style), with "Opacidade" (RegionLayer.set_opacity) as the ONLY
-        # transparency control. The organic-looking silhouette still comes
-        # from _apply_edge_dither (always applied, regardless of softness)
-        # and the traced/morphological-closed outline in RegionLayer.
-        # _bordered_result — a soft internal gradient here would only
-        # leave the paint mask itself patchy/translucent in spots a single
-        # stamp didn't fully overlap, which read as "still see the terrain
-        # through it at 100% opacity" even though the slider was maxed.
+        # transparency control. Dither is disabled too (see _params) since
+        # it punches noisy partial-alpha holes near each stamp's edge —
+        # fine for a single organic terrain stamp, but region strokes
+        # overlap heavily while growing an area, so those holes land
+        # inside the fill at uneven spots per stamp and read as blotchy
+        # color/opacity instead of one solid fill. The organic-looking
+        # silhouette instead comes from the traced/morphological-closed
+        # outline in RegionLayer._bordered_result.
         self.softness = 0.0
         self._painting = False
         self._stroke_button: Qt.MouseButton | None = None
@@ -1206,6 +1207,7 @@ class RegionBrushTool(BaseTool):
         # you'd already painted over an area.
         return TerrainBrushParams(
             size=self.radius * 2, opacity=1.0, softness=self.softness, erase=erase,
+            dither=False,
         )
 
     def _paint(self, scene_pos: QPointF, erase: bool):

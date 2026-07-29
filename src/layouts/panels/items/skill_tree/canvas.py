@@ -763,17 +763,21 @@ class SkillTreeCanvas(QWidget):
 
     # ── tree-wide stats panel + per-node rank ──
 
-    def _skill_metrics_for(self, node: _NodeItem) -> dict:
+    def _skill_metrics_for(self, skill_id: str, rank_current: int) -> dict:
         """Resolves the full skill record behind a node (name/icon alone
         don't carry cooldown/mana_cost/rank_damage) and reads the ranked
-        Dano Base/Escalonamento for the node's CURRENT rank (falls back to
-        rank 1's row as a preview when rank_current is still 0)."""
-        full = next((sk for sk in (self._skills_provider() or []) if sk.get("id") == node.node_id), None)
+        Dano Base/Escalonamento for the given rank (falls back to rank 1's
+        row as a preview when rank_current is still 0). Takes the raw
+        (skill_id, rank_current) pair rather than a live `_NodeItem` so it
+        also works for guias that aren't the active one — see
+        _tree_totals, which needs this for every guia's persisted node
+        list, not just the graphics items of the one currently on screen."""
+        full = next((sk for sk in (self._skills_provider() or []) if sk.get("id") == skill_id), None)
         if not full:
             return {}
         stats = _parse_json_dict(full.get("stats"))
         rank_damage = stats.get("rank_damage") or []
-        idx = max(0, node.rank_current - 1)
+        idx = max(0, rank_current - 1)
         entry = rank_damage[idx] if idx < len(rank_damage) else {}
         flags_on = sum(1 for key, _label, default in SKILL_FLAGS if stats.get(key, default))
         return {
@@ -786,20 +790,21 @@ class SkillTreeCanvas(QWidget):
             "flags_total": len(SKILL_FLAGS),
         }
 
-    def _refresh_tree_stats(self):
-        """Aggregates every node with rank_current > 0 (actually invested)
-        in the active tab into the sidebar panel — the whole build's
-        totals, not any single node's. Called after anything that can
-        change a node's rank/existence (see _persist()/_load_active_tree)."""
-        points_spent = sum(n.rank_current for n in self._nodes.values())
-        active_nodes = [n for n in self._nodes.values() if n.rank_current > 0]
-        if not active_nodes:
-            self._tree_stats_panel.set_empty(points_spent)
-            return
+    def _tree_totals(self, node_pairs: list[tuple[str, int]]) -> dict:
+        """Aggregates one guia's totals from its raw (skill_id, rank_current)
+        pairs — every node with rank_current > 0 counts (actually invested),
+        same rule for the active guia and any other one. Shared by
+        _refresh_tree_stats (the active guia) and _max_totals_across_trees
+        (every guia, to find the normalization ceiling)."""
+        points_spent = sum(rank for _sid, rank in node_pairs)
         total_dano, max_alcance, total_mana = 0.0, 0.0, 0.0
         speed_scores, flag_fracs = [], []
-        for node in active_nodes:
-            m = self._skill_metrics_for(node)
+        node_count = 0
+        for skill_id, rank_current in node_pairs:
+            if rank_current <= 0:
+                continue
+            node_count += 1
+            m = self._skill_metrics_for(skill_id, rank_current)
             total_dano += float(m.get("dano_base", 0))
             max_alcance = max(max_alcance, float(m.get("alcance", 0)))
             total_mana += float(m.get("mana_cost", 0))
@@ -807,10 +812,47 @@ class SkillTreeCanvas(QWidget):
             speed_scores.append(1.0 if cooldown <= 0 else max(0.0, 1 - min(cooldown, 10) / 10))
             flags_total = max(1, m.get("flags_total", 1))
             flag_fracs.append(m.get("flags_on", 0) / flags_total)
+        return {
+            "dano_total": total_dano, "alcance": max_alcance, "mana_total": total_mana,
+            "speed": sum(speed_scores) / len(speed_scores) if speed_scores else 0.0,
+            "util": sum(flag_fracs) / len(flag_fracs) if flag_fracs else 0.0,
+            "points_spent": points_spent, "node_count": node_count,
+        }
+
+    def _max_totals_across_trees(self) -> dict:
+        """The highest dano_total/alcance/mana_total among ALL guias that
+        exist (not just the active one) — the radar's Dano/Alcance/Custo
+        axes are normalized against this real ceiling instead of an
+        arbitrary fixed constant, so a guia with dano_total 50 shows half
+        the axis when the biggest guia has 100, full when IT is the
+        biggest, and so on as guias are added/edited elsewhere."""
+        max_dano = max_alcance = max_mana = 0.0
+        for tree in self._trees:
+            if tree["tree_key"] == self._active_key:
+                pairs = [(n.node_id, n.rank_current) for n in self._nodes.values()]
+            else:
+                data = self._parse_data(tree.get("data"))
+                pairs = [(n.get("id"), int(n.get("rank_current", 0))) for n in data.get("nodes", [])]
+            totals = self._tree_totals(pairs)
+            max_dano = max(max_dano, totals["dano_total"])
+            max_alcance = max(max_alcance, totals["alcance"])
+            max_mana = max(max_mana, totals["mana_total"])
+        return {"dano_total": max_dano, "alcance": max_alcance, "mana_total": max_mana}
+
+    def _refresh_tree_stats(self):
+        """Pushes the active guia's aggregate + the cross-guia normalization
+        ceiling into the sidebar panel. Called after anything that can
+        change a node's rank/existence (see _persist()/_load_active_tree)."""
+        current = self._tree_totals([(n.node_id, n.rank_current) for n in self._nodes.values()])
+        if current["node_count"] == 0:
+            self._tree_stats_panel.set_empty(current["points_spent"])
+            return
+        maxes = self._max_totals_across_trees()
         self._tree_stats_panel.set_stats(
-            dano_total=total_dano, alcance=max_alcance, mana_total=total_mana,
-            speed=sum(speed_scores) / len(speed_scores), util=sum(flag_fracs) / len(flag_fracs),
-            points_spent=points_spent, node_count=len(active_nodes),
+            dano_total=current["dano_total"], alcance=current["alcance"], mana_total=current["mana_total"],
+            speed=current["speed"], util=current["util"],
+            points_spent=current["points_spent"], node_count=current["node_count"],
+            dano_max=maxes["dano_total"], alcance_max=maxes["alcance"], mana_max=maxes["mana_total"],
         )
 
     def _adjust_node_rank(self, node: _NodeItem, delta: int):

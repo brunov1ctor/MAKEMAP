@@ -21,6 +21,9 @@ LAYER_ITEMS = [
     ("asset", "Assets"),
     ("zone", "Zonas"),
     ("mob_spawn", "Mobs"),
+    ("marker", "Marcadores"),
+    ("light", "Luz"),
+    ("text", "Texto"),
 ]
 
 

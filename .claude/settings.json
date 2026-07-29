@@ -77,7 +77,16 @@
       "Bash(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\578f48d3-a1f5-4b02-b16f-012e0f273afc\\\\scratchpad\\\\test_brush_default.py\")",
       "Bash(python -m py_compile src/layouts/panels/items/skill_tree.py)",
       "Bash(python \"C:\\\\Users\\\\BRUNO~1.VDA\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-vdasilva-Documents-MAKEMAP\\\\3491475e-8cdc-43f0-8e14-48ccfc4b25d5\\\\scratchpad\\\\smoke_skill_tree.py\")",
-      "PowerShell(py -m py_compile src\\\\layouts\\\\panels\\\\items\\\\skill_tree.py)"
+      "PowerShell(py -m py_compile src\\\\layouts\\\\panels\\\\items\\\\skill_tree.py)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/engines/map/terrain_layer.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/canvas/tools/brush_tool.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\('src/engines/map/terrain_layer.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/canvas/tools/brush_tool.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "PowerShell(cd \"c:\\\\Users\\\\bruno\\\\OneDrive\\\\Documentos\\\\MAKEMAP\"; $p = Start-Process py -ArgumentList \"main.py\" -PassThru -RedirectStandardError \"$env:TEMP\\\\makemap_stderr12.txt\" -RedirectStandardOutput \"$env:TEMP\\\\makemap_stdout12.txt\"; Start-Sleep -Seconds 8; if \\(-not $p.HasExited\\) { Write-Output \"STILL_RUNNING pid=$\\($p.Id\\)\"; Stop-Process -Id $p.Id -Force } else { Write-Output \"EXITED code=$\\($p.ExitCode\\)\" }; Get-Content \"$env:TEMP\\\\makemap_stderr12.txt\" -ErrorAction SilentlyContinue)",
+      "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_skill_editor.py\")",
+      "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_item_editor.py\")",
+      "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_radar2.py\")",
+      "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_tree_stats.py\")",
+      "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_req_arma.py\")",
+      "PowerShell(py \"C:\\\\Users\\\\bruno\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-bruno-OneDrive-Documentos-MAKEMAP\\\\5fe5be97-21d3-4f35-8de4-fa92759a952a\\\\scratchpad\\\\test_flags_row.py\")"
     ],
     "additionalDirectories": [
       "\\tmp",

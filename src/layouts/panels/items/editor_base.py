@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QFrame, QSizePolicy, QStackedWidget, QButtonGroup, QGridLayout,
 )
 from PySide6.QtCore import Qt, Signal, QSize, QPropertyAnimation, Property, QRectF
-from PySide6.QtGui import QPainter, QColor, QPixmap
+from PySide6.QtGui import QPainter, QColor, QPen, QPixmap, QPainterPath
 
 from src.styles.tokens import Colors
 
@@ -74,6 +74,46 @@ class ToggleSwitch(QAbstractButton):
         p.end()
 
 
+class SquareCheck(QAbstractButton):
+    """A plain square checkbox with a drawn checkmark when active — for a
+    row of several flags that needs to read at a glance (checked/unchecked)
+    rather than ToggleSwitch's on/off color, which reads better one at a
+    time than scanned across many in a row."""
+
+    def __init__(self, checked: bool = False, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(15, 15)
+
+    def sizeHint(self) -> QSize:
+        return QSize(15, 15)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        rect = QRectF(1, 1, w - 2, h - 2)
+        checked = self.isChecked()
+        border = QColor(Colors.ACCENT) if checked else QColor(Colors.BORDER)
+        bg = QColor(Colors.ACCENT) if checked else QColor(255, 255, 255, 12)
+        p.setPen(QPen(border, 1.3))
+        p.setBrush(bg)
+        p.drawRoundedRect(rect, 3, 3)
+        if checked:
+            pen = QPen(QColor("#0B1622"), 1.8)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            p.setPen(pen)
+            path = QPainterPath()
+            path.moveTo(w * 0.24, h * 0.53)
+            path.lineTo(w * 0.43, h * 0.72)
+            path.lineTo(w * 0.78, h * 0.28)
+            p.drawPath(path)
+        p.end()
+
+
 class EditorTabBar(QWidget):
     """A row of pill tabs that drives a QStackedWidget. Emits tab_changed
     with the new index; the owning editor builds one page per tab."""
@@ -121,10 +161,11 @@ class IconButton(QToolButton):
     image_dropped = Signal(str)
     _ACCEPTED = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
 
-    def __init__(self, fallback: str = "📦", parent=None, size: tuple[int, int] = (72, 72)):
+    def __init__(self, fallback: str = "📦", parent=None, size: tuple[int, int] = (72, 72), crop: bool = True):
         super().__init__(parent)
         self._fallback = fallback
         self._size = size
+        self._crop = crop
         self.setFixedSize(*size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAcceptDrops(True)
@@ -182,12 +223,27 @@ class IconButton(QToolButton):
         # desenhar, então só passar KeepAspectRatioByExpanding sem cortar
         # deixaria a imagem "encolhida de volta" e sobrando espaço vazio.
         w, h = self._size[0] - 12, self._size[1] - 12
-        scaled = pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                               Qt.TransformationMode.SmoothTransformation)
-        x = max(0, (scaled.width() - w) // 2)
-        y = max(0, (scaled.height() - h) // 2)
-        cropped = scaled.copy(x, y, w, h)
-        self.setIcon(cropped)
+        if self._crop:
+            scaled = pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                   Qt.TransformationMode.SmoothTransformation)
+            x = max(0, (scaled.width() - w) // 2)
+            y = max(0, (scaled.height() - h) // 2)
+            final = scaled.copy(x, y, w, h)
+        else:
+            # Sem crop: encaixa a imagem inteira dentro da caixa (sem
+            # expandir além dela) e a compõe centralizada sobre um canvas
+            # transparente do tamanho da caixa, em vez de cortar as bordas
+            # que não coubessem na proporção do botão.
+            scaled = pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio,
+                                   Qt.TransformationMode.SmoothTransformation)
+            final = QPixmap(w, h)
+            final.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(final)
+            x = (w - scaled.width()) // 2
+            y = (h - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+            painter.end()
+        self.setIcon(final)
         self.setIconSize(QSize(w, h))
         self.setText("")
 

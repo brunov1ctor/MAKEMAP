@@ -10,31 +10,30 @@ import math
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy
 from PySide6.QtCore import Qt, QRectF, QPointF
-from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPolygonF
+from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QFontMetrics, QPolygonF
 
 from src.styles.tokens import Colors
 
 
 class _MiniRadar(QWidget):
-    """A tiny 5-axis radar chart for the selected node's skill — same idea
-    as the reference "Estatísticas Finais" mob panel (a filled polygon over
-    a few axes + a big number in the middle), scaled down for one skill
-    instead of a full character sheet."""
+    """A tiny 5-axis radar chart for the tree's aggregate stats — just the
+    filled polygon over its axes, no center number/caption (removed at the
+    user's request: with a single tree-wide radar instead of one number per
+    skill, "PODER" in the middle didn't map to anything specific, it just
+    duplicated "Dano total" already spelled out in the text column)."""
 
     AXES = ["Dano", "Alcance", "Veloc.", "Custo", "Utilid."]
-    BASE_SIZE = 72
+    BASE_SIZE = 88
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet("background: transparent; border: none;")
         self.setFixedSize(self.BASE_SIZE, self.BASE_SIZE)
         self._values = [0.0] * len(self.AXES)
-        self._center_text = ""
         self._scale = 1.0
 
-    def set_values(self, values: list[float], center_text: str = ""):
+    def set_values(self, values: list[float]):
         self._values = values
-        self._center_text = center_text
         self.update()
 
     def set_scale(self, scale: float):
@@ -55,14 +54,23 @@ class _MiniRadar(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         n = len(self.AXES)
         cx, cy = self.width() / 2, self.height() / 2 - 2
-        radius = min(cx, cy) - 8
+
+        axis_font_px = max(6, round(6 * self._scale))
+        axis_font = QFont("Segoe UI", axis_font_px)
+        metrics = QFontMetrics(axis_font)
+
+        # The plot radius reserves room for the axis labels outside the
+        # outer ring — an *approximate* margin here, not a guarantee; the
+        # label placement below clamps each label's actual measured
+        # rect to the widget bounds as the real guarantee against clipping
+        # (this alone isn't enough at small scales, where min(cx,cy) can be
+        # too small to fit both the ring and the margin).
+        label_margin = metrics.height() + 6
+        radius = max(10.0, min(cx, cy) - label_margin)
 
         def axis_point(i: int, frac: float) -> QPointF:
             ang = 2 * math.pi * i / n - math.pi / 2
             return QPointF(cx + radius * frac * math.cos(ang), cy + radius * frac * math.sin(ang))
-
-        axis_font_px = max(5, round(5 * self._scale))
-        center_font_px = max(7, round(8 * self._scale))
 
         # Rings
         p.setPen(QPen(QColor(Colors.BORDER_SUBTLE), 1))
@@ -73,12 +81,23 @@ class _MiniRadar(QWidget):
         for i in range(n):
             p.drawLine(QPointF(cx, cy), axis_point(i, 1.0))
 
-        # Axis labels
+        # Axis labels — placed a small fixed gap past the outer ring, then
+        # each label's *actual measured* width/height (via QFontMetrics,
+        # not a guessed multiplier) is clamped to stay fully inside the
+        # widget rect. That clamp is what actually prevents clipping
+        # ("Alcance"/"Utilid."/"Veloc." reading as cut off) at every scale,
+        # including small ones where there isn't room for a full margin.
         p.setPen(QColor(Colors.TEXT_MUTED))
-        p.setFont(QFont("Segoe UI", axis_font_px))
+        p.setFont(axis_font)
         for i, label in enumerate(self.AXES):
-            pt = axis_point(i, 1.22)
-            p.drawText(QRectF(pt.x() - 16, pt.y() - 5, 32, 10), Qt.AlignmentFlag.AlignCenter, label)
+            ang = 2 * math.pi * i / n - math.pi / 2
+            lx = cx + (radius + label_margin * 0.6) * math.cos(ang)
+            ly = cy + (radius + label_margin * 0.6) * math.sin(ang)
+            tw = metrics.horizontalAdvance(label) + 4
+            th = metrics.height()
+            rx = min(max(lx - tw / 2, 0.0), self.width() - tw)
+            ry = min(max(ly - th / 2, 0.0), self.height() - th)
+            p.drawText(QRectF(rx, ry, tw, th), Qt.AlignmentFlag.AlignCenter, label)
 
         # Value polygon — a small floor (0.05) so a 0-value axis still shows
         # a sliver instead of collapsing the whole shape onto the center.
@@ -88,14 +107,6 @@ class _MiniRadar(QWidget):
         p.setBrush(QBrush(fill))
         p.setPen(QPen(QColor(Colors.ACCENT), 1.5))
         p.drawPolygon(QPolygonF(pts))
-
-        if self._center_text:
-            p.setPen(QColor(Colors.TEXT_PRIMARY))
-            p.setFont(QFont("Segoe UI", center_font_px, QFont.Weight.Bold))
-            p.drawText(QRectF(cx - 20, cy - 8, 40, 12), Qt.AlignmentFlag.AlignCenter, self._center_text)
-            p.setPen(QColor(Colors.TEXT_MUTED))
-            p.setFont(QFont("Segoe UI", axis_font_px))
-            p.drawText(QRectF(cx - 20, cy + 3, 40, 8), Qt.AlignmentFlag.AlignCenter, "PODER")
 
 
 class _TreeStatsPanel(QWidget):
@@ -112,7 +123,7 @@ class _TreeStatsPanel(QWidget):
     _rank_button_rects/mousePressEvent), not here — this panel is
     read-only, tree-wide."""
 
-    BASE_MAX_WIDTH = 210
+    BASE_MAX_WIDTH = 226
     BASE_LABEL_MIN_WIDTH = 110
     BASE_TITLE_FONT = 8
     BASE_STATS_FONT = 8
@@ -184,15 +195,26 @@ class _TreeStatsPanel(QWidget):
         self._resync_size()
 
     def set_stats(self, dano_total: float, alcance: float, mana_total: float,
-                  speed: float, util: float, points_spent: int, node_count: int):
+                  speed: float, util: float, points_spent: int, node_count: int,
+                  dano_max: float = 0.0, alcance_max: float = 0.0, mana_max: float = 0.0):
+        """dano_max/alcance_max/mana_max are the highest totals among ALL
+        guias that exist (see SkillTreeCanvas._max_totals_across_trees) —
+        Dano/Alcance/Custo are plotted relative to that real ceiling
+        (this guia's total ÷ the biggest guia's total) instead of a fixed
+        constant, so a guia at half the top guia's dano_total reads as
+        half the axis, full when it IS the top guia, and so on as other
+        guias change. speed/util already come in pre-normalized to 0..1."""
+        def ratio(value: float, maximum: float) -> float:
+            return 0.0 if maximum <= 0 else min(1.0, value / maximum)
+
         values = [
-            min(1.0, dano_total / 400),
-            min(1.0, alcance / 30),
+            ratio(dano_total, dano_max),
+            ratio(alcance, alcance_max),
             speed,
-            min(1.0, mana_total / 400),
+            ratio(mana_total, mana_max),
             util,
         ]
-        self._radar.set_values(values, center_text=f"{dano_total:.0f}")
+        self._radar.set_values(values)
         self._stats_lbl.setText(
             f"Dano total: {dano_total:.0f}\nAlcance: {alcance:.0f}m\n"
             f"Custo total: {mana_total:.0f}\nNós ativos: {node_count}\n"
@@ -201,7 +223,7 @@ class _TreeStatsPanel(QWidget):
         self._resync_size()
 
     def set_empty(self, points_spent: int = 0):
-        self._radar.set_values([0, 0, 0, 0, 0], center_text="0")
+        self._radar.set_values([0, 0, 0, 0, 0])
         self._stats_lbl.setText(f"Nenhum nó com rank investido ainda.\nPontos gastos: {points_spent}")
         self._resync_size()
 

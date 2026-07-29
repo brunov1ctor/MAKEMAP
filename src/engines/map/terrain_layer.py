@@ -27,6 +27,7 @@ class TerrainBrushParams:
     texture_rotation: float = 0.0
     erase: bool = False
     mask_only: bool = False  # paint mask without showing texture
+    dither: bool = True  # organic noisy edge (see _apply_edge_dither) — off for solid-fill regions
 
 
 # ±65% radius swing at roughness=1 — needs to read as a clearly jagged/torn
@@ -278,7 +279,8 @@ def build_stamp(radius: float, params: TerrainBrushParams, world_pos: QPointF | 
         painter.drawEllipse(center, radius, radius)
     painter.end()
 
-    _apply_edge_dither(img, center, gradient_r, world_pos)
+    if params.dither:
+        _apply_edge_dither(img, center, gradient_r, world_pos)
     return img
 
 

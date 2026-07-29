@@ -3,62 +3,30 @@
 import warnings
 warnings.filterwarnings("ignore", message=".*Failed to disconnect.*", category=RuntimeWarning)
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QSizePolicy, QLabel
-from PySide6.QtCore import Qt, QRect, QTimer
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panels.top_bar import TopBar
 from src.layouts.panels.toolbar import CanvasToolbar
-from src.layouts.panels.brush.panel import BrushToolPanel
-from src.layouts.panels.brush.asset_browser import AssetBrowserPanel
-from src.layouts.panels.grid_panel import GridSettingsPanel
-from src.layouts.panels.terrain.panel import TerrainSettingsPanel
-from src.layouts.panels.region.panel import RegionSettingsPanel
-from src.layouts.panels.region.region_edit_panel import RegionEditPanel
-from src.layouts.panels.spawn.panel import SpawnPanel
-from src.layouts.panels.spawn.mob_sub_panel import SpawnMobSubPanel
 from src.layouts.panels.select_panel import SelectToolPanel
-from src.layouts.panels.text_panel import TextToolPanel, radius_from_percent
-from src.engines.typography import TextProperties
-from src.layouts.panels.color_customize_panel import ColorCustomizePanel
-from src.layouts.panels.marker.panel import MarkerToolPanel
-from src.layouts.panels.marker.edit_panel import MarkerEditPanel
-from src.layouts.panels.light.panel import LightPanel
-from src.layouts.panels.light.edit_panel import LightEditPanel
-from src.layouts.panels.assets.effects_panel import AssetEffectsPanel
 from src.layouts.panels.explorer import ExplorerPanel
 from src.layouts.panels.canvas_area import CanvasArea
 from src.layouts.panels.inspector import InspectorPanel, QuestPanel, LayersPanel
 from src.layouts.panels.progression import ProgressionBar
 from src.layouts.panels.status_bar import StatusBar
-from src.layouts.panels.logs_panel import QtLogHandler, open_logs_dialog
+from src.layouts.panels.logs_panel import QtLogHandler
 from src.canvas.overlays import Compass, CompassHUD, MiniMap
 from src.canvas.map_boundary import MapBoundary
 from src.engines.integrator import EngineIntegrator
 from src.layouts.mediators import (
     BrushMediator, TerrainMediator, GridMediator, ToolbarMediator, RegionMediator, SpawnMediator,
-    TextMediator, MarkerMediator, LightMediator, AssetEffectsMediator,
+    TextMediator, MarkerMediator, LightMediator, AssetEffectsMediator, MenuViewMediator,
 )
 from src.layouts.panel_manager import PanelManager
+from src.layouts.panel_layout_engine import PanelLayoutEngine
 from src.layouts.floating_coordinator import FloatingCoordinator
-
-
-class _PendingText:
-    """Stand-in for a not-yet-placed TextItem — lets the Text panel's
-    handlers (`_on_text_*`, "Personalizar") write into a real TextProperties
-    object while the Texto tool is armed but nothing has been clicked on
-    the map yet, using the exact same `it.props.x = ...` / `it.update()`
-    call shape they already use for a real selected TextItem."""
-
-    def __init__(self, props: TextProperties):
-        self.props = props
-
-    def prepareGeometryChange(self):
-        pass
-
-    def update(self):
-        pass
 
 
 class MainLayout(QWidget):
@@ -82,154 +50,21 @@ class MainLayout(QWidget):
 
         self.canvas_toolbar = CanvasToolbar(self)
 
-        self.brush_panel = BrushToolPanel(self)
-        self.brush_panel.hide()
-        self.brush_panel.close_requested.connect(self._close_brush_panels)
-        self.brush_panel.assets_requested.connect(self._toggle_asset_browser)
-
+        # No mediator owns this one (it's a thin 4-line filter checklist,
+        # not worth a whole file) — constructed here same as top_bar/
+        # canvas_toolbar above.
         self.select_panel = SelectToolPanel(self)
         self.select_panel.hide()
         self.select_panel.close_requested.connect(self._close_select_panel)
         self.select_panel.layers_changed.connect(self.canvas.engine.selection.set_layer_filter)
 
-        self.text_panel = TextToolPanel(self)
-        self.text_panel.hide()
-        self.text_panel.close_requested.connect(self._close_text_panel)
-        self.text_panel.content_changed.connect(self._reposition)
-        self.text_panel.font_family_changed.connect(self._on_text_family)
-        self.text_panel.font_weight_changed.connect(self._on_text_weight)
-        self.text_panel.font_size_changed.connect(self._on_text_font_size)
-        self.text_panel.bold_changed.connect(self._on_text_bold)
-        self.text_panel.italic_changed.connect(self._on_text_italic)
-        self.text_panel.color_changed.connect(self._on_text_color)
-        self.text_panel.align_changed.connect(self._on_text_align)
-        self.text_panel.line_height_changed.connect(self._on_text_line_height)
-        self.text_panel.letter_spacing_changed.connect(self._on_text_letter_spacing)
-        self.text_panel.shadow_toggled.connect(self._on_text_shadow_toggled)
-        self.text_panel.shadow_color_changed.connect(self._on_text_shadow_color)
-        self.text_panel.shadow_opacity_changed.connect(self._on_text_shadow_opacity)
-        self.text_panel.shadow_blur_changed.connect(self._on_text_shadow_blur)
-        self.text_panel.outline_toggled.connect(self._on_text_outline_toggled)
-        self.text_panel.outline_color_changed.connect(self._on_text_outline_color)
-        self.text_panel.outline_opacity_changed.connect(self._on_text_outline_opacity)
-        self.text_panel.outline_width_changed.connect(self._on_text_outline_width)
-        self.text_panel.glow_toggled.connect(self._on_text_glow_toggled)
-        self.text_panel.glow_color_changed.connect(self._on_text_glow_color)
-        self.text_panel.glow_blur_changed.connect(self._on_text_glow_blur)
-        self.text_panel.curvature_changed.connect(self._on_text_curvature)
-        self.text_panel.opacity_changed.connect(self._on_text_opacity)
-        self.text_panel.strikethrough_toggled.connect(self._on_text_strikethrough)
-        self.text_panel.overline_toggled.connect(self._on_text_overline)
-        self.text_panel.underline_toggled.connect(self._on_text_underline)
-        self.text_panel.double_underline_toggled.connect(self._on_text_double_underline)
-        self.text_panel.box_toggled.connect(self._on_text_box)
-        self.text_panel.cloud_toggled.connect(self._on_text_cloud)
-        self.text_panel.serif_toggled.connect(self._on_text_serif)
-
-        # Single shared "Personalizar" picker sub-panel, reused for whichever
-        # ColorField (text color, shadow, outline, glow) opens it — same
-        # single-instance-reused pattern as RegionEditPanel across zone cards.
-        # Rides beside text_panel like RegionEditPanel does beside
-        # RegionSettingsPanel — positioned manually in resizeEvent, not
-        # through PanelManager's single-slot layout.
-        self.color_customize_panel = ColorCustomizePanel(self)
-        self.color_customize_panel.hide()
-        self._active_color_field = None
-        self._active_pattern_key = None
-        # Draft properties the Text panel edits while the Texto tool is
-        # armed but no item has been placed/selected yet — read by TextTool
-        # at the moment a new text box is placed (see _provide_text_properties).
-        self._pending_text: _PendingText | None = None
-        self.canvas.engine._text_tool.set_properties_provider(self._provide_text_properties)
-        self.color_customize_panel.close_requested.connect(self._close_color_customize)
-        self.color_customize_panel.pattern_changed.connect(self._on_color_customize_pattern_changed)
-        self.text_panel.color_field.customize_requested.connect(
-            lambda: self._open_color_customize("text", self.text_panel.color_field)
-        )
-        self.text_panel.shadow_color.customize_requested.connect(
-            lambda: self._open_color_customize("shadow", self.text_panel.shadow_color)
-        )
-        self.text_panel.outline_color.customize_requested.connect(
-            lambda: self._open_color_customize("outline", self.text_panel.outline_color)
-        )
-        self.text_panel.glow_color.customize_requested.connect(
-            lambda: self._open_color_customize("glow", self.text_panel.glow_color)
-        )
-
-        self.canvas.engine.selection.selection_changed.connect(self._on_selection_for_text_panel)
-
-        # Asset browser (category tabs + search + grid) rides next to
-        # brush_panel — opened by clicking the texture preview rectangle
-        # (see BrushToolPanel.assets_requested / _toggle_asset_browser),
-        # same adjacent-panel pattern as RegionEditPanel beside Região's
-        # CRUD list.
-        self.asset_browser_panel = AssetBrowserPanel(self)
-        self.asset_browser_panel.hide()
-        self.asset_browser_panel.close_requested.connect(self._toggle_asset_browser)
-
-        self.grid_panel = GridSettingsPanel(self)
-        self.grid_panel.hide()
-        self.grid_panel.close_requested.connect(self._close_grid_panel)
-
-        self.terrain_panel = TerrainSettingsPanel(self)
-        self.terrain_panel.hide()
-        self.terrain_panel.close_requested.connect(self._close_terrain_panel)
-
-        self.region_panel = RegionSettingsPanel(self)
-        self.region_panel.hide()
-        self.region_panel.close_requested.connect(self._close_region_panel)
-
-        self.region_edit_panel = RegionEditPanel(self)
-        self.region_edit_panel.hide()
-        self.region_edit_panel.content_changed.connect(self._reposition)
-
-        # Spawn de Mobs — categories (SpawnPanel) + mob sub-panel, same
-        # adjacent-panel pattern as Brush/AssetBrowser: pick a category,
-        # SpawnMobSubPanel rides next to it, picking a mob there closes it
-        # back down.
-        self.spawn_panel = SpawnPanel(self)
-        self.spawn_panel.hide()
-        self.spawn_panel.close_requested.connect(self._close_spawn_panel)
-
-        self.spawn_mob_sub_panel = SpawnMobSubPanel(self)
-        self.spawn_mob_sub_panel.hide()
-        self.spawn_mob_sub_panel.close_requested.connect(self._toggle_spawn_mob_sub_panel)
-
-        # Marcador — MarkerToolPanel (icon picker, shown while the tool is
-        # armed) and MarkerEditPanel (rich per-marker editor, shown on
-        # selection) never appear at the same time, so both register as
-        # separate exclusive PanelManager entries occupying the same dock
-        # slot instead of one "riding beside" the other (see MarkerMediator).
-        self.marker_panel = MarkerToolPanel(self)
-        self.marker_panel.hide()
-        self.marker_panel.close_requested.connect(self._close_marker_panel)
-
-        self.marker_edit_panel = MarkerEditPanel(self)
-        self.marker_edit_panel.hide()
-        self.marker_edit_panel.close_requested.connect(self._close_marker_edit_panel)
-        self.marker_edit_panel.content_changed.connect(self._reposition)
-
-        # Iluminação — same dual-exclusive-slot trick as Marcador: LightPanel
-        # (type picker, opened by the toolbar toggle) and LightEditPanel
-        # (per-light editor, opened on selection) never show together.
-        self.light_panel = LightPanel(self)
-        self.light_panel.hide()
-        self.light_panel.close_requested.connect(self._close_light_panel)
-
-        self.light_edit_panel = LightEditPanel(self)
-        self.light_edit_panel.hide()
-        self.light_edit_panel.close_requested.connect(self._close_light_edit_panel)
-        self.light_edit_panel.content_changed.connect(self._reposition)
-
-        # Asset effects editor (Config screen's card "✨" button) — single
-        # shared in-app panel, same "never a window outside the app" rule
-        # as ColorCustomizePanel; floats centered over whatever's showing
-        # instead of a QDialog.
-        self.asset_effects_panel = AssetEffectsPanel(self)
-        self.asset_effects_panel.hide()
-        self.asset_effects_panel.close_requested.connect(self._close_asset_effects_panel)
-
         # ═══ Mediators ═══
+        # Every other panel (Brush/AssetBrowser, Grid, Terrain, Região/
+        # RegionEdit, Spawn/SpawnMobSub, Texto/Personalizar, Marcador/
+        # MarcadorEdit, Luz/LuzEdit/Céu, AssetEffects) is constructed by its
+        # own mediator below — see e.g. LightMediator.__init__ — instead of
+        # here, so a panel's construction lives next to the signal wiring
+        # that gives it meaning.
         self._brush_med = BrushMediator(self)
         self._terrain_med = TerrainMediator(self)
         self._grid_med = GridMediator(self)
@@ -241,6 +76,9 @@ class MainLayout(QWidget):
         self._asset_effects_med = AssetEffectsMediator(self)
         self._toolbar_med = ToolbarMediator(self)
         self._toolbar_med.connect()
+        # After _region_med — _show_menu_view's "Mobs" view reads
+        # l._region_med.zones_list/zone_thumbnail.
+        self._menu_med = MenuViewMediator(self)
 
         # ═══ Panel Manager ═══
         self._panel_mgr = PanelManager(self)
@@ -271,48 +109,13 @@ class MainLayout(QWidget):
             "Select", self.select_panel,
         )
         self._panel_mgr.register(
-            "Text", self.text_panel, on_hide=self._close_color_customize,
+            "Text", self.text_panel, on_hide=self._text_med._close_color_customize,
         )
         self._panel_mgr.register("Marcador", self.marker_panel)
         self._panel_mgr.register("MarcadorEdit", self.marker_edit_panel)
         self._panel_mgr.register("Light", self.light_panel)
         self._panel_mgr.register("LightEdit", self.light_edit_panel)
-
-        # Terrain panel signals → mediator
-        self.terrain_panel.infinite_toggled.connect(self._terrain_med.on_infinite)
-        self.terrain_panel.dimensions_changed.connect(self._terrain_med.on_dims)
-        self.terrain_panel.shape_changed.connect(self._terrain_med.on_shape)
-        self.terrain_panel.terrain_visibility.connect(self._terrain_med.on_visibility)
-        self.terrain_panel.terrain_added.connect(self._terrain_med.on_added)
-        self.terrain_panel.terrain_removed.connect(self._terrain_med.on_removed)
-        self.terrain_panel.terrain_selected.connect(self._terrain_med.on_selected)
-        self.terrain_panel.background_changed.connect(self._terrain_med.on_background)
-        # Deferred — same reasoning as Região's card list: a freshly
-        # inserted TerrainCard's sizeHint() isn't settled synchronously.
-        self.terrain_panel.content_changed.connect(lambda: QTimer.singleShot(0, self._reposition))
-
-        # Map boundary overlays reference
-        self._terrain_boundaries = self._terrain_med.boundaries
-
-        # Região panel signals → mediator
-        self.region_panel.region_add_requested.connect(self._region_med.on_add_requested)
-        self.region_panel.region_renamed.connect(self._region_med.on_renamed)
-        self.region_panel.region_removed.connect(self._region_med.on_removed)
-        self.region_panel.region_selected.connect(self._region_med.on_card_clicked)
-        self.region_panel.region_edit_requested.connect(self._region_med.on_selected)
-        self.region_panel.region_locate_requested.connect(self._region_med.on_locate)
-        self.region_panel.region_visibility_toggled.connect(self._region_med.on_card_visibility_toggled)
-        self.region_panel.region_paint_cleared.connect(self._region_med.on_paint_cleared)
-        self.region_panel.region_image_changed.connect(self._region_med.on_card_image_changed)
-        self.region_panel.region_hover_entered.connect(self._region_med.on_card_hover_entered)
-        self.region_panel.region_hover_left.connect(self._region_med.on_card_hover_left)
-        # Deferred (not a direct connect like Terrain's content_changed):
-        # this one fires right after a brand-new RegionCard is inserted
-        # into the list layout, and a freshly-constructed child widget's
-        # sizeHint() isn't reliably settled until Qt's run an event-loop
-        # tick — reading it synchronously here would undercount and leave
-        # the panel too short to show the just-added card.
-        self.region_panel.content_changed.connect(lambda: QTimer.singleShot(0, self._reposition))
+        self._panel_mgr.register("SkyEdit", self.sky_edit_panel)
 
         # Explorer (esquerda)
         self._left_container = QWidget(self)
@@ -387,6 +190,11 @@ class MainLayout(QWidget):
         self.floating.register("text_panel", self.text_panel)
         self.minimap.moved.connect(lambda: self.floating.push_clear("minimap"))
         self.compass.moved.connect(lambda: self.floating.push_clear("compass"))
+
+        # ═══ Panel Layout Engine ═══
+        # Everything about WHERE panels/overlays sit once the window size
+        # (or which panels are visible) changes — see panel_layout_engine.py.
+        self._panel_layout = PanelLayoutEngine(self)
         # compass_hud is anchored relative to the compass. position_changed
         # fires on every real move — including each step of a move-drag, not
         # just once it ends — so the HUD chip tracks the drag live instead of
@@ -394,7 +202,7 @@ class MainLayout(QWidget):
         # fires once at drag-end for push_clear's obstacle-nudge, which in
         # turn moves the compass again and re-emits position_changed, so the
         # HUD re-anchors off its actual final position either way).
-        self.compass.position_changed.connect(self._reposition_compass_hud)
+        self.compass.position_changed.connect(self._panel_layout.reposition_compass_hud)
 
         # ═══ Conexões ═══
         self.canvas.engine.cursor_moved.connect(
@@ -407,25 +215,15 @@ class MainLayout(QWidget):
             lambda t: self.status_bar.tool_label.setText(f"🔧 {t}")
         )
         self.canvas.engine.tool_changed.connect(self.canvas_toolbar.sync_active)
-        self.canvas.engine.text_committed.connect(self._close_text_panel)
         self.status_bar.zoom_in_clicked.connect(self.canvas.engine.zoom_in)
         self.status_bar.zoom_out_clicked.connect(self.canvas.engine.zoom_out)
         self.minimap.zoom_changed.connect(self._on_zoom_slider)
         self.canvas.engine.grid_toggled.connect(self._on_grid_toggled)
         self.compass.expanded_changed.connect(self._on_compass_toggle)
         self.canvas.engine.viewport.view_changed.connect(self._refresh_compass_hud)
-        self.terrain_panel.terrain_selected.connect(lambda _id: self._refresh_compass_hud())
-        self.terrain_panel.terrain_renamed.connect(lambda _id, _name: self._refresh_compass_hud())
         from src.engines.map.navigation import get_navigation_library
         get_navigation_library().changed.connect(self._refresh_compass_hud)
         self._refresh_compass_hud()  # reflect the active preset's "Info" checkbox right away, not just after a later toggle
-        self.top_bar.logs_clicked.connect(self._open_logs)
-        self.top_bar.menu_clicked.connect(self._on_menu_view)
-
-        # ═══ Fullscreen menu view state ═══
-        self._active_menu: str = ""
-        self._menu_container: QWidget | None = None
-        self._active_panel: QWidget | None = None
 
         # ═══ Engine Integrator ═══
         self.engines = EngineIntegrator(self)
@@ -445,177 +243,10 @@ class MainLayout(QWidget):
     def _reposition(self):
         self.resizeEvent(None)
 
-    def _reposition_compass_hud(self):
-        """Anchors compass_hud to the compass's current spot — split out so
-        Compass.position_changed (fired on every move, mid-drag included)
-        can call just this instead of the full _reposition/resizeEvent, and
-        the HUD tracks the drag live instead of jumping once it ends."""
-        self.compass_hud.move(
-            self.compass.x() + self.compass.width() - self.compass_hud.width(),
-            self.compass.y() + self.compass.height() + 6,
-        )
-        self.compass_hud.raise_()
-
     def resizeEvent(self, event):
         if event:
             super().resizeEvent(event)
-        w, h = self.width(), self.height()
-
-        top_h = 72
-        toolbar_h = 42
-        status_h = 80
-        prog_h = self.progression.height()
-
-        body_top = top_h
-        body_bottom = h - status_h
-        body_h = body_bottom - body_top
-
-        center_x = self.LEFT_W
-        center_w = max(0, w - self.LEFT_W - self.RIGHT_W)
-
-        self.canvas.setGeometry(0, 0, w, h)
-        self.canvas.lower()
-        self.top_bar.setGeometry(0, 0, w, top_h)
-        self._left_container.setGeometry(0, body_top, self.LEFT_W, body_h)
-        self._right_scroll.setGeometry(w - self.RIGHT_W, body_top, self.RIGHT_W, body_h)
-        self._toolbar_med.layout(w, h, center_x, center_w, body_top, body_h)
-
-        # Brush/Grid/Terrain panels normally sit right below the toolbar's
-        # default top-docked slot — but the toolbar is now draggable, so
-        # carve the panel area around wherever it actually is instead of
-        # assuming that fixed slot.
-        avail = QRect(center_x + 4, body_top + 4, max(0, center_w - 8), max(0, body_h - prog_h - 8))
-        avail = self._toolbar_med.carve_panel_area(avail)
-        self._panel_mgr.layout(avail.x(), avail.y(), avail.width(), avail.height())
-
-        # Asset browser rides next to Brush the same way RegionEditPanel
-        # rides next to Região's CRUD list — sized to fill the full
-        # available work area (not capped to brush_panel's own height,
-        # which is now short since its sliders moved to a 2-column grid;
-        # capping to it left the material grid showing only a couple
-        # rows with tons of unused space below).
-        if self.brush_panel.isVisible() and self.asset_browser_panel.isVisible():
-            bp_rect = self.brush_panel.geometry()
-            ab_x = bp_rect.right() + 8
-            ab_w = min(self.asset_browser_panel.PANEL_WIDTH, max(0, avail.right() - ab_x))
-            ab_h = max(0, avail.bottom() - bp_rect.y())
-            self.asset_browser_panel.setGeometry(ab_x, bp_rect.y(), ab_w, ab_h)
-            self.asset_browser_panel.raise_()
-
-        # Região's CRUD list has a pinned header + "Nova Região" button
-        # living OUTSIDE its card-list scroll area, so PanelManager's
-        # generic _content_height() (which only measures the first
-        # QScrollArea it finds) undercounts it — override with the panel's
-        # own content_height(), which accounts for both.
-        if self.region_panel.isVisible():
-            rp = self.region_panel.geometry()
-            rp_h = min(self.region_panel.content_height(), avail.height())
-            self.region_panel.setGeometry(rp.x(), rp.y(), rp.width(), rp_h)
-
-        # Terrain nests several QScrollAreas (whole-panel, terrain-card
-        # list, background image browser) — same ambiguity as Região's
-        # generic sizing, same override via its own content_height().
-        if self.terrain_panel.isVisible():
-            tp = self.terrain_panel.geometry()
-            tp_h = min(self.terrain_panel.content_height(), avail.height())
-            self.terrain_panel.setGeometry(tp.x(), tp.y(), tp.width(), tp_h)
-
-        # Spawn's header (outside its scroll area) has the same undercount
-        # issue as Região's CRUD list — same content_height() override.
-        if self.spawn_panel.isVisible():
-            sp = self.spawn_panel.geometry()
-            sp_h = min(self.spawn_panel.content_height(), avail.height())
-            self.spawn_panel.setGeometry(sp.x(), sp.y(), sp.width(), sp_h)
-
-        # Mob sub-panel rides next to Spawn's categories the same way
-        # AssetBrowserPanel rides next to Brush.
-        if self.spawn_panel.isVisible() and self.spawn_mob_sub_panel.isVisible():
-            sp_rect = self.spawn_panel.geometry()
-            ms_x = sp_rect.right() + 8
-            ms_w = min(self.spawn_mob_sub_panel.PANEL_WIDTH, max(0, avail.right() - ms_x))
-            ms_h = min(sp_rect.height(), max(0, avail.bottom() - sp_rect.y()))
-            self.spawn_mob_sub_panel.setGeometry(ms_x, sp_rect.y(), ms_w, ms_h)
-            self.spawn_mob_sub_panel.raise_()
-
-        # Personalizar rides next to Texto (not through PanelManager — see
-        # where it's created), sized to its own content.
-        if self.text_panel.isVisible() and self.color_customize_panel.isVisible():
-            tp_rect = self.text_panel.geometry()
-            cc_x = tp_rect.right() + 8
-            cc_w = min(self.color_customize_panel.PANEL_WIDTH, max(0, avail.right() - cc_x))
-            cc_h = min(PanelManager._content_height(self.color_customize_panel), avail.height())
-            self.color_customize_panel.setGeometry(cc_x, tp_rect.y(), cc_w, cc_h)
-            self.color_customize_panel.raise_()
-
-        # Região's edit panel rides next to the CRUD list the same way —
-        # but sized to its OWN content (collapsible sections growing/
-        # shrinking), same smart-height behavior Terrain's BackgroundSection
-        # gets via PanelManager._content_height, not just copying Region's
-        # height verbatim (which ignored its collapsed/expanded sections).
-        if self.region_panel.isVisible() and self.region_edit_panel.isVisible():
-            rp_rect = self.region_panel.geometry()
-            re_x = rp_rect.right() + 8
-            re_w = min(self.region_edit_panel.PANEL_WIDTH, max(0, avail.right() - re_x))
-            # Capped to the available work area, NOT to Region's own height —
-            # the two panels size independently to their own content now, so
-            # one being shorter must never squash the other.
-            max_h = max(0, avail.bottom() - rp_rect.y())
-            re_h = min(PanelManager._content_height(self.region_edit_panel), max_h)
-            self.region_edit_panel.setGeometry(re_x, rp_rect.y(), re_w, re_h)
-            self.region_edit_panel.raise_()
-
-        # Asset effects editor — not anchored to any tool/panel (opened from
-        # the fullscreen Config view), so it just floats centered over
-        # whatever's currently showing, in-app like every other picker here.
-        if self.asset_effects_panel.isVisible():
-            ae_w = self.asset_effects_panel.width()
-            ae_h = self.asset_effects_panel.height()
-            self.asset_effects_panel.move((w - ae_w) // 2, (h - ae_h) // 2)
-            self.asset_effects_panel.raise_()
-
-        self.progression.setGeometry(center_x, body_bottom - prog_h, center_w, prog_h)
-        self.status_bar.setGeometry(0, h - status_h, w, status_h)
-
-        ov_top = body_top + toolbar_h
-        ov_h = max(0, body_h - toolbar_h - prog_h)
-
-        if self.compass.has_custom_position():
-            # User dragged it via its own grip — keep their spot, just
-            # clamp to stay reachable on resize (same pattern as minimap).
-            cx = min(max(self.compass.x(), center_x), max(center_x, center_x + center_w - self.compass.width()))
-            cy = min(max(self.compass.y(), ov_top), max(ov_top, ov_top + ov_h - self.compass.height()))
-            self.compass.move(cx, cy)
-        else:
-            self.compass.move(center_x + center_w - self.compass.width() - 16, ov_top + 8)
-        if self.minimap.has_custom_position():
-            # User dragged it — keep their spot, just clamp to stay reachable on resize.
-            mx = min(max(self.minimap.x(), center_x), max(center_x, center_x + center_w - self.minimap.width()))
-            my = min(max(self.minimap.y(), ov_top), max(ov_top, ov_top + ov_h - self.minimap.height()))
-            self.minimap.move(mx, my)
-        else:
-            self.minimap.move(
-                center_x + center_w - self.minimap.width() - 16,
-                ov_top + ov_h - self.minimap.height() - 8,
-            )
-        self.minimap.raise_()
-        self.compass.raise_()
-        # Raised last — compass_hud is a readout attached to the compass and
-        # must stay legible even where its card overlaps the minimap (e.g. on
-        # a short/narrow window), not get painted over by whichever of those
-        # two happened to be raised most recently.
-        self._reposition_compass_hud()
-        # Both compass and compass_hud just landed at their default anchor
-        # (top-right of the canvas), which on a short/narrow window can
-        # collide with the minimap's own default anchor (bottom-right) —
-        # nudge minimap clear of them here too, not just on the reactive
-        # drag/visibility-toggle paths above, so this isn't left to whichever
-        # of those happens to fire next.
-        if not self.minimap.has_custom_position():
-            self.floating.push_clear("minimap")
-
-        if self._menu_container and self._menu_container.isVisible():
-            self._menu_container.setGeometry(0, top_h, w, body_h)
-            self._menu_container.raise_()
+        self._panel_layout.apply(self.width(), self.height())
 
     # ─── Zoom ───
 
@@ -651,9 +282,13 @@ class MainLayout(QWidget):
         """Same reasoning as _on_brush_panel_hidden — the edit panel has
         nothing to anchor next to (and no CRUD list to add its card to)
         once Region itself is closed, by PanelManager's exclusivity or
-        otherwise."""
-        if self.region_edit_panel.isVisible():
-            self._region_med.on_close_edit()
+        otherwise. Always disarms RegionBrushTool (not just when the edit
+        sub-panel was open) — a card can be armed via a plain click
+        (on_card_clicked) without ever opening that sub-panel, and leaving
+        it armed after the whole Região panel closes left the brush
+        cursor/preview on the canvas (and painting still live) with no
+        panel or toolbar button left showing it."""
+        self._region_med.on_close_edit()
         self._reposition()
 
     def _on_spawn_panel_hidden(self):
@@ -682,16 +317,11 @@ class MainLayout(QWidget):
             self._panel_mgr.hide("Select")
         if tool_name == "Texto":
             self._panel_mgr.show("Text")
-            if not self._text_selected_items():
-                # Fresh draft to configure before the first click on the
-                # map — read back by TextTool at placement time (see
-                # _provide_text_properties).
-                self._pending_text = _PendingText(TextProperties(text="Texto", font_size=20, font_weight=600))
-                self.text_panel.set_values(self._pending_text.props)
-        elif not self._text_selected_items():
+            self._text_med._arm_draft()
+        elif not self._text_med._text_selected_items():
             self._panel_mgr.hide("Text")
-            self._close_color_customize()
-            self._pending_text = None
+            self._text_med._close_color_customize()
+            self._text_med._pending_text = None
         if tool_name == "Spawn":
             self._panel_mgr.show("Spawn")
         else:
@@ -715,263 +345,6 @@ class MainLayout(QWidget):
         self._panel_mgr.hide("MarcadorEdit")
         self.canvas.engine.selection.clear()
         self._reposition()
-
-    # ─── Text Panel ───
-
-    def _text_selected_items(self) -> list:
-        from src.canvas.text_item import TextItem
-        return [it for it in self.canvas.engine.selection.selected_items if isinstance(it, TextItem)]
-
-    def _text_targets(self) -> list:
-        """What the Text panel's controls currently write into: a real
-        selected TextItem if one exists, else the not-yet-placed draft
-        while the Texto tool is armed, else nothing."""
-        items = self._text_selected_items()
-        if items:
-            return items
-        if self._pending_text is not None and self.canvas.engine.tool_manager.active_name == "Texto":
-            return [self._pending_text]
-        return []
-
-    def _provide_text_properties(self):
-        """Read by TextTool at the moment a new text box is placed."""
-        import copy
-        if self._pending_text is not None:
-            return copy.deepcopy(self._pending_text.props)
-        return TextProperties(text="Texto", font_size=20, font_weight=600)
-
-    def _on_selection_for_text_panel(self, _ids):
-        items = self._text_selected_items()
-        if items:
-            it = items[0]
-            self.text_panel.set_values(it.props)
-            self._panel_mgr.show("Text")
-        elif self.canvas.engine.tool_manager.active_name != "Texto":
-            self._panel_mgr.hide("Text")
-            self._close_color_customize()
-        self._reposition()
-
-    def _close_text_panel(self):
-        self._panel_mgr.hide("Text")
-        self._close_color_customize()
-        self._pending_text = None
-        self._reposition()
-
-    # ─── "Personalizar" paint picker ───
-
-    @staticmethod
-    def _pattern_target(props, key: str):
-        """(object, base-color-attr) pair for a Personalizar key — obj.pattern
-        is the PaintGrid, getattr(obj, attr) is the plain fallback hex."""
-        return {
-            "text": (props, "color"),
-            "shadow": (props.shadow, "color"),
-            "outline": (props.outline, "color"),
-            "glow": (props.glow, "color"),
-        }[key]
-
-    def _open_color_customize(self, key: str, field):
-        self._active_color_field = field
-        self._active_pattern_key = key
-        cells = None
-        targets = self._text_targets()
-        if targets:
-            obj, attr = self._pattern_target(targets[0].props, key)
-            obj.pattern.ensure(getattr(obj, attr))
-            cells = obj.pattern.cells
-        self.color_customize_panel.load_pattern(cells, field.color())
-        self.color_customize_panel.show()
-        self._reposition()
-
-    def _on_color_customize_pattern_changed(self, cells: list):
-        if not self._active_pattern_key:
-            return
-        dominant = cells[0] if cells else self._active_color_field.color()
-        for it in self._text_targets():
-            obj, attr = self._pattern_target(it.props, self._active_pattern_key)
-            obj.pattern.cells = list(cells)
-            setattr(obj, attr, dominant)
-            it.prepareGeometryChange()
-            it.update()
-        self._active_color_field.set_color(dominant)
-
-    def _close_color_customize(self):
-        self.color_customize_panel.hide()
-        self._active_color_field = None
-        self._active_pattern_key = None
-        self._reposition()
-
-    def _on_text_family(self, family: str):
-        for it in self._text_targets():
-            it.props.font_family = family
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_weight(self, weight: int):
-        for it in self._text_targets():
-            it.props.font_weight = weight
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_font_size(self, value: float):
-        for it in self._text_targets():
-            it.props.font_size = value
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_bold(self, checked: bool):
-        for it in self._text_targets():
-            it.props.font_weight = 700 if checked else 400
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_italic(self, checked: bool):
-        for it in self._text_targets():
-            it.props.italic = checked
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_color(self, color: str):
-        for it in self._text_targets():
-            it.props.color = color
-            it.props.pattern.fill(color)
-            it.update()
-
-    def _on_text_align(self, align):
-        for it in self._text_targets():
-            it.props.align = align
-            it.update()
-
-    def _on_text_line_height(self, value: float):
-        for it in self._text_targets():
-            it.props.spacing.line_height = value
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_letter_spacing(self, value: float):
-        for it in self._text_targets():
-            it.props.spacing.letter_spacing = value
-            it.prepareGeometryChange()
-            it.update()
-
-    # ─── Estilo Panel ───
-
-    def _on_text_shadow_toggled(self, checked: bool):
-        for it in self._text_targets():
-            it.props.shadow.enabled = checked
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_shadow_color(self, color: str):
-        for it in self._text_targets():
-            it.props.shadow.color = color
-            it.props.shadow.pattern.fill(color)
-            it.update()
-
-    def _on_text_shadow_opacity(self, percent: float):
-        for it in self._text_targets():
-            it.props.shadow.opacity = percent / 100.0
-            it.update()
-
-    def _on_text_shadow_blur(self, value: float):
-        for it in self._text_targets():
-            it.props.shadow.blur = value
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_outline_toggled(self, checked: bool):
-        for it in self._text_targets():
-            it.props.outline.enabled = checked
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_outline_color(self, color: str):
-        for it in self._text_targets():
-            it.props.outline.color = color
-            it.props.outline.pattern.fill(color)
-            it.update()
-
-    def _on_text_outline_opacity(self, percent: float):
-        for it in self._text_targets():
-            it.props.outline.opacity = percent / 100.0
-            it.update()
-
-    def _on_text_outline_width(self, value: float):
-        for it in self._text_targets():
-            it.props.outline.width = value
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_glow_toggled(self, checked: bool):
-        for it in self._text_targets():
-            it.props.glow.enabled = checked
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_glow_color(self, color: str):
-        for it in self._text_targets():
-            it.props.glow.color = color
-            it.props.glow.pattern.fill(color)
-            it.update()
-
-    def _on_text_glow_blur(self, value: float):
-        for it in self._text_targets():
-            it.props.glow.radius = value
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_curvature(self, percent: float):
-        for it in self._text_targets():
-            it.props.curve.enabled = percent > 0
-            it.props.curve.radius = radius_from_percent(percent)
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_opacity(self, percent: float):
-        for it in self._text_targets():
-            it.props.opacity = percent / 100.0
-            it.update()
-
-    # ─── Enfeites ───
-
-    def _on_text_strikethrough(self, checked: bool):
-        for it in self._text_targets():
-            it.props.strikethrough = checked
-            it.update()
-
-    def _on_text_overline(self, checked: bool):
-        for it in self._text_targets():
-            it.props.overline = checked
-            it.update()
-
-    def _on_text_underline(self, checked: bool):
-        for it in self._text_targets():
-            it.props.underline = checked
-            it.update()
-
-    def _on_text_double_underline(self, checked: bool):
-        for it in self._text_targets():
-            it.props.double_underline = checked
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_box(self, checked: bool):
-        for it in self._text_targets():
-            it.props.ribbon.enabled = checked
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_cloud(self, checked: bool):
-        for it in self._text_targets():
-            it.props.cloud = checked
-            it.prepareGeometryChange()
-            it.update()
-
-    def _on_text_serif(self, checked: bool):
-        for it in self._text_targets():
-            it.props.serif = checked
-            it.prepareGeometryChange()
-            it.update()
 
     def _close_brush_panels(self):
         self._panel_mgr.hide("Brush")
@@ -1045,6 +418,10 @@ class MainLayout(QWidget):
         self.canvas.engine.selection.clear()
         self._reposition()
 
+    def _close_sky_edit_panel(self):
+        self._panel_mgr.hide("SkyEdit")
+        self._reposition()
+
     # ─── Asset Effects Panel ───
 
     def _close_asset_effects_panel(self):
@@ -1110,195 +487,3 @@ class MainLayout(QWidget):
             center.x(), center.y(),
         )
 
-    # ─── Logs ───
-
-    def _open_logs(self):
-        # Logs is a modal dialog on top of whatever's currently shown, not
-        # a fullscreen menu view — restore whichever nav button was really
-        # active (e.g. "Mobs") once it closes, since top_bar._on_nav_clicked
-        # already switched the top bar to show "Logs" as checked.
-        previous = self._active_menu or "Mapa"
-        open_logs_dialog(self, self.log_handler)
-        self.top_bar.set_active_menu(previous)
-
-    # ─── Fullscreen Menu Views ───
-
-    def _canvas_widgets(self) -> list[QWidget]:
-        return [
-            self.canvas_toolbar, self.brush_panel,
-            self.grid_panel, self.terrain_panel, self.region_panel, self.select_panel,
-            self.text_panel,
-            self._left_container, self._right_scroll, self.progression, self.compass,
-            self.compass_hud, self.minimap,
-        ]
-
-    def _on_menu_view(self, menu_name: str):
-        if menu_name == "Mapa":
-            self._hide_menu_view()
-            return
-        if menu_name == "Logs":
-            # Logs opens as its own modal dialog (see _open_logs, wired to
-            # top_bar.logs_clicked) — it isn't a fullscreen menu view, so
-            # opening it shouldn't close whatever panel (Mobs, etc.) is
-            # already open underneath.
-            return
-        if menu_name == self._active_menu:
-            self._hide_menu_view()
-        else:
-            self._show_menu_view(menu_name)
-            self.top_bar.set_active_menu(menu_name)
-
-    def _show_menu_view(self, menu_name: str):
-        if self._menu_container:
-            self._flush_active_panel()
-            self._menu_container.hide()
-            self._menu_container.deleteLater()
-            self._menu_container = None
-
-        for w in self._canvas_widgets():
-            w.hide()
-
-        self._active_menu = menu_name
-
-        from src.layouts.panels.projects_panel import ProjectsPanel
-        from src.layouts.panels.menu_panels import MENU_PANELS
-
-        container = QWidget(self)
-        container.setAttribute(Qt.WA_TranslucentBackground)
-        container.setStyleSheet("background: transparent;")
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        if menu_name == "Projetos":
-            window = self.window()
-            panel = ProjectsPanel(
-                active_path=str(window.project.path) if window and hasattr(window, 'project') and window.project else "",
-                parent=container,
-            )
-            panel.setMaximumWidth(16777215)
-            panel.setMinimumWidth(0)
-            panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            panel.closed.connect(self._hide_menu_view)
-            panel.project_opened.connect(self._on_menu_project_opened)
-            panel.project_created.connect(self._on_menu_project_created)
-            panel.delete_requested.connect(self._on_menu_delete_project)
-            layout.addWidget(panel)
-        elif menu_name == "Mobs":
-            from src.layouts.panels.mobs.panel import MobsPanel
-            window = self.window()
-            uow = window.uow if window and hasattr(window, 'uow') else None
-            project_dir = window.project.path if window and getattr(window, 'project', None) else None
-            panel = MobsPanel(
-                uow, zones_provider=self._region_med.zones_list,
-                zone_thumbnail_provider=self._region_med.zone_thumbnail,
-                project_dir=project_dir, parent=container,
-            )
-            panel.closed.connect(self._hide_menu_view)
-            layout.addWidget(panel)
-        elif menu_name == "Itens":
-            from src.layouts.panels.items.panel import ItemsSkillsPanel
-            window = self.window()
-            uow = window.uow if window and hasattr(window, 'uow') else None
-            project_dir = window.project.path if window and getattr(window, 'project', None) else None
-            panel = ItemsSkillsPanel(uow, project_dir=project_dir, parent=container)
-            panel.closed.connect(self._hide_menu_view)
-            layout.addWidget(panel)
-        elif menu_name == "Dungeons":
-            from src.layouts.panels.dungeons.panel import DungeonsPanel
-            window = self.window()
-            uow = window.uow if window and hasattr(window, 'uow') else None
-            project_dir = window.project.path if window and getattr(window, 'project', None) else None
-            panel = DungeonsPanel(uow, project_dir=project_dir, parent=container)
-            panel.closed.connect(self._hide_menu_view)
-            layout.addWidget(panel)
-        elif menu_name in MENU_PANELS:
-            panel_class = MENU_PANELS[menu_name]
-            panel = panel_class(container)
-            panel.closed.connect(self._hide_menu_view)
-            layout.addWidget(panel)
-        else:
-            placeholder = QWidget(container)
-            placeholder.setAttribute(Qt.WA_TranslucentBackground)
-            placeholder.setStyleSheet("background: transparent;")
-            ph_layout = QVBoxLayout(placeholder)
-            ph_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl = QLabel(f"{menu_name}")
-            lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 18px; background: transparent;")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            ph_layout.addWidget(lbl)
-            layout.addWidget(placeholder)
-
-        self._menu_container = container
-        self._active_panel = layout.itemAt(0).widget() if layout.count() else None
-        container.show()
-        container.raise_()
-        self._reposition()
-
-    def _flush_active_panel(self):
-        """Menu panels switch (or the whole app closes) without the
-        panel's own close button ever being clicked — deleteLater() below
-        would otherwise silently drop whatever a panel's debounced
-        autosave timer (e.g. ItemsSkillsPanel) hasn't committed yet."""
-        flush = getattr(self._active_panel, "flush_pending_saves", None)
-        if callable(flush):
-            flush()
-
-    def _hide_menu_view(self):
-        if self._menu_container:
-            self._flush_active_panel()
-            self._menu_container.hide()
-            self._menu_container.deleteLater()
-            self._menu_container = None
-
-        self._active_menu = ""
-        self.top_bar.set_active_menu("Mapa")
-
-        for w in self._canvas_widgets():
-            if w in (self.brush_panel, self.grid_panel,
-                     self.terrain_panel, self.region_panel, self.select_panel, self.text_panel,
-                     self.compass_hud):
-                continue
-            w.show()
-        # Not part of the blanket show() above — its visibility rule is
-        # "Info" checkbox state, not plain show/hide (see _refresh_compass_hud).
-        self._refresh_compass_hud()
-        self._reposition()
-
-    def _on_menu_project_opened(self, proj):
-        window = self.window()
-        if window and hasattr(window, '_on_panel_project_opened'):
-            window._on_panel_project_opened(proj)
-        self._hide_menu_view()
-
-    def _on_menu_project_created(self, proj):
-        # Unlike opening an existing project, keep the Projetos view open —
-        # the new card is shown in edit mode so the user can type its name.
-        window = self.window()
-        if window and hasattr(window, '_load_project'):
-            window._load_project(proj)
-
-    def _on_menu_delete_project(self, path: str):
-        from pathlib import Path as P
-        import shutil
-        window = self.window()
-        target = P(path)
-
-        if window and hasattr(window, 'project') and window.project and str(window.project.path) == path:
-            window.autosave.stop()
-            if window.uow:
-                window.uow.close()
-                window.uow = None
-            window.project = None
-            window.setWindowTitle("MAKEMAP — v0.1.0")
-            self.top_bar.set_project_name("")
-
-        if target.exists():
-            shutil.rmtree(target)
-
-        if self._menu_container:
-            from src.layouts.panels.projects_panel import ProjectsPanel
-            panel = self._menu_container.findChild(ProjectsPanel)
-            if panel:
-                panel.set_active("")
-                panel.refresh()

@@ -167,7 +167,7 @@ class ConfigPanel(MenuPanel):
 
 
 # Registry for easy lookup. "Itens" and "Dungeons" are intentionally absent —
-# they're handled directly in MainLayout._show_menu_view by the full
+# they're handled directly in MenuViewMediator._show_menu_view by the full
 # ItemsSkillsPanel / DungeonsPanel (both need the project's UnitOfWork, like
 # Mobs), not by an empty-state placeholder.
 MENU_PANELS = {

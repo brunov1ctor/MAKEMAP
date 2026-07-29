@@ -17,6 +17,8 @@ from PySide6.QtCore import QTimer
 
 from src.canvas.marker_item import MarkerItem
 from src.engines.marker import MarkerProperties, category_for_icon
+from src.layouts.panels.marker.panel import MarkerToolPanel
+from src.layouts.panels.marker.edit_panel import MarkerEditPanel
 
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
@@ -36,16 +38,30 @@ class MarkerMediator:
         self._pending_icon = "📍"
         self._items: dict[str, MarkerItem] = {}  # canvas_items row id -> MarkerItem
 
-        panel = self._l.marker_panel
+        # Marcador — MarkerToolPanel (icon picker, shown while the tool is
+        # armed) and MarkerEditPanel (rich per-marker editor, shown on
+        # selection) never appear at the same time, so both register as
+        # separate exclusive PanelManager entries occupying the same dock
+        # slot instead of one "riding beside" the other (see
+        # PanelManager registration in MainLayout).
+        panel = MarkerToolPanel(self._l)
+        panel.hide()
+        panel.close_requested.connect(self._l._close_marker_panel)
+        self._l.marker_panel = panel
         panel.icon_changed.connect(self._on_icon_picked)
 
-        edit = self._l.marker_edit_panel
+        edit = MarkerEditPanel(self._l)
+        edit.hide()
+        edit.close_requested.connect(self._l._close_marker_edit_panel)
+        edit.content_changed.connect(self._l._reposition)
+        self._l.marker_edit_panel = edit
         edit.name_changed.connect(self._on_name_changed)
         edit.category_changed.connect(self._on_category_changed)
         edit.icon_changed.connect(self._on_icon_changed)
         edit.description_changed.connect(self._on_description_changed)
         edit.effects_changed.connect(self._on_effects_changed)
         edit.radius_changed.connect(self._on_radius_changed)
+        edit.effect_intensity_changed.connect(self._on_effect_intensity_changed)
 
         self._l.canvas.engine._marker_tool.set_properties_provider(self._provide_properties)
         self._l.canvas.engine.selection.selection_changed.connect(self._on_selection_changed)
@@ -130,6 +146,13 @@ class MarkerMediator:
         if item:
             item.props.effect_radius = radius
             item.prepareGeometryChange()
+            item.update()
+            self._schedule_sync()
+
+    def _on_effect_intensity_changed(self, intensity: float):
+        item = self._selected_marker()
+        if item:
+            item.props.effect_intensity = intensity
             item.update()
             self._schedule_sync()
 

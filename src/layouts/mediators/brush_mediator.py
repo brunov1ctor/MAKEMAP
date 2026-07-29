@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QPointF, QTimer
 from PySide6.QtGui import QPixmap
 
+from src.layouts.panels.brush.panel import BrushToolPanel
+from src.layouts.panels.brush.asset_browser import AssetBrowserPanel
+
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
 
@@ -30,6 +33,22 @@ class BrushMediator:
         self._uow = None
         self._terrain_rows: dict[str, str] = {}  # asset_id -> painted_terrain row id
         self._stamp_items: dict[str, object] = {}  # canvas_items row id -> QGraphicsPixmapItem
+
+        panel = BrushToolPanel(self._l)
+        panel.hide()
+        panel.close_requested.connect(self._l._close_brush_panels)
+        panel.assets_requested.connect(self._l._toggle_asset_browser)
+        self._l.brush_panel = panel
+
+        # Asset browser (category tabs + search + grid) rides next to
+        # brush_panel — opened by clicking the texture preview rectangle
+        # (see BrushToolPanel.assets_requested / MainLayout._toggle_asset_browser),
+        # same adjacent-panel pattern as RegionEditPanel beside Região's
+        # CRUD list.
+        browser = AssetBrowserPanel(self._l)
+        browser.hide()
+        browser.close_requested.connect(self._l._toggle_asset_browser)
+        self._l.asset_browser_panel = browser
 
         self._sync_timer = QTimer()
         self._sync_timer.setSingleShot(True)
