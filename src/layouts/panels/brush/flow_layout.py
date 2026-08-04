@@ -52,22 +52,47 @@ class FlowLayout(QLayout):
         return self.sizeHint()
 
     def _do_layout(self, rect, test_only=False):
-        x = rect.x()
-        y = rect.y()
+        # Two passes instead of one: items are first grouped into rows (same
+        # left-to-right wrapping as before) to find each row's tallest
+        # sizeHint(), THEN placed using that shared row height instead of
+        # each item's own — otherwise items whose sizeHint() height varies
+        # (e.g. a card whose label wraps to 1 vs 2 lines) end up with
+        # mismatched bottoms within the same row, since a single pass places
+        # each item using only its own height, before the row's true max is
+        # even known. Width stays each item's own; only height is unified,
+        # so a shorter item just gets padded out to match its tallest row
+        # neighbor instead of being stretched sideways.
+        rows: list[tuple[list, int]] = []
+        current_row: list = []
         row_h = 0
+        x = rect.x()
 
         for item in self._items:
             widget = item.widget()
             if widget and not widget.isVisible():
                 continue
             item_size = item.sizeHint()
-            if x + item_size.width() > rect.right() and row_h > 0:
-                x = rect.x()
-                y += row_h + self._spacing
+            if x + item_size.width() > rect.right() and current_row:
+                rows.append((current_row, row_h))
+                current_row = []
                 row_h = 0
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), item_size))
+                x = rect.x()
+            current_row.append((item, item_size))
             x += item_size.width() + self._spacing
             row_h = max(row_h, item_size.height())
 
-        return y + row_h - rect.y()
+        if current_row:
+            rows.append((current_row, row_h))
+
+        y = rect.y()
+        for i, (row_items, row_height) in enumerate(rows):
+            x = rect.x()
+            for item, item_size in row_items:
+                if not test_only:
+                    item.setGeometry(QRect(QPoint(x, y), QSize(item_size.width(), row_height)))
+                x += item_size.width() + self._spacing
+            y += row_height
+            if i < len(rows) - 1:
+                y += self._spacing
+
+        return (y - rect.y()) if rows else 0

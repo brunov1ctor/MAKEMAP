@@ -209,6 +209,8 @@ class AssetLibrary(QObject):
             db.execute("ALTER TABLE assets ADD COLUMN sort_order INTEGER DEFAULT 0")
         if "style" not in cols:
             db.execute("ALTER TABLE assets ADD COLUMN style TEXT DEFAULT ''")
+        if "shore_foam" not in cols:
+            db.execute("ALTER TABLE assets ADD COLUMN shore_foam INTEGER DEFAULT 1")
         db.execute("""
             CREATE TABLE IF NOT EXISTS asset_sounds (
                 id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -544,6 +546,23 @@ class AssetLibrary(QObject):
     def is_water(self, asset_id: str) -> bool:
         row = self._db.execute("SELECT category FROM assets WHERE id = ?", (asset_id,)).fetchone()
         return bool(row) and row["category"] == "water"
+
+    def get_style(self, asset_id: str) -> str:
+        row = self._db.execute("SELECT style FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        return row["style"] if row and row["style"] else DEFAULT_STYLE
+
+    def has_shore_foam(self, asset_id: str) -> bool:
+        """Se este asset de água deve receber o brilho de espuma/maresia
+        onde encosta em terra (ver brush_tool.py._apply_shoreline_blend).
+        Sem sentido pra assets que não são água — sempre True nesse caso,
+        já que quem decide aplicar ou não o efeito é is_water() em primeiro
+        lugar; isto só reduz o universo (mar sim, rio talvez não)."""
+        row = self._db.execute("SELECT shore_foam FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        return bool(row["shore_foam"]) if row and row["shore_foam"] is not None else True
+
+    def set_shore_foam(self, asset_id: str, enabled: bool):
+        self._db.execute("UPDATE assets SET shore_foam = ? WHERE id = ?", (1 if enabled else 0, asset_id))
+        self._db.commit()
 
     # ─── Sounds ──────────────────────────────────────────────────────────
 

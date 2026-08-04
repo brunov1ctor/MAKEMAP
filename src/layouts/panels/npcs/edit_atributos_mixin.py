@@ -8,9 +8,9 @@ instantiated on its own.
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QCheckBox, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget
 
-from src.layouts.panels.mobs.edit_helpers import _combo, _spin, _dspin, _section_label, _field_row, _hr
+from src.layouts.panels.mobs.edit_helpers import _combo, _spin, _dspin, _checkbox, _section_label, _field_row, _hr
 
 INITIAL_STATE_OPTIONS = ["Neutro", "Hostil", "Amigável"]
 PLAYER_REACTION_OPTIONS = ["Neutro", "Hostil", "Amigável"]
@@ -37,10 +37,10 @@ class AtributosSectionMixin:
 
         outer.addWidget(_section_label("COMBATE"))
         outer.addWidget(_hr())
-        self._can_be_attacked_check = QCheckBox("Pode ser atacado")
-        self._flees_when_attacked_check = QCheckBox("Foge ao ser atacado")
-        self._can_die_check = QCheckBox("Morre")
-        self._can_respawn_check = QCheckBox("Renasce")
+        self._can_be_attacked_check = _checkbox("Pode ser atacado")
+        self._flees_when_attacked_check = _checkbox("Foge ao ser atacado")
+        self._can_die_check = _checkbox("Morre")
+        self._can_respawn_check = _checkbox("Renasce")
         checks_row1 = QHBoxLayout()
         checks_row1.setSpacing(14)
         checks_row1.addWidget(self._can_be_attacked_check)

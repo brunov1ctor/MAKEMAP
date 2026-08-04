@@ -50,6 +50,17 @@ class MaterialThumbnail(QToolButton):
         self.setCheckable(True)
         self.setToolTip(name)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # QToolButton defaults to QSizePolicy.Fixed on both axes — Qt's
+        # layout system then caps this widget's size to its own sizeHint()
+        # no matter what FlowLayout.setGeometry() actually requests, since
+        # "Fixed" means (per Qt docs) "the sizeHint() is the only
+        # acceptable size". That silently defeated FlowLayout's per-row
+        # height normalization (see flow_layout.py) — every card kept
+        # snapping back to its own height instead of matching its row's
+        # tallest neighbor. Width stays Fixed (52px, cards shouldn't
+        # stretch sideways); only the vertical policy is relaxed so a
+        # taller row height can actually take effect.
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
         # A real internal layout instead of QToolButton's own icon+text
         # painting (setIcon()/setText()) — that auto-centers the icon+text
@@ -247,6 +258,7 @@ class AssetBrowserPanel(QFrame):
             close_btn.setText("✕")
             close_btn.setFixedSize(20, 20)
             close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            close_btn.setToolTip("Fechar")
             close_btn.setStyleSheet(f"""
                 QToolButton {{
                     border: none; border-radius: 4px; font-size: 11px;
@@ -269,35 +281,9 @@ class AssetBrowserPanel(QFrame):
         self._style_tab_flow = FlowLayout(self._style_tab_container, spacing=2)
         self._style_tab_flow.setContentsMargins(10, 4, 10, 0)
 
-        # Reflects whatever styles actually exist on disk at construction
-        # time — a style deleted via the Config panel in an earlier session
-        # (or before this panel was built) won't show up here as a dead tab.
-        self._style_keys = list_styles()
+        self._style_keys: list[str] = []
         self._style_buttons: list[QToolButton] = []
-
-        for i, key in enumerate(self._style_keys):
-            btn = QToolButton()
-            btn.setText(key.capitalize())
-            btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(f"""
-                QToolButton {{
-                    background: transparent; color: {_TEXT_SEC};
-                    padding: 3px 6px; font-size: 9px; border: none;
-                    border-bottom: 2px solid transparent;
-                }}
-                QToolButton:checked {{
-                    color: {_ACCENT}; border-bottom-color: {_ACCENT};
-                }}
-                QToolButton:hover {{ color: {_TEXT}; }}
-            """)
-            btn.clicked.connect(lambda checked, idx=i: self._on_style_tab_clicked(idx))
-            self._style_tab_flow.addWidget(btn)
-            self._style_buttons.append(btn)
-
-        default_idx = self._style_keys.index(DEFAULT_STYLE) if DEFAULT_STYLE in self._style_keys else 0
-        if self._style_buttons:
-            self._style_buttons[default_idx].setChecked(True)
+        self._build_style_buttons(select=DEFAULT_STYLE)
         root.addWidget(self._style_tab_container)
         root.addWidget(_separator())
 
@@ -462,6 +448,55 @@ class AssetBrowserPanel(QFrame):
         idx = next((i for i, b in enumerate(self._style_buttons) if b.isChecked()), 0)
         return self._style_keys[idx] if idx < len(self._style_keys) else DEFAULT_STYLE
 
+    def refresh_styles(self):
+        """Re-reads list_styles() and rebuilds the style tab row. Styles
+        can be created/renamed/deleted from the Config/Assets panel at any
+        time (see AssetSoundManager._do_delete_style) — this panel's own
+        style tabs used to only ever reflect whatever existed at
+        construction time, so a deleted style kept showing here as a dead,
+        still-clickable tab until the whole app was restarted. Called on
+        every showEvent instead of wiring a cross-panel signal."""
+        current = self.current_style()
+        self._build_style_buttons(select=current)
+
+    def _build_style_buttons(self, select: str):
+        while self._style_tab_flow.count():
+            item = self._style_tab_flow.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._style_keys = list_styles()
+        self._style_buttons = []
+        for i, key in enumerate(self._style_keys):
+            btn = QToolButton()
+            btn.setText(key.capitalize())
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QToolButton {{
+                    background: transparent; color: {_TEXT_SEC};
+                    padding: 3px 6px; font-size: 9px; border: none;
+                    border-bottom: 2px solid transparent;
+                }}
+                QToolButton:checked {{
+                    color: {_ACCENT}; border-bottom-color: {_ACCENT};
+                }}
+                QToolButton:hover {{ color: {_TEXT}; }}
+            """)
+            btn.clicked.connect(lambda checked, idx=i: self._on_style_tab_clicked(idx))
+            self._style_tab_flow.addWidget(btn)
+            self._style_buttons.append(btn)
+
+        if select in self._style_keys:
+            select_idx = self._style_keys.index(select)
+        elif DEFAULT_STYLE in self._style_keys:
+            select_idx = self._style_keys.index(DEFAULT_STYLE)
+        else:
+            select_idx = 0
+        if self._style_buttons:
+            self._style_buttons[select_idx].setChecked(True)
+        self._style_tab_flow.invalidate()
+
     def _on_style_tab_clicked(self, index: int):
         for i, btn in enumerate(self._style_buttons):
             btn.setChecked(i == index)
@@ -493,6 +528,11 @@ class AssetBrowserPanel(QFrame):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # Styles can be created/renamed/deleted from the Config/Assets
+        # panel any time this panel isn't the one currently visible — pick
+        # up any change every time the Brush tool becomes active again,
+        # instead of only ever reflecting construction-time state.
+        self.refresh_styles()
         # Tab buttons (and, when embedded inside BrushToolPanel's tab stack,
         # the asset grid itself) are built/populated while this page is still
         # hidden, so FlowLayout's first real pass sees them all as invisible

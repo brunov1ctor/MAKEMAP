@@ -51,6 +51,7 @@ class MenuPanel(QWidget):
 
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; "
             f"border: none; font-size: 14px; border-radius: 14px; }}"

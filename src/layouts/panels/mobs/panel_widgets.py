@@ -137,6 +137,7 @@ class _SidebarRow(QFrame):
             menu_btn.setText("⋮")
             menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            menu_btn.setToolTip("Mais opções")
             menu_btn.setStyleSheet(f"""
                 QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 12px; padding: 0 4px; }}
                 QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}

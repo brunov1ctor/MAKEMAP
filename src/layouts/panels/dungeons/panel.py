@@ -17,24 +17,30 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
-    QSizePolicy, QSplitter, QToolButton, QMenu, QFileDialog, QMessageBox,
+    QSizePolicy, QSplitter, QToolButton, QMenu,
+    QStackedWidget,
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 
 from src.styles.tokens import Colors
+from src.components.live_splitter import LiveSplitter
 from src.services.project_assets import import_asset, resolve_asset_path
-from src.layouts.panels.dungeons.constants import DIFFICULTIES, panel_frame_style, parse_json_records
+from src.layouts.panels.dungeons.constants import DIFFICULTIES, panel_frame_style
 from src.layouts.panels.dungeons.record_list import RecordListColumn
 from src.layouts.panels.dungeons.building_editor import BuildingEditor
 from src.layouts.panels.dungeons.dungeon_editor import DungeonEditor
 from src.layouts.panels.dungeons.progression_tree import ProgressionTree
 from src.layouts.panels.dungeons.category_tabs import CategoryTabBar
-from src.layouts.panels.dungeons.json_bulk_editor import JsonBulkEditor
+from src.layouts.panels.dungeons.import_export_constants import (
+    _DUNGEON_TEMPLATE_FIELDS, _DUNGEON_JSON_FIELDS, _DUNGEON_BOOL_FIELDS,
+    _BUILDING_TEMPLATE_FIELDS, _BUILDING_JSON_FIELDS, _BUILDING_BOOL_FIELDS,
+)
+from src.layouts.panels.dungeons.panel_import_export_mixin import DungeonsImportExportMixin
+from src.layouts.panels.items.import_export_constants import coerce_import_stats
 
 logger = logging.getLogger("MAKEMAP")
 
@@ -50,7 +56,7 @@ _DUNGEON_ICONS = {
 }
 
 
-class DungeonsPanel(QWidget):
+class DungeonsPanel(DungeonsImportExportMixin, QWidget):
     """Módulo em tela cheia de Dungeons e Construções."""
 
     closed = Signal()
@@ -68,11 +74,15 @@ class DungeonsPanel(QWidget):
         self._dungeons: list[dict] = []
         self._current_building_id = ""
         self._current_dungeon_id = ""
-        # Qual metade recebeu a última interação — decide sobre quem agem os
-        # botões genéricos do cabeçalho (Duplicar, Exportar, Nova Entrada).
-        self._focus = "building"
         self._user_dragged: set[int] = set()
         self._auto_positions: dict[int, dict[int, int]] = {}
+
+        # DungeonsImportExportMixin state
+        self._tools_mode: str | None = None
+        self._import_entity_mode: str = "dungeon"
+        self._staged_image_folder: str = ""
+        self._staged_image_files: dict[str, str] = {}
+        self._template_fmt: str = "json"
 
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -106,18 +116,25 @@ class DungeonsPanel(QWidget):
         sep.setStyleSheet(f"background: {Colors.GLASS_BORDER}; border: none;")
         outer.addWidget(sep)
 
-        self._halves = QSplitter(Qt.Orientation.Horizontal)
+        self._halves = LiveSplitter(Qt.Orientation.Horizontal)
         # Collapsible=True aqui (diferente dos splitters internos de cada
         # metade) — arrastar o divisor até a esquerda ou a direita esconde
         # Gerenciamento da Base ou de Dungeons por completo, em vez de
         # parar na largura mínima de cada metade.
         self._halves.setChildrenCollapsible(True)
         self._halves.setHandleWidth(8)
-        self._halves.setStyleSheet("QSplitter::handle { background: transparent; }")
         self._halves.addWidget(self._build_base_half())
         self._halves.addWidget(self._build_dungeon_half())
         self._halves.splitterMoved.connect(lambda p, i: self._on_splitter_moved(self._halves, p, i))
-        outer.addWidget(self._halves, 1)
+
+        # ── Body stack: normal Base/Dungeons view vs. the Importar/
+        # Exportar tools panel (see DungeonsImportExportMixin) — same
+        # pattern as ItemsSkillsPanel, whose module also has no spare
+        # column to take over. ──
+        self._body_stack = QStackedWidget()
+        self._body_stack.addWidget(self._halves)
+        self._body_stack.addWidget(self._build_tools_panel())
+        outer.addWidget(self._body_stack, 1)
 
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
@@ -136,23 +153,32 @@ class DungeonsPanel(QWidget):
         header.addLayout(title_col)
         header.addStretch()
 
-        for label, slot in (
-            ("⬇  Importar", self._on_import),
-            ("⬆  Exportar", self._on_export),
-            ("⧉  Duplicar", self._on_duplicate),
-        ):
-            header.addWidget(self._ghost_button(label, slot))
-
-        new_btn = QPushButton("+  Nova Entrada")
-        new_btn.setFixedHeight(28)
-        new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        new_btn.setStyleSheet(f"""
-            QPushButton {{ background: {Colors.ACCENT}; color: #08131F; border: none;
-                border-radius: 6px; padding: 0 14px; font-size: 10px; font-weight: bold; }}
-            QPushButton:hover {{ background: {Colors.ACCENT_HOVER}; }}
+        import_btn = QPushButton("📥 Importar")
+        import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        import_btn.setStyleSheet(f"""
+            QPushButton {{ background: rgba(255,255,255,0.06); color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; padding: 5px 12px; font-size: 10px; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.12); border-color: {Colors.ACCENT}; }}
         """)
-        new_btn.clicked.connect(self._on_new_entry)
-        header.addWidget(new_btn)
+        import_btn.clicked.connect(self._toggle_import_mode)
+        header.addWidget(import_btn)
+
+        export_btn = QToolButton()
+        export_btn.setText("📤 Exportar")
+        export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        export_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        export_btn.setStyleSheet(f"""
+            QToolButton {{ background: rgba(255,255,255,0.06); color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; padding: 5px 12px; font-size: 10px; }}
+            QToolButton::menu-indicator {{ image: none; }}
+            QToolButton:hover {{ background: rgba(255,255,255,0.12); border-color: {Colors.ACCENT}; }}
+        """)
+        export_menu = QMenu(export_btn)
+        export_menu.addAction("Exportar como JSON", lambda: self._on_export_choice("json"))
+        export_menu.addAction("Exportar como CSV", lambda: self._on_export_choice("csv"))
+        export_menu.addAction("Exportar como Excel", lambda: self._on_export_choice("xlsx"))
+        export_btn.setMenu(export_menu)
+        header.addWidget(export_btn)
 
         gear = QToolButton()
         gear.setText("⚙")
@@ -182,6 +208,7 @@ class DungeonsPanel(QWidget):
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none;
                 font-size: 14px; border-radius: 14px; }}
@@ -190,19 +217,6 @@ class DungeonsPanel(QWidget):
         close_btn.clicked.connect(self.closed.emit)
         header.addWidget(close_btn)
         return header
-
-    def _ghost_button(self, label: str, slot) -> QPushButton:
-        btn = QPushButton(label)
-        btn.setFixedHeight(28)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(f"""
-            QPushButton {{ background: rgba(255,255,255,0.05); color: {Colors.TEXT_SECONDARY};
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; padding: 0 12px;
-                font-size: 10px; font-weight: bold; }}
-            QPushButton:hover {{ color: {Colors.TEXT_PRIMARY}; border-color: {Colors.ACCENT}; }}
-        """)
-        btn.clicked.connect(slot)
-        return btn
 
     def _half_frame(self, icon: str, title: str, subtitle: str) -> tuple[QFrame, QVBoxLayout, QHBoxLayout]:
         frame = QFrame()
@@ -240,30 +254,26 @@ class DungeonsPanel(QWidget):
             "🏛", "GERENCIAMENTO DA BASE",
             "Crie, edite e personalize construções, defesas e a árvore de progressão.")
 
-        self._building_json = JsonBulkEditor()
-        self._building_json.apply_requested.connect(self._on_buildings_json)
-        self._building_json.set_template(
-            '[\n'
-            '  { "name": "Ferraria", "category": "Produção", "subcategory": "Manufatura",\n'
-            '    "tier": 2, "level": 1, "max_level": 5 }\n'
-            ']'
-        )
-        head.addWidget(self._building_json.button)
-        column.addWidget(self._building_json.panel)
+        new_building_btn = QPushButton("+  Nova Construção")
+        new_building_btn.setFixedHeight(24)
+        new_building_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        new_building_btn.setStyleSheet(f"""
+            QPushButton {{ background: {Colors.ACCENT}; color: #08131F; border: none;
+                border-radius: 6px; padding: 0 10px; font-size: 10px; font-weight: bold; }}
+            QPushButton:hover {{ background: {Colors.ACCENT_HOVER}; }}
+        """)
+        new_building_btn.clicked.connect(self._on_new_building)
+        head.addWidget(new_building_btn)
 
         self._building_tabs = CategoryTabBar()
-        self._building_tabs.selected.connect(lambda _k: self._refresh_building_list_view())
+        self._building_tabs.selected.connect(self._on_building_tab_selected)
         self._building_tabs.create_requested.connect(self._on_building_category_create)
         self._building_tabs.rename_requested.connect(self._on_building_category_rename)
         self._building_tabs.delete_requested.connect(self._on_building_category_delete)
         column.addWidget(self._building_tabs)
 
-        self._building_list = RecordListColumn(
-            "Lista de Construções", "Buscar construção...",
-            "Nova Construção", "Criar nova construção",
-        )
+        self._building_list = RecordListColumn("Lista de Construções", "Buscar construção...")
         self._building_list.selected.connect(self._on_building_selected)
-        self._building_list.new_requested.connect(self._on_new_building)
         self._building_list.image_dropped.connect(self._on_building_image_dropped)
         self._building_list.delete_requested.connect(self._on_building_delete)
 
@@ -272,15 +282,12 @@ class DungeonsPanel(QWidget):
         self._building_editor.save_requested.connect(self._save_building)
         self._building_editor.revert_requested.connect(self._revert_building)
 
-        self._tree = ProgressionTree(
-            categories_provider=lambda: self._uow.building_categories.get_all() if self._uow else [],
-        )
+        self._tree = ProgressionTree()
         self._tree.selected.connect(self._on_building_selected)
 
-        self._base_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._base_splitter = LiveSplitter(Qt.Orientation.Horizontal)
         self._base_splitter.setChildrenCollapsible(False)
         self._base_splitter.setHandleWidth(8)
-        self._base_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
         for widget in (self._building_list, self._building_editor, self._tree):
             self._base_splitter.addWidget(widget)
         self._base_splitter.splitterMoved.connect(
@@ -293,16 +300,16 @@ class DungeonsPanel(QWidget):
             "🕳", "GERENCIAMENTO DE DUNGEONS",
             "Crie, edite e personalize dungeons, encontros, recompensas e progressões.")
 
-        self._dungeon_json = JsonBulkEditor()
-        self._dungeon_json.apply_requested.connect(self._on_dungeons_json)
-        self._dungeon_json.set_template(
-            '[\n'
-            '  { "name": "Cripta Gelada", "dungeon_type": "Exploração",\n'
-            '    "level_min": 15, "level_max": 20, "difficulty": "Difícil" }\n'
-            ']'
-        )
-        head.addWidget(self._dungeon_json.button)
-        column.addWidget(self._dungeon_json.panel)
+        new_dungeon_btn = QPushButton("+  Nova Dungeon")
+        new_dungeon_btn.setFixedHeight(24)
+        new_dungeon_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        new_dungeon_btn.setStyleSheet(f"""
+            QPushButton {{ background: {Colors.ACCENT}; color: #08131F; border: none;
+                border-radius: 6px; padding: 0 10px; font-size: 10px; font-weight: bold; }}
+            QPushButton:hover {{ background: {Colors.ACCENT_HOVER}; }}
+        """)
+        new_dungeon_btn.clicked.connect(self._on_new_dungeon)
+        head.addWidget(new_dungeon_btn)
 
         self._dungeon_tabs = CategoryTabBar()
         self._dungeon_tabs.selected.connect(lambda _k: self._refresh_dungeon_list_view())
@@ -313,11 +320,9 @@ class DungeonsPanel(QWidget):
 
         self._dungeon_list = RecordListColumn(
             "Lista de Dungeons", "Buscar dungeons...",
-            "Nova Dungeon", "Criar nova dungeon",
             filters=[("Todos os Níveis", DIFFICULTIES, "difficulty")],
         )
         self._dungeon_list.selected.connect(self._on_dungeon_selected)
-        self._dungeon_list.new_requested.connect(self._on_new_dungeon)
         self._dungeon_list.image_dropped.connect(self._on_dungeon_image_dropped)
         self._dungeon_list.delete_requested.connect(self._on_dungeon_delete)
 
@@ -326,10 +331,9 @@ class DungeonsPanel(QWidget):
         self._dungeon_editor.save_requested.connect(self._save_dungeon)
         self._dungeon_editor.revert_requested.connect(self._revert_dungeon)
 
-        self._dungeon_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._dungeon_splitter = LiveSplitter(Qt.Orientation.Horizontal)
         self._dungeon_splitter.setChildrenCollapsible(False)
         self._dungeon_splitter.setHandleWidth(8)
-        self._dungeon_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
         self._dungeon_splitter.addWidget(self._dungeon_list)
         self._dungeon_splitter.addWidget(self._dungeon_editor)
         self._dungeon_splitter.splitterMoved.connect(
@@ -404,16 +408,21 @@ class DungeonsPanel(QWidget):
     # ── Categorias de Construção ──
 
     def _refresh_building_categories(self):
-        """Repopula a fileira de abas + o combo "Todos os Ramos" da árvore
-        — chamado no início e após criar/renomear/excluir uma aba. O
-        editor de detalhes não tem mais campo de categoria (a aba já
-        decide isso), então não precisa ser avisado aqui."""
+        """Repopula a fileira de abas — chamado no início e após criar/
+        renomear/excluir uma aba. O editor de detalhes não tem mais campo
+        de categoria (a aba já decide isso), então não precisa ser avisado
+        aqui."""
         if not self._uow or not hasattr(self, "_building_tabs"):
             return
         cats = sorted(self._uow.building_categories.get_all(),
                       key=lambda c: (c.get("sort_order") or 0, c["name"]))
         self._building_tabs.set_categories(cats)
-        self._tree.refresh_branch_options()
+
+    def _on_building_tab_selected(self, category: str):
+        """A árvore segue a MESMA aba que filtra a lista, em vez de ter seu
+        próprio filtro desincronizado (ver ProgressionTree.set_active_category)."""
+        self._refresh_building_list_view()
+        self._tree.set_active_category(category)
 
     def _on_building_category_create(self, name: str):
         if not self._uow or not name:
@@ -462,7 +471,8 @@ class DungeonsPanel(QWidget):
     def _refresh_building_list_view(self):
         """Rebuilda só a coluna da lista, filtrada pela aba ativa — sem
         reconsultar o banco (usa o cache já carregado em self._buildings).
-        A árvore não é afetada: ela tem seu próprio filtro de ramo."""
+        A árvore de progressão é filtrada separadamente, mas pela mesma
+        aba — ver _on_building_tab_selected."""
         category = self._building_tabs.current() if hasattr(self, "_building_tabs") else ""
         visible = [b for b in self._buildings if not category or (b.get("category") or "") == category]
         self._building_list.set_records([self._building_row(b) for b in visible])
@@ -477,6 +487,7 @@ class DungeonsPanel(QWidget):
             "id": b["id"],
             "name": b.get("name") or "—",
             "icon": _BUILDING_ICONS.get(b.get("category"), "🏛"),
+            "image": resolve_asset_path(self._project_dir, b.get("image") or ""),
             "level": b.get("level") or 1,
             "tier": b.get("tier") or 1,
             "sort_order": b.get("sort_order") or 0,
@@ -509,7 +520,6 @@ class DungeonsPanel(QWidget):
         record = self._building_by_id(building_id)
         if not record:
             return
-        self._focus = "building"
         self._current_building_id = building_id
         self._building_list.select(building_id)
         self._tree.select(building_id)
@@ -562,63 +572,18 @@ class DungeonsPanel(QWidget):
         self._reload_buildings()
 
     def _on_building_delete(self, building_id: str):
+        """A confirmação já aconteceu no próprio botão ✕ do card (armar/
+        desarmar — ver record_list.py._RecordCard) antes de emitir
+        delete_requested, então isso só executa a exclusão. Construções que
+        dependem dela na árvore de progressão ficam sem construção-mãe, sem
+        serem apagadas."""
         if not self._uow:
-            return
-        record = self._building_by_id(building_id)
-        name = record.get("name") if record else building_id
-        reply = QMessageBox.question(
-            self, "Excluir construção",
-            f'Excluir "{name}"? Construções que dependem dela na árvore de '
-            "progressão ficam sem construção-mãe, sem serem apagadas.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
             return
         self._uow.buildings.delete(building_id)
         if self._current_building_id == building_id:
             self._current_building_id = ""
         self._reload_buildings()
         logger.info("Construção excluída: id=%s", building_id)
-
-    def _on_buildings_json(self, text: str):
-        if not self._uow:
-            return
-        try:
-            records = parse_json_records(text)
-        except ValueError as exc:
-            self._building_json.show_error(str(exc))
-            return
-        fallback_category = self._building_tabs.current() or next(
-            iter(self._uow.building_categories.get_all()), {}).get("name", "")
-        existing_categories = {c["name"] for c in self._uow.building_categories.get_all()}
-        codes = [b.get("code", "") for b in self._buildings]
-        last_id = None
-        for rec in records:
-            category = str(rec.get("category") or fallback_category)
-            # A categoria citada no JSON pode não existir ainda como aba —
-            # cria na hora, em vez de descartar ou cair num valor genérico.
-            if category and category not in existing_categories:
-                self._uow.building_categories.create(name=category, sort_order=len(existing_categories))
-                existing_categories.add(category)
-            building_id = str(uuid.uuid4())
-            code = self._next_code("BLD_", codes)
-            codes.append(code)
-            self._uow.buildings.create(
-                id=building_id, code=code,
-                name=str(rec.get("name") or "Nova Construção"),
-                category=category,
-                subcategory=str(rec.get("subcategory") or ""),
-                level=int(rec.get("level") or 1),
-                max_level=int(rec.get("max_level") or 5),
-                tier=int(rec.get("tier") or 1),
-                status=str(rec.get("status") or "disponivel"),
-            )
-            last_id = building_id
-        self._building_json.close()
-        self._refresh_building_categories()
-        self._reload_buildings(select_id=last_id)
-        logger.info("Construções criadas via JSON: %d", len(records))
 
     # ── Tipos de Dungeon ──
 
@@ -707,7 +672,6 @@ class DungeonsPanel(QWidget):
         record = self._dungeon_by_id(dungeon_id)
         if not record:
             return
-        self._focus = "dungeon"
         self._current_dungeon_id = dungeon_id
         self._dungeon_list.select(dungeon_id)
         self._load_dungeon_into_editor(record)
@@ -756,16 +720,10 @@ class DungeonsPanel(QWidget):
         self._reload_dungeons()
 
     def _on_dungeon_delete(self, dungeon_id: str):
+        """A confirmação já aconteceu no próprio botão ✕ do card (armar/
+        desarmar — ver record_list.py._RecordCard) antes de emitir
+        delete_requested, então isso só executa a exclusão."""
         if not self._uow:
-            return
-        record = self._dungeon_by_id(dungeon_id)
-        name = record.get("name") if record else dungeon_id
-        reply = QMessageBox.question(
-            self, "Excluir dungeon", f'Excluir "{name}"? Essa ação não pode ser desfeita.',
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
             return
         self._uow.dungeons.delete(dungeon_id)
         if self._current_dungeon_id == dungeon_id:
@@ -773,138 +731,97 @@ class DungeonsPanel(QWidget):
         self._reload_dungeons()
         logger.info("Dungeon excluída: id=%s", dungeon_id)
 
-    def _on_dungeons_json(self, text: str):
+    # ── Importar/Exportar (bulk create) — DungeonsImportExportMixin ──
+
+    def _import_dungeon_records(self, records: list[dict]) -> str | None:
+        """The actual dungeon-create loop, used by the Importar cards
+        (DungeonsImportExportMixin). Unlike items/skills, every field here
+        is a real DB column — see import_export_constants.py — so this
+        just coerces bool/JSON fields and passes the rest straight to
+        create()."""
         if not self._uow:
-            return
-        try:
-            records = parse_json_records(text)
-        except ValueError as exc:
-            self._dungeon_json.show_error(str(exc))
-            return
-        fallback_type = self._dungeon_tabs.current() or next(
-            iter(self._uow.dungeon_types.get_all()), {}).get("name", "")
+            return None
         existing_types = {t["name"] for t in self._uow.dungeon_types.get_all()}
         codes = [d.get("code", "") for d in self._dungeons]
+        default_type = self._dungeon_tabs.current() or next(
+            iter(self._uow.dungeon_types.get_all()), {}).get("name", "Exploração")
         last_id = None
         for rec in records:
-            dungeon_type = str(rec.get("dungeon_type") or fallback_type)
-            # O tipo citado no JSON pode não existir ainda como aba — cria
-            # na hora, em vez de descartar ou cair num valor genérico.
+            if not isinstance(rec, dict) or not rec.get("name"):
+                continue
+            dungeon_type = str(rec.get("dungeon_type") or default_type)
+            # O tipo citado no import pode não existir ainda como aba —
+            # cria na hora, em vez de descartar ou cair num valor genérico.
             if dungeon_type and dungeon_type not in existing_types:
                 self._uow.dungeon_types.create(name=dungeon_type, sort_order=len(existing_types))
                 existing_types.add(dungeon_type)
             dungeon_id = str(uuid.uuid4())
             code = self._next_code("DGN_", codes)
             codes.append(code)
+            raw = {k: v for k, v in rec.items()
+                   if k in _DUNGEON_TEMPLATE_FIELDS and k not in ("name", "dungeon_type")}
+            fields = coerce_import_stats(raw, _DUNGEON_JSON_FIELDS, _DUNGEON_BOOL_FIELDS)
+            for key in _DUNGEON_JSON_FIELDS:
+                if key in fields:
+                    fields[key] = json.dumps(fields[key], ensure_ascii=False)
+            for key in ("level_min", "level_max", "floors", "rooms", "checkpoints",
+                        "secret_rooms", "group_min", "group_max", "req_level"):
+                if key in fields and fields[key] is not None:
+                    fields[key] = int(fields[key])
             self._uow.dungeons.create(
                 id=dungeon_id, code=code,
                 name=str(rec.get("name") or "Nova Dungeon"),
                 dungeon_type=dungeon_type,
-                difficulty=str(rec.get("difficulty") or "Normal"),
-                level_min=int(rec.get("level_min") or 1),
-                level_max=int(rec.get("level_max") or 10),
-                biome=str(rec.get("biome") or ""),
-                rooms=int(rec.get("rooms") or 1),
-                active=1, visible_on_map=1,
+                **fields,
             )
             last_id = dungeon_id
-        self._dungeon_json.close()
         self._refresh_dungeon_types()
         self._reload_dungeons(select_id=last_id)
-        logger.info("Dungeons criadas via JSON: %d", len(records))
+        return last_id
 
-    # ── Ações do cabeçalho ──
-
-    def _on_new_entry(self):
-        """Cria na metade que recebeu a última interação."""
-        if self._focus == "dungeon":
-            self._on_new_dungeon()
-        else:
-            self._on_new_building()
-
-    def _on_duplicate(self):
+    def _import_building_records(self, records: list[dict]) -> str | None:
+        """The actual building-create loop, used by the Importar cards
+        (DungeonsImportExportMixin). Same reasoning as
+        _import_dungeon_records — no `stats` blob, every field is a real
+        DB column."""
         if not self._uow:
-            return
-        if self._focus == "dungeon":
-            source = self._dungeon_by_id(self._current_dungeon_id)
-            if not source:
-                return
-            clone = {k: v for k, v in source.items()
-                     if k not in ("id", "created_at", "updated_at")}
-            clone["id"] = str(uuid.uuid4())
-            clone["name"] = f"{source.get('name', 'Dungeon')} (cópia)"
-            clone["code"] = self._next_code("DGN_", [d.get("code", "") for d in self._dungeons])
-            self._uow.dungeons.create(**clone)
-            self._reload_dungeons(select_id=clone["id"])
-        else:
-            source = self._building_by_id(self._current_building_id)
-            if not source:
-                return
-            clone = {k: v for k, v in source.items()
-                     if k not in ("id", "created_at", "updated_at")}
-            clone["id"] = str(uuid.uuid4())
-            clone["name"] = f"{source.get('name', 'Construção')} (cópia)"
-            clone["code"] = self._next_code("BLD_", [b.get("code", "") for b in self._buildings])
-            self._uow.buildings.create(**clone)
-            self._reload_buildings(select_id=clone["id"])
-
-    def _on_export(self):
-        """Grava a metade em foco como JSON — as duas listas inteiras, não
-        só o registro selecionado."""
-        which = "dungeons" if self._focus == "dungeon" else "construcoes"
-        path, _ = QFileDialog.getSaveFileName(self, f"Exportar {which}", f"{which}.json", "JSON (*.json)")
-        if not path:
-            return
-        records = self._dungeons if self._focus == "dungeon" else self._buildings
-        payload = [{k: v for k, v in r.items() if k not in ("created_at", "updated_at")}
-                   for r in records]
-        try:
-            Path(path).write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-            logger.info("Exportado %s: %d registros → %s", which, len(payload), path)
-        except OSError as exc:
-            logger.warning("Falha ao exportar %s: %s", which, exc)
-
-    def _on_import(self):
-        """Lê um JSON no mesmo formato do Exportar e cria os registros. Ids
-        são regerados, então importar duas vezes duplica em vez de
-        sobrescrever o que já existe."""
-        if not self._uow:
-            return
-        which = "dungeons" if self._focus == "dungeon" else "construções"
-        path, _ = QFileDialog.getOpenFileName(self, f"Importar {which}", "", "JSON (*.json)")
-        if not path:
-            return
-        try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            logger.warning("Falha ao importar %s: %s", which, exc)
-            return
-        if not isinstance(data, list):
-            logger.warning("Importação ignorada: esperava uma lista de registros")
-            return
-
-        repo = self._uow.dungeons if self._focus == "dungeon" else self._uow.buildings
-        columns = self._table_columns(repo.TABLE)
+            return None
+        existing_categories = {c["name"] for c in self._uow.building_categories.get_all()}
+        codes = [b.get("code", "") for b in self._buildings]
+        default_category = self._building_tabs.current() or next(
+            iter(self._uow.building_categories.get_all()), {}).get("name", "Produção")
         last_id = None
-        for record in data:
-            if not isinstance(record, dict) or not record.get("name"):
+        for rec in records:
+            if not isinstance(rec, dict) or not rec.get("name"):
                 continue
-            fields = {k: v for k, v in record.items() if k in columns and k != "id"}
-            # parent_id aponta para um id do arquivo de origem, que não
-            # existe aqui — a hierarquia é refeita à mão depois.
-            fields.pop("parent_id", None)
-            fields["id"] = str(uuid.uuid4())
-            repo.create(**fields)
-            last_id = fields["id"]
-        if self._focus == "dungeon":
-            self._reload_dungeons(select_id=last_id)
-        else:
-            self._reload_buildings(select_id=last_id)
-        logger.info("Importados %d registros de %s", len(data), which)
-
-    def _table_columns(self, table: str) -> set[str]:
-        rows = self._uow.db.fetchall(f"PRAGMA table_info({table})")
-        return {row["name"] for row in rows}
+            category = str(rec.get("category") or default_category)
+            # A categoria citada no import pode não existir ainda como aba —
+            # cria na hora, em vez de descartar ou cair num valor genérico.
+            if category and category not in existing_categories:
+                self._uow.building_categories.create(name=category, sort_order=len(existing_categories))
+                existing_categories.add(category)
+            building_id = str(uuid.uuid4())
+            code = self._next_code("BLD_", codes)
+            codes.append(code)
+            raw = {k: v for k, v in rec.items()
+                   if k in _BUILDING_TEMPLATE_FIELDS and k not in ("name", "category")}
+            fields = coerce_import_stats(raw, _BUILDING_JSON_FIELDS, _BUILDING_BOOL_FIELDS)
+            for key in _BUILDING_JSON_FIELDS:
+                if key in fields:
+                    fields[key] = json.dumps(fields[key], ensure_ascii=False)
+            for key in ("level", "max_level", "tier", "sort_order"):
+                if key in fields and fields[key] is not None:
+                    fields[key] = int(fields[key])
+            self._uow.buildings.create(
+                id=building_id, code=code,
+                name=str(rec.get("name") or "Nova Construção"),
+                category=category,
+                **fields,
+            )
+            last_id = building_id
+        self._refresh_building_categories()
+        self._reload_buildings(select_id=last_id)
+        return last_id
 
     @staticmethod
     def _next_code(prefix: str, existing: list[str], start: int = 1) -> str:

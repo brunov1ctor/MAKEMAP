@@ -67,6 +67,7 @@ class _TagChip(QWidget):
         close_btn.setText("✕")
         close_btn.setFixedSize(14, 14)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Remover tag")
         close_btn.setStyleSheet(f"""
             QToolButton {{ border: none; background: transparent; color: {color}; font-size: 9px; }}
             QToolButton:hover {{ color: {Colors.ERROR}; }}

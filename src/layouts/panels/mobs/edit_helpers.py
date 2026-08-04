@@ -7,12 +7,12 @@ on MobEditPanel itself.
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
+    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox,
     QSpinBox, QDoubleSpinBox, QPushButton, QWidget, QAbstractSpinBox,
 )
 from PySide6.QtCore import Qt
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, combo_popup_qss
 from src.layouts.panels.mobs.categories import item_rarity_label, item_rarity_color
 
 _INPUT_STYLE = f"""
@@ -36,12 +36,38 @@ _INPUT_STYLE = f"""
     }}
     QComboBox:hover, QComboBox:focus {{ border-color: {Colors.ACCENT}; }}
     QComboBox::drop-down {{ width: 14px; border: none; }}
-    QComboBox QAbstractItemView {{
-        background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
-        selection-background-color: {Colors.ACCENT_DIM}; border: 1px solid {Colors.BORDER};
-    }}
+    {combo_popup_qss()}
     QLabel {{ color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none; }}
 """
+
+# Every checkbox in these 2 sections lives inside a QScrollArea
+# (NPCEditPanel/MobEditPanel's sections_scroll) nested under a
+# _CollapsibleSection — a panel-wide QCheckBox::indicator rule added to
+# _INPUT_STYLE above (set once on the panel's own `self`) never actually
+# reached them: Qt's stylesheet cascade doesn't reliably propagate
+# sub-control (::indicator) rules through a QScrollArea's viewport in every
+# Qt/PySide build, so they kept falling back to the native indicator —
+# invisible against this app's dark glass background (confirmed via
+# screenshot: still no visible box either checked or unchecked after that
+# fix). Setting the style directly on each checkbox instance (this helper)
+# sidesteps that cascade entirely — same fix grid_panel.py's own
+# _make_checkbox() already uses for exactly this reason.
+_CHECKBOX_STYLE = f"""
+    QCheckBox {{ color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none; spacing: 6px; }}
+    QCheckBox::indicator {{
+        width: 14px; height: 14px; border-radius: 3px;
+        border: 1px solid {Colors.BORDER}; background: {Colors.BG_ELEVATED};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {Colors.ACCENT}; border-color: {Colors.ACCENT};
+    }}
+"""
+
+
+def _checkbox(text: str) -> QCheckBox:
+    box = QCheckBox(text)
+    box.setStyleSheet(_CHECKBOX_STYLE)
+    return box
 
 
 def _combo(options: list[str], current: str = "") -> QComboBox:

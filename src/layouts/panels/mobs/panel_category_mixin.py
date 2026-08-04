@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from src.styles.tokens import Colors
+from src.components.live_splitter import LiveSplitter
 from src.layouts.panels.mobs.categories import set_category_lookup
 from src.layouts.panels.mobs.panel_widgets import _SidebarRow
 from src.layouts.panels.mobs.category_edit_panel import CategoryEditPanel
@@ -56,10 +57,9 @@ class CategoryExplorerMixin:
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        browse_splitter = QSplitter(Qt.Orientation.Vertical)
+        browse_splitter = LiveSplitter(Qt.Orientation.Vertical)
         browse_splitter.setChildrenCollapsible(False)
         browse_splitter.setHandleWidth(10)
-        browse_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
         browse_splitter.addWidget(self._build_sidebar())
         browse_splitter.addWidget(self._build_summary_card())
         browse_splitter.setStretchFactor(0, 2)

@@ -54,6 +54,7 @@ class ImportExportMixin:
         tools_close_btn = QToolButton()
         tools_close_btn.setText("✕")
         tools_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        tools_close_btn.setToolTip("Fechar")
         tools_close_btn.setStyleSheet(f"""
             QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 12px; padding: 2px 6px; }}
             QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}

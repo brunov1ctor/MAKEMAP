@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QSize, QPoint, QTimer
 from PySide6.QtGui import QPixmap, QImage
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, combo_popup_qss
 from src.layouts.panels.stepper import NumberStepper
 from src.engines.map.navigation import (
     get_navigation_library, ROLE_KINDS, ANIMATION_KINDS, TIMED_ANIMATIONS,
@@ -907,11 +907,7 @@ class NavigationPresetSection(QFrame):
             }}
             QComboBox:hover {{ background: rgba(79,195,247,0.3); border-color: {Colors.ACCENT}; }}
             QComboBox::drop-down {{ border: none; width: 16px; }}
-            QComboBox QAbstractItemView {{
-                background: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY}; selection-background-color: {Colors.ACCENT_DIM};
-                border: 1px solid {Colors.BORDER_SUBTLE};
-            }}
+            {combo_popup_qss(Colors.BORDER_SUBTLE)}
         """
 
     def _on_animation_changed(self, index: int, animation):

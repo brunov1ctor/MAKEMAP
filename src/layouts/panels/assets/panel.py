@@ -16,6 +16,7 @@ from src.styles.tokens import Colors
 from src.layouts.panels.assets.card import CategorySection
 from src.layouts.panels.assets.parallax_section import ParallaxPresetSection
 from src.layouts.panels.assets.navigation_section import NavigationPresetSection
+from src.layouts.panels.assets.effect_card import EffectsConfigSection
 from src.layouts.panels.brush.flow_layout import FlowLayout
 from src.engines.assets.library import DEFAULT_STYLE, list_styles
 from src.engines.map.parallax import get_parallax_library
@@ -34,6 +35,13 @@ _ASSETS_DIR = _LIB / "assets"
 _BG_DIR = _LIB / "backgrounds"
 _SUPPORTED_IMG = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".mp4", ".webm", ".mov"}
 
+# "effects" deliberately excluded from this style-scoped list — the Brush
+# tool's animated effects (Névoa, Poeira, ...) aren't real files at all,
+# they're generated straight from code (engines.map.brush_effects.
+# ANIMATED_EFFECTS, see brush_mediator.populate_assets) — there's no
+# per-style folder to browse. Their configurable image/sound/brilho live in
+# EffectsConfigSection instead (fixed one-card-per-key, see effect_card.py),
+# built once in _build(), not per style switch.
 _CATEGORIES = [
     ("terrain", "🌍", "Terrain"),
     ("water", "🌊", "Água"),
@@ -41,10 +49,6 @@ _CATEGORIES = [
     ("rocks", "🪨", "Rocks"),
     ("mountains", "⛰", "Mountains"),
     ("buildings", "🏠", "Buildings"),
-    # "effects" deliberately excluded — those are procedural, brush-painted
-    # animated effects (Névoa, Poeira, ...) generated from code (see
-    # brush_effects.ANIMATED_EFFECTS), not real files in
-    # library/assets/<style>/effects/, so there's nothing here to manage.
     ("misc", "📦", "Misc"),
 ]
 
@@ -78,12 +82,16 @@ class AssetSoundManager(QWidget):
         main.setSpacing(0)
 
         main.addWidget(self._build_title_bar())
-        main.addWidget(self._build_group_tabs())
 
-        # Three mutually-exclusive content groups (only one visible at a
-        # time) instead of one long stack of 17 sections — that flat list
-        # repeated category names 2-3x (e.g. "Terrain" in Assets AND in
-        # both background groups) and forced endless scrolling.
+        # Assets (style tabs + style-scoped categories) stays permanently
+        # visible at the top, no tab of its own — it's the primary content
+        # of this panel. Everything else below (Effects, Backgrounds
+        # Estáticos, Parallax, Navegação) used to be reached through a
+        # horizontal tab row that swapped the WHOLE panel content away from
+        # Assets; that's replaced with a vertical stack of collapsible
+        # boxes instead (see _build_collapsible_group), so switching
+        # between them no longer hides the asset categories you're
+        # actively working in.
         self._assets_group = QWidget()
         self._assets_group.setStyleSheet("background: transparent;")
         self._assets_group_layout = QVBoxLayout(self._assets_group)
@@ -96,21 +104,148 @@ class AssetSoundManager(QWidget):
         # picking a style stays visually anchored to what it controls).
         self._assets_group_layout.addWidget(self._build_style_tabs())
 
+        # Categories live in their own sub-container so _rebuild_category_
+        # sections() (called on every style switch) never touches anything
+        # else in _assets_group_layout — in particular the inline new-
+        # category/new-style/notice rows, which insertWidget(1, ...) into
+        # _assets_group_layout directly and expect that index to keep
+        # meaning "right after the style tabs".
+        self._categories_container = QWidget()
+        self._categories_container.setStyleSheet("background: transparent;")
+        self._categories_layout = QVBoxLayout(self._categories_container)
+        self._categories_layout.setContentsMargins(0, 0, 0, 0)
+        self._categories_layout.setSpacing(0)
+        self._assets_group_layout.addWidget(self._categories_container)
+
         # Categories — scoped to the selected style, rebuilt in place
         # whenever it changes.
         self._rebuild_category_sections()
 
-        self._bg_images_group = self._build_bg_group("images", "")
-        main.addWidget(self._bg_images_group)
+        # ─── Everything below is a genuinely separate concept from the
+        # style-scoped asset categories above AND from each other — Effects
+        # configures the Brush tool's code-generated animated effects
+        # (fixed keys, no files), Backgrounds Estáticos is full-map
+        # background images, Parallax is scrolling layer presets, Navegação
+        # is compass presets. Each gets its OWN divider (not one shared
+        # umbrella label) so nothing implies they're variations of the same
+        # thing. ───
 
-        self._parallax_group = self._build_parallax_group()
-        main.addWidget(self._parallax_group)
+        main.addWidget(self._build_section_divider("EFEITOS DO PINCEL (NÉVOA, POEIRA, ...)"))
+        main.addWidget(self._build_collapsible_group(
+            "✨", "Effects", EffectsConfigSection()))
 
-        self._navigation_group = self._build_navigation_group()
-        main.addWidget(self._navigation_group)
+        main.addWidget(self._build_section_divider("PLANO DE FUNDO ESTÁTICO DO MAPA"))
+        main.addWidget(self._build_collapsible_group(
+            "🖼", "Backgrounds Estáticos", self._build_bg_group("images", "")))
+
+        main.addWidget(self._build_section_divider("CAMADAS DE PARALLAX"))
+        main.addWidget(self._build_collapsible_group(
+            "🌄", "Parallax", self._build_parallax_group(), on_add=self._add_parallax_preset))
+
+        main.addWidget(self._build_section_divider("PRESETS DA BÚSSOLA"))
+        main.addWidget(self._build_collapsible_group(
+            "🧭", "Navegação", self._build_navigation_group(), on_add=self._add_navigation_preset))
 
         main.addStretch()
-        self._show_group("assets")
+
+    def _build_section_divider(self, label: str) -> QWidget:
+        """A labeled separator marking a hard boundary between the
+        style-scoped asset categories above and the map-wide tools below
+        (Effects/Backgrounds/Parallax/Navegação) — visually distinct from
+        CategorySection's own header (no ▶ arrow, muted small-caps label,
+        extra top margin) so it reads as a section break, not another
+        collapsible row in the same list."""
+        wrap = QWidget()
+        wrap.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(wrap)
+        lay.setContentsMargins(10, 14, 10, 4)
+        lay.setSpacing(4)
+        lbl = QLabel(label)
+        lbl.setStyleSheet(
+            f"color: {Colors.TEXT_MUTED}; font-size: 8pt; font-weight: bold; "
+            f"letter-spacing: 1px; background: transparent; border: none;"
+        )
+        lay.addWidget(lbl)
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet(f"background: {Colors.BORDER_SUBTLE}; border: none;")
+        lay.addWidget(line)
+        return wrap
+
+    def _build_collapsible_group(self, icon: str, label: str, content: QWidget, on_add=None) -> QFrame:
+        """A single collapsed-by-default box — click the header to expand/
+        collapse its content in place. Same visual language as
+        CategorySection's own header (▶/▼ arrow, icon, bold label) so
+        Effects/Backgrounds/Parallax/Navegação read as siblings of the
+        asset categories above them, just one level up. `on_add`, when
+        given, adds a "+ Novo Preset" button to the header itself (Parallax/
+        Navegação) instead of duplicating a second header inside `content`."""
+        box = QFrame()
+        box.setStyleSheet("QFrame { background: transparent; border: none; }")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        header = QFrame()
+        header.setFixedHeight(32)
+        header.setCursor(Qt.CursorShape.PointingHandCursor)
+        header.setStyleSheet(
+            f"QFrame {{ background: rgba(255,255,255,0.02); border: none; "
+            f"border-bottom: 1px solid {Colors.BORDER_SUBTLE}; }}"
+        )
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(10, 0, 10, 0)
+        h_lay.setSpacing(4)
+
+        arrow = QLabel("▶")
+        arrow.setFixedWidth(12)
+        arrow.setStyleSheet(f"color: {Colors.ACCENT}; font-size: 8px; background: transparent; border: none;")
+        h_lay.addWidget(arrow)
+
+        ic = QLabel(icon)
+        ic.setStyleSheet("font-size: 12px; background: transparent; border: none;")
+        h_lay.addWidget(ic)
+
+        lbl = QLabel(label)
+        lbl.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; font-size: 9pt; font-weight: bold; "
+            f"background: transparent; border: none; padding: 0;"
+        )
+        h_lay.addWidget(lbl)
+        h_lay.addStretch()
+
+        if on_add is not None:
+            add_btn = QToolButton()
+            add_btn.setText("+ Novo Preset")
+            add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            add_btn.setStyleSheet(
+                f"QToolButton {{ background: {Colors.ACCENT_DIM}; border: none; padding: 3px 8px; "
+                f"color: {Colors.ACCENT}; font-size: 9pt; font-weight: bold; border-radius: 4px; }}"
+                f"QToolButton:hover {{ background: rgba(79,195,247,0.3); }}"
+            )
+            # Expand automatically on "+ Novo Preset" — adding a preset
+            # while collapsed would otherwise insert its inline name row
+            # into content the user can't currently see.
+            def _add_and_expand(_checked=False):
+                if not content.isVisible():
+                    _toggle()
+                on_add()
+            add_btn.clicked.connect(_add_and_expand)
+            h_lay.addWidget(add_btn)
+
+        lay.addWidget(header)
+
+        content.setVisible(False)
+        lay.addWidget(content)
+
+        def _toggle():
+            expanded = content.isVisible()
+            content.setVisible(not expanded)
+            arrow.setText("▼" if not expanded else "▶")
+
+        header.mousePressEvent = lambda _e: _toggle()
+
+        return box
 
     def _build_bg_group(self, subfolder: str, label_suffix: str) -> QWidget:
         group = QWidget()
@@ -132,37 +267,12 @@ class AssetSoundManager(QWidget):
         # See ParallaxPresetSection's own setAlignment for why: without this,
         # a collapsed/removed preset can leave this group holding more
         # height than it currently needs, and QVBoxLayout centers the
-        # header+list block inside that leftover space instead of pinning
-        # it to the top — showing up as a gap below "Presets de Parallax".
+        # list block inside that leftover space instead of pinning it to
+        # the top. No header of its own — the "🌄 Parallax" icon/label and
+        # "+ Novo Preset" button now live on the outer collapsible box's
+        # header instead (see _build_collapsible_group), so this is just
+        # the preset list.
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        header = QFrame()
-        header.setFixedHeight(36)
-        header.setStyleSheet(
-            f"QFrame {{ background: rgba(255,255,255,0.03); border: none; "
-            f"border-bottom: 1px solid {Colors.BORDER_SUBTLE}; }}"
-        )
-        h_lay = QHBoxLayout(header)
-        h_lay.setContentsMargins(12, 0, 12, 0)
-        h_lay.setSpacing(8)
-        h_lbl = QLabel("🌄 Presets de Parallax")
-        h_lbl.setStyleSheet(
-            f"color: {Colors.ACCENT}; font-size: 11pt; font-weight: bold; "
-            f"background: transparent; border: none;"
-        )
-        h_lay.addWidget(h_lbl)
-        h_lay.addStretch()
-        add_preset_btn = QToolButton()
-        add_preset_btn.setText("+ Novo Preset")
-        add_preset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        add_preset_btn.setStyleSheet(
-            f"QToolButton {{ background: {Colors.ACCENT_DIM}; border: none; padding: 3px 8px; "
-            f"color: {Colors.ACCENT}; font-size: 9pt; font-weight: bold; border-radius: 4px; }}"
-            f"QToolButton:hover {{ background: rgba(79,195,247,0.3); }}"
-        )
-        add_preset_btn.clicked.connect(self._add_parallax_preset)
-        h_lay.addWidget(add_preset_btn)
-        layout.addWidget(header)
 
         self._parallax_list_layout = QVBoxLayout()
         self._parallax_list_layout.setContentsMargins(8, 6, 8, 6)
@@ -229,6 +339,7 @@ class AssetSoundManager(QWidget):
         confirm_btn.setText("✓")
         confirm_btn.setFixedSize(22, 22)
         confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        confirm_btn.setToolTip("Confirmar")
         confirm_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
@@ -240,6 +351,7 @@ class AssetSoundManager(QWidget):
         cancel_btn.setText("✕")
         cancel_btn.setFixedSize(22, 22)
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setToolTip("Cancelar")
         cancel_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_MUTED}; background: transparent; }}
@@ -282,40 +394,11 @@ class AssetSoundManager(QWidget):
         layout = QVBoxLayout(group)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        # See ParallaxPresetSection's own setAlignment for why: without this,
-        # a collapsed/removed preset can leave this group holding more
-        # height than it currently needs, and QVBoxLayout centers the
-        # header+list block inside that leftover space instead of pinning
-        # it to the top — showing up as a gap below "Presets de Navegação".
+        # No header of its own — the "🧭 Navegação" icon/label and
+        # "+ Novo Preset" button now live on the outer collapsible box's
+        # header instead (see _build_collapsible_group). See
+        # _build_parallax_group's own comment for why AlignTop matters here.
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        header = QFrame()
-        header.setFixedHeight(36)
-        header.setStyleSheet(
-            f"QFrame {{ background: rgba(255,255,255,0.03); border: none; "
-            f"border-bottom: 1px solid {Colors.BORDER_SUBTLE}; }}"
-        )
-        h_lay = QHBoxLayout(header)
-        h_lay.setContentsMargins(12, 0, 12, 0)
-        h_lay.setSpacing(8)
-        h_lbl = QLabel("🧭 Presets de Navegação")
-        h_lbl.setStyleSheet(
-            f"color: {Colors.ACCENT}; font-size: 11pt; font-weight: bold; "
-            f"background: transparent; border: none;"
-        )
-        h_lay.addWidget(h_lbl)
-        h_lay.addStretch()
-        add_preset_btn = QToolButton()
-        add_preset_btn.setText("+ Novo Preset")
-        add_preset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        add_preset_btn.setStyleSheet(
-            f"QToolButton {{ background: {Colors.ACCENT_DIM}; border: none; padding: 3px 8px; "
-            f"color: {Colors.ACCENT}; font-size: 9pt; font-weight: bold; border-radius: 4px; }}"
-            f"QToolButton:hover {{ background: rgba(79,195,247,0.3); }}"
-        )
-        add_preset_btn.clicked.connect(self._add_navigation_preset)
-        h_lay.addWidget(add_preset_btn)
-        layout.addWidget(header)
 
         self._navigation_list_layout = QVBoxLayout()
         self._navigation_list_layout.setContentsMargins(8, 6, 8, 6)
@@ -379,6 +462,7 @@ class AssetSoundManager(QWidget):
         confirm_btn.setText("✓")
         confirm_btn.setFixedSize(22, 22)
         confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        confirm_btn.setToolTip("Confirmar")
         confirm_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
@@ -390,6 +474,7 @@ class AssetSoundManager(QWidget):
         cancel_btn.setText("✕")
         cancel_btn.setFixedSize(22, 22)
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setToolTip("Cancelar")
         cancel_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_MUTED}; background: transparent; }}
@@ -425,45 +510,6 @@ class AssetSoundManager(QWidget):
         if section:
             self._navigation_list_layout.removeWidget(section)
             section.deleteLater()
-
-    def _build_group_tabs(self) -> QFrame:
-        container = QFrame()
-        container.setStyleSheet(
-            f"QFrame {{ background: rgba(255,255,255,0.03); border: none; "
-            f"border-bottom: 1px solid {Colors.BORDER_SUBTLE}; }}"
-        )
-        policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        policy.setHeightForWidth(True)
-        container.setSizePolicy(policy)
-        container.setMinimumHeight(28)
-        self._group_tab_flow = FlowLayout(container, spacing=2)
-        self._group_tab_flow.setContentsMargins(10, 4, 10, 4)
-
-        self._group_keys = ["assets", "bg_images", "parallax", "navigation"]
-        self._group_labels = ["🎨 Assets", "🖼 Backgrounds Estáticos", "🌄 Parallax", "🧭 Navegação"]
-        self._group_buttons: list[QToolButton] = []
-        for i, label in enumerate(self._group_labels):
-            btn = QToolButton()
-            btn.setText(label)
-            btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(f"""
-                QToolButton {{
-                    background: transparent; color: {Colors.TEXT_SECONDARY};
-                    padding: 4px 8px; font-size: 9pt; border: none;
-                    border-bottom: 2px solid transparent;
-                }}
-                QToolButton:checked {{
-                    color: {Colors.ACCENT}; border-bottom-color: {Colors.ACCENT};
-                }}
-                QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
-            """)
-            btn.clicked.connect(lambda checked, idx=i: self._on_group_tab_clicked(idx))
-            self._group_tab_flow.addWidget(btn)
-            self._group_buttons.append(btn)
-        self._group_buttons[0].setChecked(True)
-
-        return container
 
     def _build_style_tabs(self) -> QFrame:
         container = QFrame()
@@ -581,23 +627,11 @@ class AssetSoundManager(QWidget):
         if index < len(self._style_keys):
             self._select_style(self._style_keys[index])
 
-    def _on_group_tab_clicked(self, index: int):
-        for i, btn in enumerate(self._group_buttons):
-            btn.setChecked(i == index)
-        self._show_group(self._group_keys[index])
-
-    def _show_group(self, key: str):
-        self._assets_group.setVisible(key == "assets")
-        self._bg_images_group.setVisible(key == "bg_images")
-        self._parallax_group.setVisible(key == "parallax")
-        self._navigation_group.setVisible(key == "navigation")
-
     def showEvent(self, event):
         super().showEvent(event)
         # Tab buttons are built while the panel is still hidden, so
         # FlowLayout's first real pass never positions them — same gotcha
         # as AssetBrowserPanel's style/category tabs.
-        self._group_tab_flow.invalidate()
         self._style_tab_flow.invalidate()
 
     def _build_title_bar(self) -> QFrame:
@@ -649,7 +683,7 @@ class AssetSoundManager(QWidget):
 
     def _rebuild_category_sections(self):
         for section in self._category_sections:
-            self._assets_group_layout.removeWidget(section)
+            self._categories_layout.removeWidget(section)
             section.deleteLater()
         self._category_sections.clear()
 
@@ -657,7 +691,7 @@ class AssetSoundManager(QWidget):
         for folder_name, icon, label in _CATEGORIES:
             section = CategorySection(_ASSETS_DIR / style / folder_name, icon, label)
             section.delete_requested.connect(self._remove_section)
-            self._assets_group_layout.addWidget(section)
+            self._categories_layout.addWidget(section)
             self._category_sections.append(section)
 
         self._update_total()
@@ -705,6 +739,7 @@ class AssetSoundManager(QWidget):
         confirm_btn.setText("✓")
         confirm_btn.setFixedSize(22, 22)
         confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        confirm_btn.setToolTip("Confirmar")
         confirm_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
@@ -716,6 +751,7 @@ class AssetSoundManager(QWidget):
         cancel_btn.setText("✕")
         cancel_btn.setFixedSize(22, 22)
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setToolTip("Cancelar")
         cancel_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_MUTED}; background: transparent; }}
@@ -752,7 +788,7 @@ class AssetSoundManager(QWidget):
         folder.mkdir(parents=True, exist_ok=True)
         section = CategorySection(folder, "📁", name)
         section.delete_requested.connect(self._remove_section)
-        self._assets_group_layout.addWidget(section)
+        self._categories_layout.addWidget(section)
         self._category_sections.append(section)
         self._update_total()
 
@@ -832,6 +868,7 @@ class AssetSoundManager(QWidget):
         confirm_btn.setText("✓")
         confirm_btn.setFixedSize(22, 22)
         confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        confirm_btn.setToolTip("Confirmar")
         confirm_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
@@ -843,6 +880,7 @@ class AssetSoundManager(QWidget):
         cancel_btn.setText("✕")
         cancel_btn.setFixedSize(22, 22)
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setToolTip("Cancelar")
         cancel_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_MUTED}; background: transparent; }}
@@ -937,7 +975,7 @@ class AssetSoundManager(QWidget):
         self._notice_row = row
 
     def _remove_section(self, section: CategorySection):
-        self._assets_group_layout.removeWidget(section)
+        self._categories_layout.removeWidget(section)
         section.deleteLater()
         if section in self._category_sections:
             self._category_sections.remove(section)

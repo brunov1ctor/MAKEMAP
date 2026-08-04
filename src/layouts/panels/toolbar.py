@@ -66,6 +66,7 @@ class CanvasToolbar(QFrame):
             None,
             ("📐", "Grid", "G", False),
             "__view__",
+            ("🖼", "Plano de Fundo", "", False, True),  # toggle action
             None,
             ("↶", "Undo", "Ctrl+Z", False),
             ("↷", "Redo", "Ctrl+Y", False),
@@ -85,8 +86,18 @@ class CanvasToolbar(QFrame):
         self._grip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._grip.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._grip.setStyleSheet(f"""
-            color: {Colors.TEXT_MUTED}; font-size: 11px;
-            background: transparent; border: none;
+            QLabel {{
+                color: {Colors.TEXT_MUTED}; font-size: 11px;
+                background: transparent; border: none;
+            }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._grip.setToolTip("Arraste para mover • Clique direito para girar")
         self._grip_sep = self._make_separator()
@@ -135,6 +146,14 @@ class CanvasToolbar(QFrame):
                     background: {Colors.ACCENT_DIM};
                     color: {Colors.ACCENT};
                     border: 1px solid {Colors.ACCENT};
+                }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
                 }}
             """)
             if is_tool:

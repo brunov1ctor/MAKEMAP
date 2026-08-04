@@ -66,6 +66,17 @@ class PanelLayoutEngine:
         avail = l._toolbar_med.carve_panel_area(avail)
         l._panel_mgr.layout(avail.x(), avail.y(), avail.width(), avail.height())
 
+        # Brush's header + Parâmetros/Assets tabs live outside its own
+        # QScrollArea (added straight to `root`, same as Região's pinned
+        # header) — PanelManager's generic sizing missed that entirely,
+        # clipping the bottom sliders. Same content_height() override
+        # pattern as Região/Terrain/Background, applied before the asset
+        # browser below reads this panel's (now corrected) geometry.
+        if l.brush_panel.isVisible():
+            bp = l.brush_panel.geometry()
+            bp_h = min(l.brush_panel.content_height(), avail.height())
+            l.brush_panel.setGeometry(bp.x(), bp.y(), bp.width(), bp_h)
+
         # Asset browser rides next to Brush the same way RegionEditPanel
         # rides next to Região's CRUD list — sized to fill the full
         # available work area (not capped to brush_panel's own height,
@@ -97,6 +108,14 @@ class PanelLayoutEngine:
             tp = l.terrain_panel.geometry()
             tp_h = min(l.terrain_panel.content_height(), avail.height())
             l.terrain_panel.setGeometry(tp.x(), tp.y(), tp.width(), tp_h)
+
+        # Same nested-QScrollArea ambiguity as Terrain above (this panel
+        # wraps BackgroundSection, which owns its own image-browser grid
+        # scroll area) — same content_height() override.
+        if l.background_panel.isVisible():
+            bgp = l.background_panel.geometry()
+            bgp_h = min(l.background_panel.content_height(), avail.height())
+            l.background_panel.setGeometry(bgp.x(), bgp.y(), bgp.width(), bgp_h)
 
         # Spawn's header (outside its scroll area) has the same undercount
         # issue as Região's CRUD list — same content_height() override.
@@ -143,12 +162,22 @@ class PanelLayoutEngine:
             l.region_edit_panel.raise_()
 
         # Asset effects editor — not anchored to any tool/panel (opened from
-        # the fullscreen Config view), so it just floats centered over
-        # whatever's currently showing, in-app like every other picker here.
+        # the fullscreen Config view), so it floats centered over whatever's
+        # currently showing by default, in-app like every other picker here
+        # — unless the user has dragged it by its title bar (see
+        # AssetEffectsPanel.has_custom_position), in which case that spot is
+        # kept (just clamped to stay reachable on resize), same convention
+        # as Compass/MiniMap.
         if l.asset_effects_panel.isVisible():
             ae_w = l.asset_effects_panel.width()
-            ae_h = l.asset_effects_panel.height()
-            l.asset_effects_panel.move((w - ae_w) // 2, (h - ae_h) // 2)
+            ae_h = min(PanelManager._content_height(l.asset_effects_panel), h)
+            l.asset_effects_panel.resize(ae_w, ae_h)
+            if l.asset_effects_panel.has_custom_position():
+                ae_x = min(max(l.asset_effects_panel.x(), 0), max(0, w - ae_w))
+                ae_y = min(max(l.asset_effects_panel.y(), 0), max(0, h - ae_h))
+                l.asset_effects_panel.move(ae_x, ae_y)
+            else:
+                l.asset_effects_panel.move((w - ae_w) // 2, (h - ae_h) // 2)
             l.asset_effects_panel.raise_()
 
         l.progression.setGeometry(center_x, body_bottom - prog_h, center_w, prog_h)

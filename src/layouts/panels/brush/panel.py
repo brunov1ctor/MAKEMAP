@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QBrush, QPixmap
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, combo_popup_qss
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panel_manager import paint_glass_panel
 
@@ -133,6 +133,7 @@ class BrushToolPanel(QFrame):
     terrain_changed = Signal(str)  # terrain_id ("" = Mapa Infinito) — "Pintando em" dropdown
     close_requested = Signal()
     assets_requested = Signal()  # texture preview clicked — MainLayout opens the adjacent AssetBrowserPanel
+    content_changed = Signal()  # emitted when visible content changes size (e.g. Parâmetros <-> Assets tab)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -160,6 +161,7 @@ class BrushToolPanel(QFrame):
         top_layout.addWidget(_separator())
         self._build_section_tabs(top_layout)
         root.addWidget(top_container)
+        self._top_container = top_container  # read back by content_height() — see its own docstring
 
         # ── Seção "Parâmetros" (sliders) — com scroll ──
         self._top_scroll = QScrollArea()
@@ -216,6 +218,7 @@ class BrushToolPanel(QFrame):
         close_btn.setText("✕")
         close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QToolButton {{
                 border: none; border-radius: 4px; font-size: 11px;
@@ -265,6 +268,7 @@ class BrushToolPanel(QFrame):
         self._params_tab_btn.setChecked(section == "params")
         self._assets_tab_btn.setChecked(section == "assets")
         self._refresh_section_tab_style()
+        self.content_changed.emit()
 
     def _refresh_section_tab_style(self):
         active = f"""
@@ -312,10 +316,7 @@ class BrushToolPanel(QFrame):
                 padding: 3px 8px; font-size: 10px;
             }}
             QComboBox::drop-down {{ border: none; width: 14px; }}
-            QComboBox QAbstractItemView {{
-                background: {Colors.BG_ELEVATED}; color: {_TEXT};
-                border: 1px solid {Colors.BORDER}; selection-background-color: {_ACCENT_DIM};
-            }}
+            {combo_popup_qss()}
         """)
         self._terrain_combo.currentIndexChanged.connect(
             lambda i: self.terrain_changed.emit(self._terrain_combo.itemData(i))
@@ -533,6 +534,30 @@ class BrushToolPanel(QFrame):
 
     def set_texture_preview(self, pixmap: QPixmap | None):
         self.texture_preview.set_texture(pixmap)
+
+    def content_height(self) -> int:
+        """Own override — PanelManager's generic _content_height() only
+        measures the first QScrollArea it finds (_top_scroll) and reports
+        just ITS inner content height, which misses two things here:
+        top_container (header + Parâmetros/Assets tabs) lives outside any
+        scroll area, added straight to `root`, so its height was never
+        counted at all (same "header outside the scroll" undercount as
+        Terrain/Região's own content_height overrides) — that's what was
+        clipping the bottom sliders. And on the Assets tab, findChild()
+        would still land on _top_scroll (the only QScrollArea in the whole
+        widget tree) regardless of which page is actually showing, sizing
+        the panel off the WRONG (currently hidden) page's content instead
+        of the Assets page actually on screen."""
+        self._top_container.adjustSize()
+        header_h = self._top_container.sizeHint().height()
+        if self._current_section == "assets":
+            self._assets_page.adjustSize()
+            body_h = self._assets_page.sizeHint().height()
+        else:
+            body_widget = self._top_scroll.widget()
+            body_widget.adjustSize()
+            body_h = body_widget.sizeHint().height()
+        return header_h + body_h + 20
 
     def paintEvent(self, event):
         paint_glass_panel(self)

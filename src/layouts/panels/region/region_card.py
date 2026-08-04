@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QSize, QRectF
 from PySide6.QtGui import QColor, QPixmap, QPainter, QPainterPath, QDragEnterEvent, QDropEvent
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, combo_popup_qss
 
 _THUMB_W, _THUMB_H = 84, 72
 
@@ -223,11 +223,7 @@ class RegionCard(QFrame):
             }}
             QComboBox:hover {{ color: {Colors.TEXT_SECONDARY}; }}
             QComboBox::drop-down {{ border: none; width: 10px; }}
-            QComboBox QAbstractItemView {{
-                background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER}; selection-background-color: {Colors.ACCENT_DIM};
-                font-size: 10px;
-            }}
+            {combo_popup_qss()}
         """)
         self._terrain_combo.addItem("Mapa Infinito", "")
         self._terrain_combo.currentIndexChanged.connect(self._on_terrain_combo_changed)
@@ -280,6 +276,7 @@ class RegionCard(QFrame):
         self._menu_btn.setFixedSize(22, 22)
         self._menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._menu_btn.setToolTip("Mais opções")
         self._menu_btn.setStyleSheet(f"""
             QToolButton {{
                 border: none; border-radius: 4px; font-size: 14px; font-weight: bold;

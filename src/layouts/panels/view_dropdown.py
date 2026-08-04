@@ -32,10 +32,26 @@ class ViewDropdown(QToolButton):
     def __init__(self, parent=None, compact: bool = False):
         super().__init__(parent)
         self.setText("👁" if compact else "👁 View")
-        self.setToolTip("View")
+        self.setToolTip("Exibir")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        # Repetido em ambos os ramos abaixo (não só uma vez no fim) porque
+        # este botão tem seu próprio setStyleSheet local — um QToolTip
+        # nativo dentro de uma subárvore com estilo local pode não herdar
+        # a regra QToolTip do QSS global do app de forma confiável (mesmo
+        # bug já visto em toolbar.py/combobox popups), então cada bloco
+        # local precisa da sua própria regra pra garantir o fundo sólido.
+        _tooltip_qss = f"""
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
+        """
         if compact:
             self.setFixedSize(32, 32)
             self.setStyleSheet(f"""
@@ -46,6 +62,7 @@ class ViewDropdown(QToolButton):
                 }}
                 QToolButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
                 QToolButton::menu-indicator {{ image: none; }}
+                {_tooltip_qss}
             """)
         else:
             self.setStyleSheet(f"""
@@ -56,6 +73,7 @@ class ViewDropdown(QToolButton):
                 }}
                 QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
                 QToolButton::menu-indicator {{ image: none; }}
+                {_tooltip_qss}
             """)
 
         menu = QMenu(self)

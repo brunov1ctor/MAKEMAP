@@ -61,6 +61,8 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
     delete_requested = Signal(str)
     asset_add_requested = Signal(str, dict)  # mob_id, {name, asset_type, file_path, file_size, rarity}
     asset_delete_requested = Signal(str, str)  # mob_id, asset_id
+    item_open_requested = Signal(str)  # item_id — a Drops Principais tile was clicked (not "✕")
+    ability_open_requested = Signal(str)  # skill_id — a Habilidades tile was clicked (not "✕")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -168,6 +170,7 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         menu_btn.setFixedSize(28, 28)
         menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu_btn.setToolTip("Mais opções")
         menu_btn.setStyleSheet(f"""
             QToolButton {{ border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; background: rgba(255,255,255,0.06);
                 font-size: 14px; font-weight: bold; color: {Colors.TEXT_SECONDARY}; }}

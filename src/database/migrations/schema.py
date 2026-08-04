@@ -1037,6 +1037,95 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         );
         CREATE INDEX IF NOT EXISTS idx_npc_assets_npc ON npc_assets(npc_id);
     """),
+    (28, "NPC categories — seed 4 preset folders (Mercadores/Hostis/Aliados/Figurante) with colors", """
+        -- npc_categories (migration 27) shipped with no seed data at all —
+        -- every NPC fell back to categories.py's DEFAULT_CATEGORY_ID
+        -- ("outros"), which has no real folder behind it, so an NPC card's
+        -- category tag always rendered as the flat gray "Outros" pill
+        -- instead of a real, colored one like Mobs' cards get from their
+        -- own 5 seeded difficulty tiers (migration 16/22/23). These 4 cover
+        -- the common NPC archetypes directly (shopkeeper, threat, friendly,
+        -- unnamed background character) rather than reusing rarity or pure
+        -- reaction-state vocabulary. Colors reuse the app's own established
+        -- semantic tokens (styles/tokens.py) instead of inventing a new
+        -- palette — Figurante gets the same neutral gray "common" used
+        -- elsewhere (e.g. items.rarity's default), since it's the generic/
+        -- unremarkable default.
+        INSERT OR IGNORE INTO npc_categories (id, parent_id, name, icon, sort_order, border_color) VALUES
+            ('mercadores', NULL, 'Mercadores', '💰', 0, '#FFA726'),
+            ('hostis', NULL, 'Hostis', '⚔️', 1, '#EF5350'),
+            ('aliados', NULL, 'Aliados', '🤝', 2, '#66BB6A'),
+            ('figurante', NULL, 'Figurante', '🎭', 3, '#9AA5B1');
+
+        -- Backfill existing NPCs stuck on the dead default so their cards
+        -- pick up a real colored tag immediately instead of only new ones
+        -- created after this migration — mirrors migration 17's mob backfill.
+        -- "Figurante" (generic background NPC) is the sensible default for
+        -- anything that was never explicitly categorized.
+        UPDATE npcs SET category = 'figurante' WHERE category = 'outros' OR category = 'neutros' OR category IS NULL OR category = '';
+    """),
+    (29, "NPC categories — fix databases that already applied an earlier draft of migration 28", """
+        -- Migrations run exactly ONCE per database, tracked by MAX(version)
+        -- in schema_version (see run_migrations below) — editing migration
+        -- 28's INSERT statements in place (which happened twice while
+        -- landing on Mercadores/Hostis/Aliados/Figurante as the actual
+        -- final set) had NO effect on any project that had already applied
+        -- an earlier draft of it (Comum/Raro/Épico/Lendário, then Aliados/
+        -- Neutros/Hostis/Especiais). This migration reaches those databases
+        -- too: it doesn't delete the earlier draft's leftover category rows
+        -- (an npc_categories row can have user-created subfolders nested
+        -- under it via ON DELETE CASCADE — deleting it here could silently
+        -- take those with it), just reassigns any NPC still pointing at one
+        -- of them onto 'figurante' and (re)writes the final 4 by id,
+        -- overwriting anything already there under those same ids. Any
+        -- stray leftover draft folders (Comum/Raro/... if they exist) are
+        -- harmless and can be deleted by hand from the CATEGORIAS explorer
+        -- like any other category.
+        UPDATE npcs SET category = 'figurante'
+            WHERE category IN ('comum', 'raro', 'epico', 'lendario', 'neutros', 'especiais', 'outros')
+               OR category IS NULL OR category = '';
+
+        INSERT INTO npc_categories (id, parent_id, name, icon, sort_order, border_color) VALUES
+            ('mercadores', NULL, 'Mercadores', '💰', 0, '#FFA726'),
+            ('hostis', NULL, 'Hostis', '⚔️', 1, '#EF5350'),
+            ('aliados', NULL, 'Aliados', '🤝', 2, '#66BB6A'),
+            ('figurante', NULL, 'Figurante', '🎭', 3, '#9AA5B1')
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            icon = excluded.icon,
+            sort_order = excluded.sort_order,
+            border_color = excluded.border_color;
+    """),
+    (30, "NPC categories — remove the earlier drafts' leftover preset folders", """
+        -- Migration 29 deliberately left Comum/Raro/Épico/Lendário/Neutros/
+        -- Especiais (whichever earlier draft(s) a given database happened
+        -- to already apply) sitting around unused, to avoid ON DELETE
+        -- CASCADE silently taking any user-created subfolder nested under
+        -- one of them with it. Explicitly requested now, so: reparent any
+        -- such subfolder up to root first (never actually observed in
+        -- practice, since these only existed for a few minutes during
+        -- development, but cheap insurance against losing real data),
+        -- reassign any NPC still pointing at one of them (belt-and-braces —
+        -- migration 29 should have already caught every case), then delete
+        -- the leftover rows themselves. 'hostis'/'aliados' are NOT in this
+        -- list — those two ids are part of the final set (migration 29),
+        -- not a leftover.
+        UPDATE npc_categories SET parent_id = NULL
+            WHERE parent_id IN ('comum', 'raro', 'epico', 'lendario', 'neutros', 'especiais');
+
+        UPDATE npcs SET category = 'figurante'
+            WHERE category IN ('comum', 'raro', 'epico', 'lendario', 'neutros', 'especiais');
+
+        DELETE FROM npc_categories WHERE id IN ('comum', 'raro', 'epico', 'lendario', 'neutros', 'especiais');
+    """),
+    (31, "NPCs panel — items an NPC can provide (e.g. a merchant's stock), mirroring Mobs' drops_json", """
+        -- Same {"item_id","rate","qty"} list shape as mobs.drops_json
+        -- (migration 3), reusing the exact same _DropTile UI/mechanism —
+        -- just representing what an NPC can supply/sell instead of combat
+        -- loot. Shown in the NPCs edit panel's "Informações Extras"
+        -- section, above Assets.
+        ALTER TABLE npcs ADD COLUMN provides_items_json TEXT DEFAULT '[]';
+    """),
 ]
 
 

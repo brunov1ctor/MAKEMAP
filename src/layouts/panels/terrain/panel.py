@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 
 from PySide6.QtWidgets import (
@@ -15,7 +14,6 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen,
 from src.styles.tokens import Colors
 from src.layouts.panels.stepper import NumberStepper
 from src.layouts.panels.terrain.terrain_card import TerrainCard
-from src.layouts.panels.terrain.background import BackgroundSection
 from src.layouts.panels.collapsible_section import CollapsibleSection
 from src.layouts.panel_manager import paint_glass_panel
 
@@ -38,7 +36,6 @@ class TerrainSettingsPanel(QFrame):
     terrain_selected = Signal(str)
     terrain_renamed = Signal(str, str)
     terrain_visibility = Signal(str, bool)
-    background_changed = Signal(str, str)
     content_changed = Signal()  # emitted when visible content changes size
 
     _PALETTE = [
@@ -103,6 +100,7 @@ class TerrainSettingsPanel(QFrame):
         close_btn.setText("✕")
         close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QToolButton {{
                 border: none; border-radius: 4px; font-size: 11px;
@@ -272,18 +270,10 @@ class TerrainSettingsPanel(QFrame):
         layout.addWidget(self._crud_section)
         self._crud_section.hide()
 
-        # ─── Plano de Fundo section ───
-        bg_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "..", "..", "..", "..", "library", "backgrounds")
-        self._bg_section_inner = BackgroundSection(bg_dir)
-        self._bg_section_inner.background_changed.connect(self.background_changed.emit)
-        self._bg_section_inner.close_requested.connect(self.close_requested.emit)
-        self._bg_section_inner.content_changed.connect(self.content_changed.emit)
-
-        self._bg_section = CollapsibleSection("Plano de Fundo")
-        self._bg_section.content_changed.connect(self.content_changed.emit)
-        self._bg_section.content_layout.addWidget(self._bg_section_inner)
-        layout.addWidget(self._bg_section)
+        # "Plano de Fundo" (color/image/parallax) used to be a collapsible
+        # section here — it now lives exclusively in its own top-bar menu
+        # (see BackgroundMenuPanel in menu_panels.py), not duplicated here,
+        # so this panel stays focused on the map's own bounds/terrains.
 
         layout.addStretch()
         scroll.setWidget(container)

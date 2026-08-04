@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, combo_popup_qss
 from src.layouts.panel_manager import paint_glass_panel
 from src.layouts.panels.collapsible_section import CollapsibleSection
 from src.layouts.panels.color_field import ColorField
@@ -236,6 +236,7 @@ class TextToolPanel(QFrame):
         self.bold_btn.setCheckable(True)
         self.bold_btn.setFixedSize(28, 26)
         self.bold_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.bold_btn.setToolTip("Negrito")
         self.bold_btn.setStyleSheet(self._toggle_style(bold=True))
         self.bold_btn.toggled.connect(self._on_bold_toggled)
         peso_btns.addWidget(self.bold_btn)
@@ -245,6 +246,7 @@ class TextToolPanel(QFrame):
         self.italic_btn.setCheckable(True)
         self.italic_btn.setFixedSize(28, 26)
         self.italic_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.italic_btn.setToolTip("Itálico")
         self.italic_btn.setStyleSheet(self._toggle_style(italic=True))
         self.italic_btn.toggled.connect(lambda v: self._emit(self.italic_changed, bool(v)))
         peso_btns.addWidget(self.italic_btn)
@@ -614,6 +616,7 @@ class TextToolPanel(QFrame):
         close_btn.setText("✕")
         close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QToolButton {{
                 border: none; border-radius: 4px; font-size: 11px;
@@ -647,10 +650,7 @@ class TextToolPanel(QFrame):
                 padding: 3px 6px; font-size: 9pt;
             }}
             QComboBox::drop-down {{ border: none; width: 14px; }}
-            QComboBox QAbstractItemView {{
-                background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER}; selection-background-color: {Colors.ACCENT_DIM};
-            }}
+            {combo_popup_qss()}
         """
 
     @staticmethod

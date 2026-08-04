@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox,
     QFrame, QScrollArea, QSizePolicy, QToolButton,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QPixmap
 
 from src.styles.tokens import Colors
@@ -36,10 +36,18 @@ class _RecordCard(QFrame):
     image_dropped = Signal(str, str)  # record id, caminho local
     delete_requested = Signal(str)
 
+    # Excluir precisa de um "tem certeza?", mas um QMessageBox nativo abre
+    # como janela fora do app — o botão se arma no próprio lugar em vez
+    # disso: primeiro clique vira um "⚠" vermelho, segundo clique (dentro de
+    # _DELETE_ARM_MS) exclui de verdade. Mesmo padrão de
+    # npcs/category_edit_panel.py._arm_delete.
+    _DELETE_ARM_MS = 4000
+
     def __init__(self, record: dict, parent=None):
         super().__init__(parent)
         self._id = record.get("id", "")
         self._selected = False
+        self._delete_armed = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setAcceptDrops(True)
@@ -80,19 +88,52 @@ class _RecordCard(QFrame):
         if record.get("status"):
             row.addWidget(status_dot(record["status"]))
 
-        delete_btn = QToolButton()
-        delete_btn.setText("✕")
-        delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        delete_btn.setFixedSize(18, 18)
-        delete_btn.setToolTip("Excluir")
-        delete_btn.setStyleSheet(f"""
+        self._delete_btn = QToolButton()
+        self._delete_btn.setText("✕")
+        self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._delete_btn.setFixedSize(18, 18)
+        self._delete_btn.setToolTip("Excluir")
+        self._DELETE_BTN_DEFAULT_STYLE = f"""
             QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 10px; }}
             QToolButton:hover {{ color: {Colors.ERROR}; }}
-        """)
-        delete_btn.clicked.connect(lambda: self.delete_requested.emit(self._id))
-        row.addWidget(delete_btn)
+        """
+        self._delete_btn.setStyleSheet(self._DELETE_BTN_DEFAULT_STYLE)
+        self._delete_btn.clicked.connect(self._on_delete_clicked)
+        row.addWidget(self._delete_btn)
 
         self.set_selected(False)
+
+    def _on_delete_clicked(self):
+        if not self._delete_armed:
+            self._arm_delete()
+            return
+        self._disarm_delete()
+        self.delete_requested.emit(self._id)
+
+    def _arm_delete(self):
+        self._delete_armed = True
+        self._delete_btn.setText("⚠ Confirmar")
+        self._delete_btn.setToolTip("Confirmar exclusão")
+        self._delete_btn.setFixedSize(60, 18)
+        self._delete_btn.setStyleSheet(f"""
+            QToolButton {{ background: {Colors.ERROR}; border: none; border-radius: 4px;
+                color: white; font-size: 9px; font-weight: bold; }}
+            QToolButton:hover {{ background: #ff6b6b; }}
+        """)
+        QTimer.singleShot(self._DELETE_ARM_MS, self._disarm_delete_if_stale)
+
+    def _disarm_delete_if_stale(self):
+        # Um segundo clique real já desarma+emite em _on_delete_clicked
+        # antes desse timeout disparar — só reverte se ainda estiver armado.
+        if self._delete_armed:
+            self._disarm_delete()
+
+    def _disarm_delete(self):
+        self._delete_armed = False
+        self._delete_btn.setText("✕")
+        self._delete_btn.setToolTip("Excluir")
+        self._delete_btn.setFixedSize(18, 18)
+        self._delete_btn.setStyleSheet(self._DELETE_BTN_DEFAULT_STYLE)
 
     def _set_thumb_image(self, path: str):
         pixmap = QPixmap(path) if path else QPixmap()
@@ -166,50 +207,12 @@ class _RecordCard(QFrame):
         self.image_dropped.emit(self._id, path)
 
 
-class _NewCard(QFrame):
-    """O card "+ Novo …" fixo no fim da lista."""
-
-    clicked = Signal()
-
-    def __init__(self, title: str, hint: str, parent=None):
-        super().__init__(parent)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setStyleSheet(
-            f"QFrame {{ background: rgba(255,255,255,0.02); border: 1px dashed {Colors.BORDER}; "
-            f"border-radius: 8px; }}"
-            f"QFrame:hover {{ border-color: {Colors.ACCENT}; background: rgba(79,195,247,0.08); }}"
-            f"QLabel {{ background: transparent; border: none; }}"
-        )
-        row = QHBoxLayout(self)
-        row.setContentsMargins(8, 6, 10, 6)
-        row.setSpacing(8)
-        plus = QLabel("+")
-        plus.setFixedSize(38, 38)
-        plus.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        plus.setStyleSheet(f"color: {Colors.ACCENT}; font-size: 20px; font-weight: bold;")
-        row.addWidget(plus)
-        col = QVBoxLayout()
-        col.setSpacing(1)
-        lbl = QLabel(title)
-        lbl.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 11px; font-weight: bold;")
-        sub = QLabel(hint)
-        sub.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px;")
-        col.addWidget(lbl)
-        col.addWidget(sub)
-        row.addLayout(col, 1)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
-
-
 class RecordListColumn(QFrame):
-    """Lista de cards com busca, filtros e o card de criação no fim."""
+    """Lista de cards com busca e filtros — criar um novo registro é feito
+    pelo botão "+ Novo..." no cabeçalho da seção (ver panel.py), não por um
+    card dentro da lista."""
 
     selected = Signal(str)
-    new_requested = Signal()
     image_dropped = Signal(str, str)  # record id, caminho local
     delete_requested = Signal(str)
 
@@ -217,8 +220,6 @@ class RecordListColumn(QFrame):
         self,
         title: str,
         search_hint: str,
-        new_title: str,
-        new_hint: str,
         filters: list[tuple[str, list[str], str]] | None = None,
         parent=None,
     ):
@@ -284,9 +285,6 @@ class RecordListColumn(QFrame):
         scroll.setWidget(holder)
         outer.addWidget(scroll, 1)
 
-        self._new_card = _NewCard(new_title, new_hint)
-        self._new_card.clicked.connect(self.new_requested.emit)
-
         self._empty = QLabel("Nenhum registro corresponde à busca.")
         self._empty.setWordWrap(True)
         self._empty.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
@@ -322,8 +320,8 @@ class RecordListColumn(QFrame):
         while self._list.count():
             item = self._list.takeAt(0)
             widget = item.widget()
-            if widget in (self._new_card, self._empty):
-                # Reaproveitados a cada rebuild — só desanexar, não destruir.
+            if widget is self._empty:
+                # Reaproveitado a cada rebuild — só desanexar, não destruir.
                 widget.setParent(None)
             elif widget is not None:
                 widget.deleteLater()
@@ -342,9 +340,6 @@ class RecordListColumn(QFrame):
         if not visible:
             self._list.addWidget(self._empty)
             self._empty.show()
-
-        self._list.addWidget(self._new_card)
-        self._new_card.show()
         # Sem o stretch final o QVBoxLayout estica os cards para ocupar a
         # sobra de altura em vez de deixá-la em branco.
         self._list.addStretch()

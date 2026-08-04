@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QSize, QPoint, QTimer
 from PySide6.QtGui import QPixmap, QImage
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, combo_popup_qss
 from src.layouts.panels.stepper import NumberStepper
 from src.engines.map.parallax import get_parallax_library, LayerEffect, EFFECT_KINDS, EFFECT_DEFAULTS
 
@@ -1050,11 +1050,7 @@ class ParallaxPresetSection(QFrame):
             }}
             QComboBox:hover {{ border-color: {Colors.ACCENT}; }}
             QComboBox::drop-down {{ border: none; width: 14px; }}
-            QComboBox QAbstractItemView {{
-                background: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY}; selection-background-color: {Colors.ACCENT_DIM};
-                border: 1px solid {Colors.BORDER_SUBTLE};
-            }}
+            {combo_popup_qss(Colors.BORDER_SUBTLE)}
         """
 
     def _build_minmax_pulse_row(
@@ -1224,6 +1220,7 @@ class ParallaxPresetSection(QFrame):
         del_btn.setText("✕")
         del_btn.setFixedSize(18, 18)
         del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        del_btn.setToolTip("Remover camada")
         del_btn.setStyleSheet(
             f"QToolButton {{ border: none; font-size: 9px; color: {Colors.TEXT_MUTED}; background: transparent; }}"
             f"QToolButton:hover {{ color: {Colors.ERROR}; }}"

@@ -196,28 +196,37 @@ class _DropTile(QFrame):
     "loot" reference in the app would use."""
 
     remove_requested = Signal(str)  # item_id
+    open_requested = Signal(str)  # item_id — click anywhere on the tile except "✕"
 
-    SIZE = 92
+    # SIZE used to be the tile's own OUTER width, with the thumbnail's edge
+    # computed as `size - 40` — that "40" was really just the height
+    # overhead from the remove-button row + pct label, wrongly reapplied to
+    # shrink the (square) thumb's WIDTH too, leaving ~40px of pure empty
+    # border down each side with nothing in it. SIZE is now the thumbnail's
+    # own edge length directly (52 — unchanged from what it visually was
+    # before, so images don't get smaller), and the tile's outer box is
+    # sized tightly around it (thumb + small margins), not the other way
+    # around — that's what actually shrinks the wasted chrome and lets
+    # more tiles fit per row.
+    SIZE = 52
+    _MARGIN = 4
 
     def __init__(self, item: dict, rate: float, qty: int, parent=None, size: int | None = None, removable: bool = True):
         super().__init__(parent)
         self._item_id = item.get("id", "")
-        size = size if size is not None else self.SIZE
-        # removable=True keeps the exact original proportions (Mobs edit
-        # panel's Drops Principais, always size=SIZE=92: thumb=52,
-        # total=116). removable=False (Inspector's read-only, much smaller
-        # tiles — no "✕" row to reserve space for) keeps the image a full
-        # `size`-tall square instead of subtracting a flat overhead that
-        # was tuned for size~92 — at Inspector's size~28-32 that same flat
-        # subtraction left almost nothing for the icon.
-        thumb_h = (size - 40) if removable else size
-        total_h = (size + 24) if removable else (size + 18)
-        self.setFixedSize(size, total_h)
+        thumb_h = size if size is not None else self.SIZE
+        width = thumb_h + 2 * self._MARGIN
+        # Remove-button row (15px + 2px spacing below it) only exists when
+        # removable=True (Mobs edit panel) — Inspector's read-only tiles
+        # (removable=False) skip it entirely, same as before.
+        remove_row_h = 17 if removable else 0
+        total_h = 2 * self._MARGIN + remove_row_h + thumb_h + 2 + 14  # margins + [remove row] + thumb + spacing + pct label
+        self.setFixedSize(width, total_h)
         self.setStyleSheet(f"""
             QFrame {{ background: rgba(255,255,255,0.04); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px; }}
         """)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setContentsMargins(self._MARGIN, self._MARGIN, self._MARGIN, self._MARGIN)
         lay.setSpacing(2)
 
         # Inspector (map-panel quick view) shows the same tile read-only —
@@ -231,6 +240,7 @@ class _DropTile(QFrame):
             remove_btn.setText("✕")
             remove_btn.setFixedSize(15, 15)
             remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            remove_btn.setToolTip("Remover")
             remove_btn.setStyleSheet(f"""
                 QToolButton {{ border: none; background: rgba(0,0,0,0.45); color: {Colors.TEXT_SECONDARY}; font-size: 9px; border-radius: 7px; }}
                 QToolButton:hover {{ background: {Colors.ERROR}; color: white; }}
@@ -269,6 +279,16 @@ class _DropTile(QFrame):
 
         name = item.get("name") or "Item removido do catálogo"
         self.setToolTip(f"{name} — {qty}x")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        # The "✕" is a real child QToolButton — Qt routes a click on it
+        # straight to the button's own mousePressEvent (it never reaches
+        # here), so this only ever fires for the rest of the tile, same as
+        # _CatalogTile's own click handling.
+        if event.button() == Qt.MouseButton.LeftButton and self._item_id:
+            self.open_requested.emit(self._item_id)
+        super().mousePressEvent(event)
 
 
 class _AbilityTile(QFrame):
@@ -284,20 +304,30 @@ class _AbilityTile(QFrame):
     rendering it as a normal entry."""
 
     remove_requested = Signal(int)  # index into ExtrasSectionMixin._abilities
+    open_requested = Signal(str)  # skill catalog id — click anywhere on the tile except "✕"
 
-    SIZE = 92
+    # See _DropTile's own SIZE comment — same fix, same reasoning: this used
+    # to be the tile's OUTER width (92) with the thumb computed as
+    # `size - 40`, wasting ~40px of empty border around a 52px icon. SIZE is
+    # now the thumbnail's own edge length directly (unchanged visual size),
+    # and the box is sized tightly around it instead.
+    SIZE = 52
+    _MARGIN = 4
 
     def __init__(self, index: int, skill: dict, unlinked: bool = False, parent=None):
         super().__init__(parent)
         self._index = index
-        size = self.SIZE
-        thumb_h = size - 40
-        self.setFixedSize(size, size + 24)
+        self._skill_id = skill.get("id", "")
+        thumb_h = self.SIZE
+        width = thumb_h + 2 * self._MARGIN
+        remove_row_h = 17  # button(15) + spacing(2) — always present here (unlike _DropTile, no removable=False caller)
+        total_h = 2 * self._MARGIN + remove_row_h + thumb_h + 2 + 14  # margins + remove row + thumb + spacing + name label
+        self.setFixedSize(width, total_h)
         self.setStyleSheet(f"""
             QFrame {{ background: rgba(255,255,255,0.04); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px; }}
         """)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setContentsMargins(self._MARGIN, self._MARGIN, self._MARGIN, self._MARGIN)
         lay.setSpacing(2)
 
         top_row = QHBoxLayout()
@@ -306,6 +336,7 @@ class _AbilityTile(QFrame):
         remove_btn.setText("✕")
         remove_btn.setFixedSize(15, 15)
         remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        remove_btn.setToolTip("Remover")
         remove_btn.setStyleSheet(f"""
             QToolButton {{ border: none; background: rgba(0,0,0,0.45); color: {Colors.TEXT_SECONDARY}; font-size: 9px; border-radius: 7px; }}
             QToolButton:hover {{ background: {Colors.ERROR}; color: white; }}
@@ -345,6 +376,14 @@ class _AbilityTile(QFrame):
 
         tooltip = skill.get("name") or "Habilidade removida do catálogo"
         self.setToolTip(f"{tooltip} (não vinculado)" if unlinked else tooltip)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        # Same reasoning as _DropTile's own override — "✕" is a real child
+        # QToolButton, Qt never routes its clicks here.
+        if event.button() == Qt.MouseButton.LeftButton and self._skill_id:
+            self.open_requested.emit(self._skill_id)
+        super().mousePressEvent(event)
 
 
 class _CatalogTile(QFrame):
@@ -556,6 +595,7 @@ class _CatalogPickerDialog(QWidget):
         close_btn = QToolButton()
         close_btn.setText("✕")
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 12px; }}
             QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
@@ -693,6 +733,7 @@ class _AssetCard(QFrame):
         menu_btn.setText("⋯")
         menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu_btn.setToolTip("Mais opções")
         menu_btn.setStyleSheet(f"""
             QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_SECONDARY}; font-size: 13px; font-weight: bold; }}
             QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}

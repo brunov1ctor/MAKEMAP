@@ -17,6 +17,7 @@ has no edit_widgets.py/edit_helpers.py of its own.
 
 from __future__ import annotations
 
+import json
 import logging
 
 from PySide6.QtWidgets import (
@@ -36,6 +37,7 @@ from src.layouts.panels.npcs.edit_atributos_mixin import (
     AtributosSectionMixin, INITIAL_STATE_OPTIONS, PLAYER_REACTION_OPTIONS,
 )
 from src.layouts.panels.npcs.edit_extras_mixin import ExtrasSectionMixin
+from src.layouts.panels.npcs.categories import DEFAULT_CATEGORY_ID
 
 logger = logging.getLogger("MAKEMAP")
 
@@ -50,6 +52,7 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
     delete_requested = Signal(str)
     asset_add_requested = Signal(str, dict)  # npc_id, {name, asset_type, file_path, file_size, rarity}
     asset_delete_requested = Signal(str, str)  # npc_id, asset_id
+    item_open_requested = Signal(str)  # item_id — an Itens Fornecidos tile was clicked (not "✕")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -61,6 +64,9 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._loaded_name = ""  # last known-good name — see _finish_rename
         self._loading = True
         self._assets: list[dict] = []  # npc_assets rows — set_assets(), see _refresh_assets_display
+        self._items_catalog: list[dict] = []  # set_items_catalog(), see edit_extras_mixin.py
+        self._provided_items: list[dict] = []  # {"item_id","rate","qty"} — see _refresh_provided_items_display
+        self._provided_items_expanded = False
 
         self.setStyleSheet("background: transparent; border: none;" + _INPUT_STYLE)
 
@@ -116,6 +122,7 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         menu_btn.setFixedSize(28, 28)
         menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu_btn.setToolTip("Mais opções")
         menu_btn.setStyleSheet(f"""
             QToolButton {{ border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; background: rgba(255,255,255,0.06);
                 font-size: 14px; font-weight: bold; color: {Colors.TEXT_SECONDARY}; }}
@@ -161,8 +168,7 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         sections_lay.setSpacing(6)
         sections_lay.addWidget(_CollapsibleSection("👁 Informações Gerais", self._build_overview_section(), expanded=True))
         sections_lay.addWidget(_CollapsibleSection("🎭 Comportamento", self._build_atributos_section(), expanded=True))
-        sections_lay.addWidget(_CollapsibleSection("📍 Posição no Mundo", self._build_position_section(), expanded=False))
-        sections_lay.addWidget(_CollapsibleSection("⚙ Configurações Adicionais", self._build_extra_section(), expanded=False))
+        sections_lay.addWidget(_CollapsibleSection("📄 Informações Extras", self._build_extra_section(), expanded=False))
         sections_lay.addStretch()
         self._refresh_type_badge()
         sections_scroll.setWidget(sections_container)
@@ -272,15 +278,14 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             self._refresh_thumb()
             self._name_edit.clear()
             self._title_edit.clear()
-            self._npc_type_combo.setCurrentIndex(0)
+            self._npc_type_edit.clear()
+            self._category_combo.setCurrentIndex(0)
             self._faction_combo.setCurrentIndex(-1)
             self._faction_combo.setCurrentText("")
             self._status_combo.setCurrentIndex(0)
             self._zone_combo.setCurrentIndex(0)
             self._subcategory_edit.clear()
             self._level_spin.setValue(1)
-            self._level_min_spin.setValue(1)
-            self._level_max_spin.setValue(1)
             self._health_spin.setValue(100)
             self._mana_spin.setValue(50)
             self._desc_edit.clear()
@@ -305,6 +310,9 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             self._shows_quest_icon_check.setChecked(True)
             self._uses_animations_check.setChecked(True)
             self._notes_edit.clear()
+            self._provided_items = []
+            self._provided_items_expanded = False
+            self._refresh_provided_items_display()
             self._assets = []
             self._refresh_assets_display()
             logger.info("Editor: modo criação/vazio")
@@ -315,6 +323,15 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._npc_id = npc.get("id", "")
         self._creating = creating
         self.set_empty(False)
+        # Same "no category set yet -> the first seeded preset tier" fallback
+        # Mobs' own category combo applies (see mob_edit_panel.py) — without
+        # it, a brand-new NPC created outside any folder (self._current_dir_id
+        # is None, so NPCsPanel._on_new_npc never puts anything in the draft's
+        # "category" at all) would stay uncategorized forever instead of
+        # landing in "Figurante" like a fresh mob lands in "Normal".
+        category_key = npc.get("category") or DEFAULT_CATEGORY_ID
+        idx = self._category_combo.findData(category_key)
+        self._category_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._title_label.setText(npc.get("name") or "Novo NPC")
         self._id_label.setText(
             f'<span style="color:{Colors.TEXT_MUTED};">ID:</span> NPC_{self._npc_id[:6].upper()}'
@@ -333,11 +350,7 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._thumb_pixmap = pixmap if not pixmap.isNull() else None
         self._refresh_thumb()
 
-        npc_type = npc.get("npc_type") or NPC_TYPE_OPTIONS[0]
-        if self._npc_type_combo.findText(npc_type) >= 0:
-            self._npc_type_combo.setCurrentText(npc_type)
-        else:
-            self._npc_type_combo.setCurrentIndex(0)
+        self._npc_type_edit.setText(npc.get("npc_type") or "")
         self._refresh_type_badge()
 
         self._faction_combo.setCurrentText(npc.get("faction", "") or "")
@@ -350,8 +363,6 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._subcategory_edit.setText(npc.get("subcategory", "") or "")
 
         self._level_spin.setValue(int(npc.get("level", 1) or 1))
-        self._level_min_spin.setValue(int(npc.get("level_recommended_min", 1) or 1))
-        self._level_max_spin.setValue(int(npc.get("level_recommended_max", 1) or 1))
         self._health_spin.setValue(int(npc.get("health", 100) or 0))
         self._mana_spin.setValue(int(npc.get("mana", 50) or 0))
 
@@ -379,6 +390,13 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._uses_animations_check.setChecked(bool(npc.get("uses_animations", 1)))
         self._notes_edit.setPlainText(npc.get("notes", "") or "")
 
+        try:
+            self._provided_items = json.loads(npc.get("provides_items_json") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            self._provided_items = []
+        self._provided_items_expanded = False
+        self._refresh_provided_items_display()
+
         self._loading = False
         self._mark_saved()
         logger.info("Editor: npc carregado id=%s nome='%s'", self._npc_id, npc.get("name"))
@@ -389,15 +407,14 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             name=self._name_edit.text().strip() or "Novo NPC",
             title=self._title_edit.text().strip(),
             description=self._desc_edit.toPlainText(),
-            npc_type=self._npc_type_combo.currentText(),
+            category=self._category_combo.currentData() or "",
+            npc_type=self._npc_type_edit.text().strip() or NPC_TYPE_OPTIONS[0],
             faction=self._faction_combo.currentText().strip(),
             status="inativo" if self._status_combo.currentIndex() == 1 else "ativo",
             favorite=int(self._fav_btn.isChecked()),
             zone_id=self._zone_combo.currentData() or "",
             subcategory=self._subcategory_edit.text().strip(),
             level=self._level_spin.value(),
-            level_recommended_min=self._level_min_spin.value(),
-            level_recommended_max=self._level_max_spin.value(),
             health=self._health_spin.value(),
             mana=self._mana_spin.value(),
             position_x=self._pos_x_spin.value(),
@@ -417,6 +434,7 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             shows_quest_icon=int(self._shows_quest_icon_check.isChecked()),
             uses_animations=int(self._uses_animations_check.isChecked()),
             notes=self._notes_edit.toPlainText(),
+            provides_items_json=json.dumps(self._provided_items),
             image_path=self._image_path,
         )
 

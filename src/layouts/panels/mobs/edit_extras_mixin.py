@@ -12,7 +12,7 @@ import logging
 import os
 
 from PySide6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit, QComboBox,
+    QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit,
     QPushButton, QWidget, QFileDialog, QScrollArea,
 )
 from PySide6.QtCore import Qt
@@ -36,8 +36,13 @@ logger = logging.getLogger("MAKEMAP")
 # bounds — tall enough to show one full-width card without feeling empty,
 # capped so a mob with a dozen abilities doesn't push Spawn/Notas off
 # screen; beyond the cap the area scrolls internally, same as before.
-_CARD_AREA_HEIGHT = 160
-_CARD_AREA_MIN_H = 96
+# _CARD_AREA_HEIGHT/_CARD_AREA_MIN_H are tile height (_DropTile/_AbilityTile,
+# 93px total — see edit_widgets.py) + a small breathing-room margin, not an
+# arbitrary round number — they used to be tuned for those tiles' old,
+# much taller 116px size, leaving a visible dead gap below the single row
+# once the tiles themselves shrank.
+_CARD_AREA_HEIGHT = 104
+_CARD_AREA_MIN_H = 100
 _CARD_AREA_MAX_H = 340
 
 
@@ -150,20 +155,10 @@ class ExtrasSectionMixin:
         # panel — it's a separate table, not a column on this mob row. ───
         outer.addLayout(_extra_header_row("ASSETS", "+ Novo Asset", self._on_new_asset_clicked))
         outer.addWidget(_hr())
-        assets_filter_row = QHBoxLayout()
-        assets_filter_row.setSpacing(6)
         self._asset_search_edit = QLineEdit()
         self._asset_search_edit.setPlaceholderText("🔍 Buscar asset...")
         self._asset_search_edit.textChanged.connect(lambda _t: self._refresh_assets_display())
-        assets_filter_row.addWidget(self._asset_search_edit, 1)
-        self._asset_type_filter = QComboBox()
-        self._asset_type_filter.addItem("Tipo: Todos", "")
-        self._asset_type_filter.addItem("Modelo 3D", "Modelo 3D")
-        self._asset_type_filter.addItem("Imagem", "Imagem")
-        self._asset_type_filter.addItem("Arquivo", "Arquivo")
-        self._asset_type_filter.currentIndexChanged.connect(lambda _i: self._refresh_assets_display())
-        assets_filter_row.addWidget(self._asset_type_filter)
-        outer.addLayout(assets_filter_row)
+        outer.addWidget(self._asset_search_edit)
         # Accepts files dragged straight from Explorer/Finder — same idea
         # as the Visão Geral portrait's own drag-and-drop, just multi-file
         # and covering 3D models/textures too (see _AssetDropScrollArea).
@@ -254,6 +249,7 @@ class ExtrasSectionMixin:
             item = catalog_by_id.get(entry.get("item_id"), {"id": entry.get("item_id", "")})
             tile = _DropTile(item, entry.get("rate", 0), entry.get("qty", 1))
             tile.remove_requested.connect(self._on_remove_drop)
+            tile.open_requested.connect(self.item_open_requested.emit)
             self._drops_row.insertWidget(self._drops_row.count() - 1, tile)
 
         total = len(self._drops)
@@ -354,6 +350,7 @@ class ExtrasSectionMixin:
             skill, unlinked = self._resolve_ability(entry)
             tile = _AbilityTile(i, skill, unlinked=unlinked)
             tile.remove_requested.connect(self._on_remove_ability)
+            tile.open_requested.connect(self.ability_open_requested.emit)
             self._abilities_container.addWidget(tile)
         has_abilities = bool(self._abilities)
         self._abilities_scroll.setVisible(has_abilities)
@@ -427,11 +424,8 @@ class ExtrasSectionMixin:
             if item.widget():
                 item.widget().deleteLater()
         query = self._asset_search_edit.text().strip().lower()
-        type_filter = self._asset_type_filter.currentData() or ""
         for asset in self._assets:
             if query and query not in (asset.get("name") or "").lower():
-                continue
-            if type_filter and asset.get("asset_type") != type_filter:
                 continue
             card = _AssetCard(asset)
             card.delete_requested.connect(self._on_delete_asset)

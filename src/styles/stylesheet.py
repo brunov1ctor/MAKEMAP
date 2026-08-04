@@ -172,13 +172,19 @@ def build_stylesheet() -> str:
         border: none;
     }}
 
-    /* --- ToolTip --- */
+    /* --- ToolTip ---
+       Fundo sólido (sem alpha) de propósito — QToolTip é uma janela
+       top-level separada (Qt::ToolTip) que o Qt não marca como
+       translúcida por conta própria; um background-color com rgba(...)
+       aqui rendeririza errado no Windows (aparece como caixa preta em vez
+       do azul-marinho glass pretendido), mesmo bug já corrigido no popup
+       do QComboBox (ver stylesheet.py, regra QComboBox QAbstractItemView). */
     QToolTip {{
-        background-color: rgba(20, 32, 55, 0.92);
+        background-color: {Colors.BG_ELEVATED};
         color: {Colors.TEXT_PRIMARY};
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        border-radius: 10px;
-        padding: 8px 12px;
+        border: 1px solid {Colors.BORDER};
+        border-radius: 8px;
+        padding: 6px 10px;
         font-size: 11px;
     }}
 
@@ -219,11 +225,11 @@ def build_stylesheet() -> str:
     }}
 
     QComboBox QAbstractItemView {{
-        background-color: rgba(20, 32, 55, 0.92);
+        background-color: {Colors.BG_ELEVATED};
         color: {Colors.TEXT_PRIMARY};
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        border: 1px solid {Colors.BORDER};
         border-radius: 8px;
-        selection-background-color: rgba(36, 58, 94, 0.80);
+        selection-background-color: {Colors.ACCENT_DIM};
         selection-color: {Colors.ACCENT};
     }}
 

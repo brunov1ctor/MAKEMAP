@@ -30,6 +30,7 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 
 from src.styles.tokens import Colors
+from src.components.live_splitter import LiveSplitter
 from src.services.project_assets import import_asset, resolve_asset_path
 from src.layouts.panels.mobs.categories import item_rarity_color
 from src.layouts.panels.items.constants import (
@@ -164,6 +165,7 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none; font-size: 14px; border-radius: 14px; }}
             QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
@@ -191,10 +193,9 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
         self._item_preview = ItemPreview()
         self._item_preview.image_dropped.connect(self._item_editor._on_image_set)
 
-        self._items_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._items_splitter = LiveSplitter(Qt.Orientation.Horizontal)
         self._items_splitter.setChildrenCollapsible(False)
         self._items_splitter.setHandleWidth(8)
-        self._items_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
         self._items_splitter.addWidget(self._item_list)
         self._items_splitter.addWidget(self._item_editor)
         self._items_splitter.addWidget(self._item_preview)
@@ -222,10 +223,9 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
             project_dir=self._project_dir,
         )
 
-        self._skills_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._skills_splitter = LiveSplitter(Qt.Orientation.Horizontal)
         self._skills_splitter.setChildrenCollapsible(False)
         self._skills_splitter.setHandleWidth(8)
-        self._skills_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
         self._skills_splitter.addWidget(self._skill_list)
         self._skills_splitter.addWidget(self._skill_editor)
         self._skills_splitter.addWidget(self._skill_tree)
@@ -242,14 +242,13 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
             w.setMinimumWidth(250)
 
         # ── Vertical stack ──
-        self._rows_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._rows_splitter = LiveSplitter(Qt.Orientation.Vertical)
         # Collapsible=True aqui (diferente dos splitters de coluna acima) —
         # arrastar o divisor até o topo ou o fim esconde Itens ou
         # Habilidades por completo, em vez de parar na largura mínima de
         # cada linha.
         self._rows_splitter.setChildrenCollapsible(True)
         self._rows_splitter.setHandleWidth(8)
-        self._rows_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
         self._rows_splitter.addWidget(self._items_splitter)
         self._rows_splitter.addWidget(self._skills_splitter)
         self._rows_splitter.splitterMoved.connect(lambda p, i: self._on_splitter_moved(self._rows_splitter, p, i))
@@ -392,6 +391,16 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
     def _on_close_clicked(self):
         self.flush_pending_saves()
         self.closed.emit()
+
+    # ─── Public API — jump straight to a specific item/skill, e.g. from a
+    # Mob's Drops Principais / Habilidades tile click (see
+    # MenuViewMediator._open_catalog_entry) ───
+
+    def select_item(self, item_id: str):
+        self._reload_items(select_id=item_id)
+
+    def select_skill(self, skill_id: str):
+        self._reload_skills(select_id=skill_id)
 
     def _on_item_selected(self, item_id: str):
         self._flush_item_save()

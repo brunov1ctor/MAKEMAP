@@ -23,7 +23,12 @@ class MarkerToolPanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedWidth(self.PANEL_WIDTH)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Maximum)
+        # Expanding (not Maximum) — this panel is registered with
+        # PanelManager as fill_height=True (see main_layout.py), so it's
+        # actually given the full available toolbar-panel height; Maximum
+        # would have fought that by capping back to sizeHint(), same class
+        # of bug the icon grid itself had (see IconPicker's `fill` docstring).
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
         self._icon = ICONS[0]
@@ -45,6 +50,7 @@ class MarkerToolPanel(QFrame):
         close_btn.setText("✕")
         close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_SECONDARY}; background: transparent; }}
@@ -69,10 +75,10 @@ class MarkerToolPanel(QFrame):
         """)
         layout.addWidget(icons_label)
 
-        self._icon_picker = IconPicker(ICONS, button_size=34, max_height=170)
+        self._icon_picker = IconPicker(ICONS, button_size=34, max_height=170, fill=True)
         self._icon_picker.set_checked(self._icon)
         self._icon_picker.icon_picked.connect(self._on_icon_clicked)
-        layout.addWidget(self._icon_picker)
+        layout.addWidget(self._icon_picker, 1)
 
     def _on_icon_clicked(self, icon: str):
         self._icon = icon

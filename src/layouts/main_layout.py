@@ -13,6 +13,7 @@ from src.layouts.panels.toolbar import CanvasToolbar
 from src.layouts.panels.select_panel import SelectToolPanel
 from src.layouts.panels.explorer import ExplorerPanel
 from src.layouts.panels.canvas_area import CanvasArea
+from src.layouts.panels.background_panel import BackgroundPanel
 from src.layouts.panels.inspector import InspectorPanel, QuestPanel, LayersPanel
 from src.layouts.panels.progression import ProgressionBar
 from src.layouts.panels.status_bar import StatusBar
@@ -58,6 +59,7 @@ class MainLayout(QWidget):
         self.select_panel.close_requested.connect(self._close_select_panel)
         self.select_panel.layers_changed.connect(self.canvas.engine.selection.set_layer_filter)
         self.select_panel.color_changed.connect(self.canvas.engine.transform.set_selection_color)
+        self.select_panel.content_changed.connect(self._reposition)
 
         # ═══ Mediators ═══
         # Every other panel (Brush/AssetBrowser, Grid, Terrain, Região/
@@ -81,6 +83,16 @@ class MainLayout(QWidget):
         # l._region_med.zones_list/zone_thumbnail.
         self._menu_med = MenuViewMediator(self)
 
+        # "Plano de Fundo" — a plain toolbar toggle (see CanvasToolbar's
+        # "__view__"-adjacent entry / _on_toolbar_action below) rather than
+        # its own mediator, since all it needs is wiring background_changed
+        # straight to TerrainMediator.on_background (after _terrain_med
+        # exists, above) — no canvas-engine state of its own to own.
+        self.background_panel = BackgroundPanel(self)
+        self.background_panel.hide()
+        self.background_panel.close_requested.connect(self._close_background_panel)
+        self.background_panel.background_changed.connect(self._terrain_med.on_background)
+
         # ═══ Panel Manager ═══
         self._panel_mgr = PanelManager(self)
         self._panel_mgr.register(
@@ -94,6 +106,9 @@ class MainLayout(QWidget):
         )
         self._panel_mgr.register(
             "Terrain", self.terrain_panel,
+        )
+        self._panel_mgr.register(
+            "Background", self.background_panel,
         )
         self._panel_mgr.register(
             "Region", self.region_panel,
@@ -112,7 +127,14 @@ class MainLayout(QWidget):
         self._panel_mgr.register(
             "Text", self.text_panel, on_hide=self._text_med._close_color_customize,
         )
-        self._panel_mgr.register("Marcador", self.marker_panel)
+        # fill_height=True — same treatment as Brush: PanelManager gives
+        # this the full available toolbar-panel height directly instead of
+        # computing it from generic _content_height(), which (for this
+        # panel specifically) would measure the icon grid's full unscrolled
+        # content height regardless of IconPicker's own fixed/expanding
+        # sizing, leaving a large empty gap between the hint text and the
+        # icon grid that never actually grew to fill it.
+        self._panel_mgr.register("Marcador", self.marker_panel, fill_height=True)
         self._panel_mgr.register("MarcadorEdit", self.marker_edit_panel)
         self._panel_mgr.register("Light", self.light_panel)
         self._panel_mgr.register("LightEdit", self.light_edit_panel)
@@ -186,6 +208,7 @@ class MainLayout(QWidget):
         self.floating.register("brush_panel", self.brush_panel)
         self.floating.register("grid_panel", self.grid_panel)
         self.floating.register("terrain_panel", self.terrain_panel)
+        self.floating.register("background_panel", self.background_panel)
         self.floating.register("region_panel", self.region_panel)
         self.floating.register("select_panel", self.select_panel)
         self.floating.register("text_panel", self.text_panel)
@@ -370,6 +393,7 @@ class MainLayout(QWidget):
             "Terreno": self._toggle_terrain_panel,
             "Região": self._toggle_region_panel,
             "Iluminação": self._toggle_light_panel,
+            "Plano de Fundo": self._toggle_background_panel,
             "Undo": self.canvas.engine.history.undo,
             "Redo": self.canvas.engine.history.redo,
         }
@@ -412,6 +436,16 @@ class MainLayout(QWidget):
     def _close_terrain_panel(self):
         self._panel_mgr.hide("Terrain")
         self.canvas_toolbar.uncheck_action("Terreno")
+        self._reposition()
+
+    # ─── Plano de Fundo Panel ───
+
+    def _toggle_background_panel(self):
+        self._toggle_panel_exclusive("Background")
+
+    def _close_background_panel(self):
+        self._panel_mgr.hide("Background")
+        self.canvas_toolbar.uncheck_action("Plano de Fundo")
         self._reposition()
 
     # ─── Região Panel ───

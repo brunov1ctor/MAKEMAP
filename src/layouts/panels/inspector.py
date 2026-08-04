@@ -370,6 +370,24 @@ class InspectorPanel(CollapsiblePanel):
         self._ia_tab.set_data(data)
         self._outros_tab.set_data(data)
 
+    def set_npc(self, npc: dict, pixmap: QPixmap | None = None, region_name: str = ""):
+        """NPC equivalent of set_mob — reuses the same 4 tabs (their specs
+        were written for mob columns, so fields with no npc equivalent, e.g.
+        "Elemento"/"Tipo de IA", just render blank via _InfoTab.set_data's
+        missing-key handling). No drops/abilities — npcs has neither
+        column."""
+        self.header.set_element(
+            name=npc.get("name", ""), type_=f"NPC • {npc.get('npc_type', '')}".rstrip(" •"),
+            level=str(npc.get("level") or ""), tags=npc.get("subcategory", ""),
+            icon="🧙", pixmap=pixmap, category=npc.get("category", ""),
+        )
+        data = dict(npc)
+        data["_zone_name"] = region_name
+        self._geral_tab.set_data(data, drops=[], abilities=[])
+        self._atributos_tab.set_data(data)
+        self._ia_tab.set_data(data)
+        self._outros_tab.set_data(data)
+
     def clear(self):
         self.header.set_element()
         self._clear_tabs()
@@ -457,6 +475,7 @@ class _LayerItem(QFrame):
         vis.setFixedSize(16, 16)
         vis.setCheckable(True)
         vis.setChecked(True)
+        vis.setToolTip("Mostrar/ocultar camada")
         vis.setStyleSheet(f"""
             QToolButton {{ border: none; font-size: 9px; color: {Colors.TEXT_MUTED}; background: transparent; }}
             QToolButton:checked {{ color: {Colors.ACCENT}; }}
@@ -467,6 +486,7 @@ class _LayerItem(QFrame):
         lock.setText("🔓")
         lock.setFixedSize(16, 16)
         lock.setCheckable(True)
+        lock.setToolTip("Bloquear/desbloquear camada")
         lock.setStyleSheet(f"""
             QToolButton {{ border: none; font-size: 9px; color: {Colors.TEXT_MUTED}; background: transparent; }}
             QToolButton:checked {{ color: {Colors.WARNING}; }}
@@ -509,6 +529,7 @@ class LayersPanel(CollapsiblePanel):
         add_btn = QToolButton()
         add_btn.setText("+")
         add_btn.setFixedSize(18, 18)
+        add_btn.setToolTip("Adicionar camada")
         add_btn.setStyleSheet(f"""
             QToolButton {{ border: none; font-size: 11px; color: {Colors.ACCENT}; background: transparent; border-radius: 4px; }}
             QToolButton:hover {{ background: {Colors.ACCENT_DIM}; }}

@@ -412,6 +412,7 @@ class NPCListRow(QFrame):
         menu_btn.setFixedSize(20, 20)
         menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu_btn.setToolTip("Mais opções")
         menu_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 13px; font-weight: bold;
                 color: {Colors.TEXT_SECONDARY}; background: transparent; }}

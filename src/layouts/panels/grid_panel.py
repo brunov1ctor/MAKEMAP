@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
 
-from src.styles.tokens import Colors, Typography
+from src.styles.tokens import Colors, Typography, combo_popup_qss
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.stepper import NumberStepper
 
@@ -77,6 +77,7 @@ class GridSettingsPanel(QFrame):
         close_btn.setText("✕")
         close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QToolButton {{
                 border: none; border-radius: 4px; font-size: 11px;
@@ -114,10 +115,7 @@ class GridSettingsPanel(QFrame):
                 padding: 3px 8px; font-size: 10px;
             }}
             QComboBox::drop-down {{ border: none; width: 14px; }}
-            QComboBox QAbstractItemView {{
-                background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER}; selection-background-color: {Colors.ACCENT_DIM};
-            }}
+            {combo_popup_qss()}
         """)
         self.shape_combo.currentTextChanged.connect(self.shape_changed.emit)
         row.addWidget(self.shape_combo)

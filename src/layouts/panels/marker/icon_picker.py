@@ -6,7 +6,7 @@ past the panel's fixed width."""
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QWidget, QGridLayout, QToolButton, QButtonGroup, QScrollArea
+from PySide6.QtWidgets import QWidget, QGridLayout, QToolButton, QButtonGroup, QScrollArea, QSizePolicy
 from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors
@@ -17,12 +17,26 @@ _COLUMNS = 6
 class IconPicker(QScrollArea):
     icon_picked = Signal(str)
 
-    def __init__(self, icons: list[str], button_size: int = 32, max_height: int = 150, parent=None):
+    def __init__(self, icons: list[str], button_size: int = 32, max_height: int = 150,
+                 fill: bool = False, parent=None):
+        """`fill=True` (MarkerToolPanel, which has nothing else competing
+        for vertical space) makes this grow to whatever room its container
+        actually gives it instead of a hard-capped `max_height` — so more
+        of the (currently 80+) icons show at once without scrolling on a
+        normal-sized window, scrolling only ever kicking in as real
+        overflow protection. `fill=False` (the default, used by
+        MarkerEditPanel where this sits among several OTHER fields)
+        keeps the original fixed-height behavior — a compact picker
+        that doesn't crowd out the fields below it."""
         super().__init__(parent)
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setFixedHeight(max_height)
+        if fill:
+            self.setMinimumHeight(max_height)
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        else:
+            self.setFixedHeight(max_height)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setStyleSheet(f"""
             QScrollArea {{ background: transparent; border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; }}

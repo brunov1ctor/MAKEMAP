@@ -309,6 +309,7 @@ class LightEditPanel(QFrame):
         close_btn.setText("✕")
         close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_SECONDARY}; background: transparent; }}
@@ -331,7 +332,7 @@ class LightEditPanel(QFrame):
                 font-size: {Typography.SIZE_XS}px;
             }}
             QComboBox QAbstractItemView {{
-                background: rgba(20, 32, 55, 0.95); border: 1px solid {Colors.BORDER};
+                background: {Colors.BG_ELEVATED}; border: 1px solid {Colors.BORDER};
                 color: {Colors.TEXT_PRIMARY};
             }}
         """)

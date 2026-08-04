@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, combo_popup_qss
 from src.services.project_assets import import_asset, resolve_asset_path
 from src.layouts.panels.brush.flow_layout import FlowLayout
 from src.layouts.panels.mobs.categories import ELEMENT_OPTIONS
@@ -35,8 +35,7 @@ class GridFilterMixin:
         combo.setStyleSheet(f"""
             QComboBox {{ background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
                 border-radius: 6px; padding: 4px 6px; color: {Colors.TEXT_PRIMARY}; font-size: 10px; min-width: 84px; }}
-            QComboBox QAbstractItemView {{ background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
-                selection-background-color: {Colors.ACCENT_DIM}; }}
+            {combo_popup_qss()}
         """)
         combo.currentIndexChanged.connect(lambda _i: self._apply_filters())
         combo._caption_widget = QLabel(f"{icon} {caption}")
@@ -106,8 +105,7 @@ class GridFilterMixin:
         self._sort_combo.setStyleSheet(f"""
             QComboBox {{ background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
                 border-radius: 6px; padding: 4px 10px; color: {Colors.TEXT_PRIMARY}; font-size: 10px; min-width: 130px; }}
-            QComboBox QAbstractItemView {{ background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
-                selection-background-color: {Colors.ACCENT_DIM}; }}
+            {combo_popup_qss()}
         """)
         for key, label in _SORT_OPTIONS:
             self._sort_combo.addItem(label, key)

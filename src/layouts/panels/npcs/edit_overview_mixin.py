@@ -1,15 +1,21 @@
 """OverviewSectionMixin — "Informações Gerais" (portrait, Nome/Título/Tipo/
-Facção/Região/Sub-região/Nível/Vida/Mana, Descrição) plus a second small
-section builder for "Posição no Mundo" (X/Y/Z). Mixed into NPCEditPanel (see
-npc_edit_panel.py) — operates on self.* attributes NPCEditPanel owns; not
-meant to be instantiated on its own.
+Categoria/Facção/Região/Sub-região/Nível/Vida/Mana, Descrição). Mixed into
+NPCEditPanel (see npc_edit_panel.py) — operates on self.* attributes
+NPCEditPanel owns; not meant to be instantiated on its own.
 
-Deviation from the Mob template: NPCs don't get a category-folder combo here
-— npcs.category (the folder-tree column, same free-text/no-FK pattern as
-mobs.category) is owned by the NPCsPanel sidebar explorer being built
-separately, not by this edit form. "Tipo" instead binds straight to the
-plain npc_type column via a fixed-options combo, so this file never needs to
-import the (concurrently-authored) npcs/categories.py.
+"Categoria" (npcs.category, the real folder-tree column populated from
+npc_categories — Mercadores/Hostis/Aliados/Figurante by default, see
+npcs/categories.py) now has its own combo here, same as Mobs' template —
+an earlier version of this file deliberately left it out (category
+assignment via the sidebar/grid only), but that made it impossible to see
+or change an NPC's category from its own edit form at all. "Tipo" is a
+separate, unrelated field (the plain npc_type column — Mercador/Guardião/
+Civil/... — an NPC's role/profession, not its category) and stays exactly
+as it was.
+
+"Posição no Mundo" (X/Y/Z) used to be its own second section builder here —
+it now lives inside ExtrasSectionMixin's "Informações Extras" instead (see
+edit_extras_mixin.py), folded in alongside Configurações Adicionais.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 
 from src.styles.tokens import Colors
-from src.layouts.panels.mobs.edit_helpers import _spin, _dspin, _hr, _stat_row, _field_row
+from src.layouts.panels.mobs.edit_helpers import _spin, _hr, _stat_row
 from src.layouts.panels.mobs.edit_widgets import _DropImageButton
 
 logger = logging.getLogger("MAKEMAP")
@@ -118,11 +124,25 @@ class OverviewSectionMixin:
 
         self._title_edit = QLineEdit()
         self._title_edit.setPlaceholderText("Ex: Ferreiro da Vila")
-        self._npc_type_combo = QComboBox()
-        self._npc_type_combo.addItems(NPC_TYPE_OPTIONS)
-        self._npc_type_combo.currentIndexChanged.connect(self._refresh_type_badge)
+        # Free text, not a fixed-options combo — an NPC's role/profession
+        # is too open-ended for a short preset list (unlike Categoria,
+        # which really is a closed set of folders).
+        self._npc_type_edit = QLineEdit()
+        self._npc_type_edit.setPlaceholderText("Ex: Mercador")
+        self._npc_type_edit.textChanged.connect(self._refresh_type_badge)
         info_lay.addLayout(_stat_row([
-            ("Título", self._title_edit), ("Tipo", self._npc_type_combo),
+            ("Título", self._title_edit), ("Tipo", self._npc_type_edit),
+        ]))
+        info_lay.addWidget(_hr())
+
+        # Populated by set_category_options() from the live category folder
+        # tree (NPCsPanel._reload_categories) — not built statically here
+        # since folders are user-created/persisted, not a fixed list. See
+        # this mixin's own docstring for why this exists (vs. "Tipo" above).
+        self._category_combo = QComboBox()
+        self._level_spin = _spin(1, 999, 1)
+        info_lay.addLayout(_stat_row([
+            ("Categoria", self._category_combo), ("Nível", self._level_spin),
         ]))
         info_lay.addWidget(_hr())
 
@@ -143,19 +163,6 @@ class OverviewSectionMixin:
         info_lay.addLayout(_stat_row([
             ("Região", self._zone_combo), ("Sub-região", self._subcategory_edit),
         ]))
-        info_lay.addWidget(_hr())
-
-        self._level_spin = _spin(1, 999, 1)
-        self._level_min_spin = _spin(1, 999, 1)
-        self._level_max_spin = _spin(1, 999, 1)
-        info_lay.addLayout(_stat_row([
-            ("Nível", self._level_spin),
-        ]))
-        lvl_range_row = QHBoxLayout()
-        lvl_range_row.setSpacing(6)
-        lvl_range_row.addLayout(_field_row("Nível recomendado (min)", self._level_min_spin))
-        lvl_range_row.addLayout(_field_row("Nível recomendado (max)", self._level_max_spin))
-        info_lay.addLayout(lvl_range_row)
         info_lay.addWidget(_hr())
 
         self._health_spin = _spin(0, 9_999_999, 100)
@@ -192,32 +199,8 @@ class OverviewSectionMixin:
         outer.addStretch()
         return w
 
-    def _build_position_section(self) -> QWidget:
-        """Posição no Mundo — X/Y/Z, split out as its own collapsible
-        section (see NPCEditPanel._build_ui) so it doesn't crowd the
-        Informações Gerais card with world-placement fields that are mostly
-        set by the Spawn tool on the canvas, not typed by hand."""
-        w = QWidget()
-        outer = QVBoxLayout(w)
-        outer.setSpacing(8)
-
-        self._pos_x_spin = _dspin(-999999.0, 999999.0, 0.0)
-        self._pos_y_spin = _dspin(-999999.0, 999999.0, 0.0)
-        self._pos_z_spin = _dspin(-999999.0, 999999.0, 0.0)
-        for spin_w in (self._pos_x_spin, self._pos_y_spin, self._pos_z_spin):
-            spin_w.setDecimals(2)
-
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        row.addLayout(_field_row("X", self._pos_x_spin))
-        row.addLayout(_field_row("Y", self._pos_y_spin))
-        row.addLayout(_field_row("Z", self._pos_z_spin))
-        outer.addLayout(row)
-        outer.addStretch()
-        return w
-
     def _refresh_type_badge(self):
-        self._type_badge.setText(f"🧙 {self._npc_type_combo.currentText()}")
+        self._type_badge.setText(f"🧙 {self._npc_type_edit.text().strip() or NPC_TYPE_OPTIONS[0]}")
 
     def _refresh_thumb(self):
         if self._thumb_pixmap is not None:
@@ -275,3 +258,30 @@ class OverviewSectionMixin:
                 idx = i
         self._zone_combo.setCurrentIndex(idx)
         self._zone_combo.blockSignals(False)
+
+    def set_category_options(self, categories: list[dict]):
+        """Repopulates the Categoria combo from the live category folder
+        tree (NPCsPanel._reload_categories) — indented by depth so the
+        hierarchy still reads even as a flat dropdown list. Called on every
+        reload and every category CRUD, mirroring MobEditPanel's own
+        set_category_options / NPCsPanel._refresh_category_filter_combo's
+        tree-walk."""
+        current = self._category_combo.currentData()
+        self._category_combo.blockSignals(True)
+        self._category_combo.clear()
+
+        by_parent: dict[str | None, list[dict]] = {}
+        for c in categories:
+            by_parent.setdefault(c.get("parent_id"), []).append(c)
+
+        def add_level(parent_id, depth):
+            siblings = sorted(by_parent.get(parent_id, []), key=lambda c: (c.get("sort_order") or 0, c["name"]))
+            for c in siblings:
+                prefix = ("    " * depth) + ("↳ " if depth else "")
+                self._category_combo.addItem(f"{prefix}{c.get('icon') or '🧙'} {c['name']}", c["id"])
+                add_level(c["id"], depth + 1)
+
+        add_level(None, 0)
+        idx = self._category_combo.findData(current)
+        self._category_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._category_combo.blockSignals(False)

@@ -1,11 +1,12 @@
 """NPC category / filter definitions shared by the panel, card and edit
 widgets — kept in one place so labels/icons never drift between them.
 
-Mirrors src/layouts/panels/mobs/categories.py; unlike mob_categories,
-npc_categories has no seed data (migration 27 creates the table but inserts
-nothing) — every category folder here is created by the user from scratch
-via the CATEGORIAS explorer, so there's no fixed CATEGORY_DEFS list to keep
-as a record of seeded rows.
+Mirrors src/layouts/panels/mobs/categories.py — migration 28 seeds 4 preset
+root folders (Mercadores/Hostis/Aliados/Figurante) with colors, covering the
+common NPC archetypes directly instead of Mobs' own difficulty-ladder idea
+(migration 16/22/23) or a borrowed rarity/reaction scale. Users can still
+freely add/rename/delete categories via the CATEGORIAS explorer, same as
+mobs.
 """
 
 from __future__ import annotations
@@ -25,12 +26,12 @@ def set_category_lookup(categories: list[dict]):
     _category_lookup = {c["id"]: c for c in categories}
 
 
-# An npc with no category assigned yet (category = '' per the npcs.category
-# DB default, migration 27) falls back to this — mirrors mob's DEFAULT_
-# CATEGORY_ID, but there's no seeded folder with this id for npcs, so it
-# only ever resolves via category_label/category_icon's own "not found"
-# fallbacks below.
-DEFAULT_CATEGORY_ID = "outros"
+# An npc with no category assigned yet falls back to this — migration 28
+# seeds 4 real preset folders (Mercadores/Hostis/Aliados/Figurante) and
+# backfills existing NPCs onto "figurante" (the generic/unremarkable
+# background-character default), same "default category = the first
+# sensible tier" convention mobs/categories.py uses for "normal".
+DEFAULT_CATEGORY_ID = "figurante"
 
 # Separate loot-tier scale (items.rarity, npc_assets.rarity) — items already
 # existed with this DEFAULT 'common' before the NPCs panel existed, so this

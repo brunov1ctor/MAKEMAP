@@ -49,7 +49,10 @@ class TerrainMediator:
         panel.terrain_added.connect(self.on_added)
         panel.terrain_removed.connect(self.on_removed)
         panel.terrain_selected.connect(self.on_selected)
-        panel.background_changed.connect(self.on_background)
+        # "Plano de Fundo" moved out of this panel into its own top-bar menu
+        # (BackgroundMenuPanel, see menu_panels.py) — MenuViewMediator wires
+        # that panel's background_changed straight to self.on_background
+        # each time it's opened, instead of this panel re-emitting it.
         # Only Região/Brush listened to this before (for their own "which
         # terrain" dropdowns) — TerrainMediator itself needs it too now, to
         # persist a rename.

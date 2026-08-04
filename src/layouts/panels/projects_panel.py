@@ -395,6 +395,7 @@ class ProjectsPanel(QWidget):
 
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(24, 24)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; "
             f"border: none; font-size: 14px; border-radius: 12px; }}"

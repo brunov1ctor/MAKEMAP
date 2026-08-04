@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from src.styles.tokens import Colors
+from src.components.live_splitter import LiveSplitter
 from src.layouts.panels.npcs.categories import set_category_lookup
 from src.layouts.panels.npcs.panel_widgets import _SidebarRow
 from src.layouts.panels.npcs.category_edit_panel import CategoryEditPanel
@@ -56,10 +57,9 @@ class CategoryExplorerMixin:
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        browse_splitter = QSplitter(Qt.Orientation.Vertical)
+        browse_splitter = LiveSplitter(Qt.Orientation.Vertical)
         browse_splitter.setChildrenCollapsible(False)
         browse_splitter.setHandleWidth(10)
-        browse_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
         browse_splitter.addWidget(self._build_sidebar())
         browse_splitter.addWidget(self._build_summary_card())
         browse_splitter.setStretchFactor(0, 2)
@@ -301,6 +301,11 @@ class CategoryExplorerMixin:
         self._all_categories = all_categories
         set_category_lookup(all_categories)
         self._refresh_category_filter_combo(all_categories)
+        # Keeps the edit panel's own Categoria combo (Informações Gerais)
+        # in sync too — called here, the single source every category CRUD
+        # handler already routes through, instead of duplicating this call
+        # at each of those call sites.
+        self._edit_panel.set_category_options(all_categories)
         self._refresh_explorer()
         logger.info("Categorias recarregadas: %d no total", len(all_categories))
         return all_categories
@@ -366,7 +371,6 @@ class CategoryExplorerMixin:
             cat_id = self._uow.npc_categories.create(parent_id=data["parent_id"], **fields)
             logger.info("Categoria criada: id=%s nome='%s' pai=%s", cat_id, data["name"], data["parent_id"])
         categories = self._reload_categories()
-        self._edit_panel.set_category_options(categories)
         # A leftover search filter that doesn't match the new/renamed
         # category would otherwise hide it right after saving — looking
         # exactly like it silently failed. Clearing it (which itself
@@ -411,8 +415,7 @@ class CategoryExplorerMixin:
         if not self._uow:
             return
         self._uow.npc_categories.update(key, name=new_name)
-        categories = self._reload_categories()
-        self._edit_panel.set_category_options(categories)
+        self._reload_categories()
         # The grid's rarity chip text is category_label(category) — a
         # rename needs the same grid rebuild as a color change (see
         # _on_category_editor_save) or every npc card keeps showing the
@@ -441,7 +444,6 @@ class CategoryExplorerMixin:
             self._nav_history = [None]
             self._nav_index = 0
         categories = self._reload_categories()
-        self._edit_panel.set_category_options(categories)
         self._apply_filters()
         logger.info("Categoria excluída: id=%s (cascata: %d)", key, before - len(categories))
         return True

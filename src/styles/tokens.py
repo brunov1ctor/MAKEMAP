@@ -89,3 +89,21 @@ class Animation:
     DURATION_NORMAL = 200
     DURATION_SLOW = 350
     EASING = "QEasingCurve.Type.OutCubic"
+
+
+def combo_popup_qss(border: str = Colors.BORDER) -> str:
+    """Shared QComboBox popup (QAbstractItemView) rule. Every panel styles
+    its own QComboBox face differently (compact filter rows, inline layer
+    combos, full-size form combos, ...) and that's legitimate — but each one
+    used to hand-copy the *popup* rule too, and copies drifted apart (some
+    missing a border, some using BORDER_SUBTLE vs BORDER, mismatched colors).
+    Popups are separate top-level windows in Qt, so the popup's background
+    must stay fully opaque (Colors.BG_ELEVATED, no alpha) — a translucent
+    rgba() here renders as a garbled wrong color on Windows, since the popup
+    window isn't marked translucent. Reuse this in every local
+    _combo_style()/inline QComboBox stylesheet instead of retyping it."""
+    return (
+        f"QComboBox QAbstractItemView {{ background: {Colors.BG_ELEVATED}; "
+        f"color: {Colors.TEXT_PRIMARY}; border: 1px solid {border}; "
+        f"selection-background-color: {Colors.ACCENT_DIM}; }}"
+    )

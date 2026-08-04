@@ -151,6 +151,7 @@ class EditableRowList(QWidget):
         remove.setText("✕")
         remove.setFixedSize(20, 20)
         remove.setCursor(Qt.CursorShape.PointingHandCursor)
+        remove.setToolTip("Remover")
         remove.setStyleSheet(f"""
             QToolButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none; font-size: 10px; }}
             QToolButton:hover {{ color: {Colors.ERROR}; }}

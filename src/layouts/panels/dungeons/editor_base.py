@@ -41,7 +41,11 @@ class SectionEditor(QFrame):
         self.setObjectName("subpanel")
         self.setStyleSheet(panel_frame_style() + _INPUT_STYLE)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumWidth(260)
+        # THUMB (150px) + header spacing/margins (~44px) alone eat most of a
+        # 260px floor, leaving the name/subtitle column too narrow to wrap
+        # without visually colliding — 320px keeps a reasonable ~120px+ for
+        # text next to the fixed-size thumbnail.
+        self.setMinimumWidth(320)
         self._fallback_icon = fallback_icon
         self._sections: list[CollapsibleSection] = []
         # Guarda os sinais dos campos enquanto um registro está sendo
@@ -72,6 +76,12 @@ class SectionEditor(QFrame):
             f"background: transparent; border: none;"
         )
         self._sub_lbl = QLabel("")
+        # Sem isso, uma legenda longa ("Escolha uma na lista ao lado ou
+        # crie uma nova.") não quebra linha como o título logo acima
+        # (_name_lbl) — ela só transborda/sobrepõe o resto do cabeçalho
+        # quando a coluna do editor fica estreita (ver setMinimumWidth
+        # abaixo), em vez de empurrar a altura do cabeçalho pra baixo.
+        self._sub_lbl.setWordWrap(True)
         self._sub_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px; background: transparent; border: none;")
         self._desc_lbl = QLabel("")
         self._desc_lbl.setWordWrap(True)

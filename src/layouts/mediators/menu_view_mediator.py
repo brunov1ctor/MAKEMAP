@@ -49,7 +49,7 @@ class MenuViewMediator:
         return [
             l.canvas_toolbar, l.brush_panel,
             l.grid_panel, l.terrain_panel, l.region_panel, l.select_panel,
-            l.text_panel,
+            l.text_panel, l.background_panel,
             l._left_container, l._right_scroll, l.progression, l.compass,
             l.compass_hud, l.minimap,
         ]
@@ -77,6 +77,14 @@ class MenuViewMediator:
             self._menu_container.hide()
             self._menu_container.deleteLater()
             self._menu_container = None
+
+        # Background panel closed "properly" (unchecks its toolbar toggle
+        # too) instead of the raw .hide() below every other canvas widget
+        # gets — otherwise the toolbar button stayed checked while the
+        # panel itself was force-hidden, and returning to Mapa force-showed
+        # it again regardless of that button's state (see _hide_menu_view's
+        # exclusion tuple).
+        l._close_background_panel()
 
         for w in self._canvas_widgets():
             w.hide()
@@ -118,6 +126,12 @@ class MenuViewMediator:
                 project_dir=project_dir, parent=container,
             )
             panel.closed.connect(self._hide_menu_view)
+            panel.item_open_requested.connect(
+                lambda item_id: self._open_catalog_entry("Itens", select_item=item_id)
+            )
+            panel.ability_open_requested.connect(
+                lambda skill_id: self._open_catalog_entry("Itens", select_skill=skill_id)
+            )
             layout.addWidget(panel)
         elif menu_name == "NPCs":
             from src.layouts.panels.npcs.panel import NPCsPanel
@@ -130,6 +144,9 @@ class MenuViewMediator:
                 project_dir=project_dir, parent=container,
             )
             panel.closed.connect(self._hide_menu_view)
+            panel.item_open_requested.connect(
+                lambda item_id: self._open_catalog_entry("Itens", select_item=item_id)
+            )
             layout.addWidget(panel)
         elif menu_name == "Itens":
             from src.layouts.panels.items.panel import ItemsSkillsPanel
@@ -170,6 +187,18 @@ class MenuViewMediator:
         container.raise_()
         l._reposition()
 
+    def _open_catalog_entry(self, menu_name: str, select_item: str | None = None, select_skill: str | None = None):
+        """Jump straight to a specific item/skill in the Itens e Habilidades
+        panel — e.g. a Mob's Drops Principais / Habilidades tile was
+        clicked. Switches the fullscreen view (if not already showing it)
+        then asks the freshly built panel to select the entry."""
+        self._show_menu_view(menu_name)
+        self._l.top_bar.set_active_menu(menu_name)
+        if select_item and hasattr(self._active_panel, "select_item"):
+            self._active_panel.select_item(select_item)
+        if select_skill and hasattr(self._active_panel, "select_skill"):
+            self._active_panel.select_skill(select_skill)
+
     def _flush_active_panel(self):
         """Menu panels switch (or the whole app closes) without the
         panel's own close button ever being clicked — deleteLater() below
@@ -193,7 +222,7 @@ class MenuViewMediator:
         for w in self._canvas_widgets():
             if w in (l.brush_panel, l.grid_panel,
                      l.terrain_panel, l.region_panel, l.select_panel, l.text_panel,
-                     l.compass_hud):
+                     l.background_panel, l.compass_hud):
                 continue
             w.show()
         # Not part of the blanket show() above — its visibility rule is

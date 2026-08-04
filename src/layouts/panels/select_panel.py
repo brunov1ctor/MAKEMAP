@@ -6,7 +6,7 @@ BrushToolPanel is with "Brush" — a real panel, not a toolbar dropdown.
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QCheckBox, QSizePolicy,
+    QFrame, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QToolButton, QCheckBox, QSizePolicy,
     QScrollArea, QWidget,
 )
 from PySide6.QtCore import Qt, Signal
@@ -38,6 +38,7 @@ class SelectToolPanel(QFrame):
     layers_changed = Signal(object)  # set[str] | None (None = no filtering)
     color_changed = Signal(str)
     close_requested = Signal()
+    content_changed = Signal()  # emitted when visible content changes size (e.g. color picker expands)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -93,6 +94,7 @@ class SelectToolPanel(QFrame):
         close_btn.setText("✕")
         close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QToolButton {{
                 border: none; border-radius: 4px; font-size: 11px;
@@ -114,8 +116,17 @@ class SelectToolPanel(QFrame):
         hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 9pt; background: transparent; border: none;")
         layout.addWidget(hint)
 
+        # 2 columns instead of one long vertical stack — the panel is fixed
+        # at PANEL_WIDTH (190px), plenty for two short labels ("Terreno" +
+        # "Assets") side by side, and it cuts the checklist's height
+        # roughly in half.
+        checks_grid = QGridLayout()
+        checks_grid.setHorizontalSpacing(10)
+        checks_grid.setVerticalSpacing(4)
+        _CHECK_COLS = 2
+
         self._checks: dict[str, QCheckBox] = {}
-        for key, text in LAYER_ITEMS:
+        for i, (key, text) in enumerate(LAYER_ITEMS):
             cb = QCheckBox(text)
             cb.setChecked(True)
             cb.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -126,8 +137,9 @@ class SelectToolPanel(QFrame):
                 }}
             """)
             cb.toggled.connect(self._on_toggle)
-            layout.addWidget(cb)
+            checks_grid.addWidget(cb, i // _CHECK_COLS, i % _CHECK_COLS)
             self._checks[key] = cb
+        layout.addLayout(checks_grid)
 
         sep2 = QFrame()
         sep2.setFixedHeight(1)
@@ -139,6 +151,14 @@ class SelectToolPanel(QFrame):
         self.color_field = _ColorField("Cor da seleção")
         self.color_field.set_color(Colors.PURPLE)
         self.color_field.color_changed.connect(self.color_changed.emit)
+        # _ColorField's swatch click already expands/collapses its own
+        # inline HSV picker (see _ColorField._toggle) — but this panel's own
+        # geometry is fixed by PanelManager to whatever height its content
+        # needed at the time it was last laid out, so without re-triggering
+        # a layout pass here the newly-revealed picker just gets clipped by
+        # the panel's own (still-old) height instead of the panel actually
+        # growing to show it.
+        self.color_field.toggled.connect(self.content_changed.emit)
         layout.addWidget(self.color_field)
 
         scroll.setWidget(container)

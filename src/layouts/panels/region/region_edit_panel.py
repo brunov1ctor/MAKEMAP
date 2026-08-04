@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, combo_popup_qss
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.region.star_rating import StarRating
 from src.layouts.panels.collapsible_section import CollapsibleSection
@@ -95,6 +95,7 @@ class RegionEditPanel(QFrame):
         close_btn.setText("✕")
         close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_SECONDARY}; background: transparent; }}
@@ -277,10 +278,7 @@ class RegionEditPanel(QFrame):
                 padding: 3px 8px; font-size: 10px;
             }}
             QComboBox::drop-down {{ border: none; width: 14px; }}
-            QComboBox QAbstractItemView {{
-                background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER}; selection-background-color: {Colors.ACCENT_DIM};
-            }}
+            {combo_popup_qss()}
         """
 
     def _sep(self) -> QFrame:

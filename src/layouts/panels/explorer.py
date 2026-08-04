@@ -280,6 +280,7 @@ class ExplorerPanel(CollapsiblePanel):
         btn_x.setText("✕")
         btn_x.setFixedSize(18, 18)
         btn_x.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_x.setToolTip("Remover")
         btn_x.setStyleSheet(f"""
             QToolButton {{
                 border: none; border-radius: 9px; font-size: 10px;

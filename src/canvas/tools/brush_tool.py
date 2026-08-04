@@ -69,6 +69,15 @@ class BrushTool(BaseTool):
         (0.26, 13),
         (0.12, 17),
     )
+    # "cartoon" style water gets a different shoreline effect entirely — a
+    # few concentric wave lines hugging the coast (like a stylized map
+    # icon) instead of the realistic soft foam glow above, which reads as
+    # too photoreal next to flat cartoon terrain. See _blend_shoreline_pair
+    # (branches on the water asset's own `style`) and _wave_shoreline_image.
+    CARTOON_WAVE_RADII = (5, 12, 20, 29)   # px — distance of each wave line from the coast
+    CARTOON_WAVE_THICKNESS = 2             # px — stroke width of each wave line
+    CARTOON_WAVE_REACH = 40                # px — how far past the coast waves are allowed to show at all
+    CARTOON_WAVE_ALPHA = 215                # white, same as _alpha_stencil's fixed tint color
 
     def __init__(self, viewport: Viewport, brush_engine: BrushEngine,
                  asset_engine: AssetEngine = None, history_engine: HistoryEngine = None):
@@ -495,7 +504,15 @@ class BrushTool(BaseTool):
         (water, land) layer pair; a cheap scene-rect intersection test
         skips anything not actually near each other before any of the
         more expensive mask work runs."""
-        water_ids = [aid for aid in self._terrain_layers if self.is_water_asset(aid)]
+        # is_water_asset() alone would foam every water asset uniformly —
+        # fine for ocean/sea, wrong for a calm river. has_shore_foam() is
+        # the per-asset opt-out (see AssetEffectsPanel's "🌊 Maresia"
+        # toggle, only shown for water-category assets), default True so
+        # existing water assets keep looking exactly as before.
+        water_ids = [
+            aid for aid in self._terrain_layers
+            if self.is_water_asset(aid) and self._asset_engine.library.has_shore_foam(aid)
+        ]
         if not water_ids:
             return
         for water_id in water_ids:
@@ -532,6 +549,48 @@ class BrushTool(BaseTool):
         p.drawImage(0, 0, mask)
         p.end()
         return result
+
+    @staticmethod
+    def _mask_subtract(img: QImage, minus: QImage) -> QImage:
+        """A copy of `img` with its alpha punched out wherever `minus` is
+        opaque (DestinationOut) — "img, but not where minus is also
+        opaque". Used by _wave_shoreline_image to turn a filled dilated
+        blob into a thin annulus/shell (outer dilation minus inner
+        dilation = a ring right at that distance from the coast)."""
+        result = QImage(img)
+        p = QPainter(result)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
+        p.drawImage(0, 0, minus)
+        p.end()
+        return result
+
+    def _wave_shoreline_image(self, w_smooth: QImage, l_smooth: QImage) -> QImage | None:
+        """Cartoon-style shoreline effect: a few concentric thin wave
+        lines hugging the coast, instead of the realistic soft gradient
+        glow (see _blend_shoreline_pair, which picks between the two
+        based on the water asset's own `style`). Reuses the same
+        dilate/AND-mask primitives as the glow — each wave line is the
+        thin annulus/shell between two dilation radii of the water mask
+        (an "isoline" at that exact distance from the coast), kept only
+        where it's still close enough to land (CARTOON_WAVE_REACH) so
+        waves don't bleed out into open water far from any shore."""
+        l_reach = dilate(l_smooth, self.CARTOON_WAVE_REACH)
+        waves = QImage(w_smooth.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        waves.fill(QColor(0, 0, 0, 0))
+        wp = QPainter(waves)
+        any_content = False
+        for r in self.CARTOON_WAVE_RADII:
+            outer = dilate(w_smooth, r + self.CARTOON_WAVE_THICKNESS)
+            inner = dilate(w_smooth, r)
+            shell = self._mask_and(self._mask_subtract(outer, inner), l_reach)
+            if not self._image_has_opacity(shell):
+                continue
+            any_content = True
+            tinted = self._alpha_stencil(shell, self.CARTOON_WAVE_ALPHA)
+            wp.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            wp.drawImage(0, 0, tinted)
+        wp.end()
+        return waves if any_content else None
 
     @staticmethod
     def _alpha_stencil(ring: QImage, alpha: int) -> QImage:
@@ -578,6 +637,22 @@ class BrushTool(BaseTool):
         # only — the actual painted terrain keeps its organic edge.
         w_smooth = morphological_close(w_crop, self.SHORELINE_SMOOTH)
         l_smooth = morphological_close(l_crop, self.SHORELINE_SMOOTH)
+
+        # Cartoon-style water gets concentric wave lines instead of the
+        # realistic soft glow below — see _wave_shoreline_image. Checked
+        # per water asset (not per stroke/session) since different water
+        # assets painted in the same map can each have their own style.
+        library = getattr(self._asset_engine, "library", None)
+        is_cartoon = bool(library) and library.get_style(water_id) == "cartoon"
+        if is_cartoon:
+            foam = self._wave_shoreline_image(w_smooth, l_smooth)
+            if foam is None:
+                self._clear_shoreline_overlay(key)
+                return
+            overlay = self._get_or_create_shoreline_overlay(key)
+            overlay.setPixmap(QPixmap.fromImage(foam))
+            overlay.setPos(overlap_scene.topLeft())
+            return
 
         # Built from several nested dilate radii, largest/faintest first —
         # SourceOver painting order means each smaller, more opaque ring

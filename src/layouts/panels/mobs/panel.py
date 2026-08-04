@@ -31,6 +31,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 
 from src.styles.tokens import Colors
+from src.components.live_splitter import LiveSplitter
 from src.layouts.panels.mobs.mob_edit_panel import MobEditPanel
 from src.layouts.panels.mobs.panel_helpers import _stat_chip
 from src.layouts.panels.mobs.panel_category_mixin import CategoryExplorerMixin
@@ -49,6 +50,8 @@ class MobsPanel(
     """Fullscreen Mobs module — replaces the empty-state placeholder."""
 
     closed = Signal()
+    item_open_requested = Signal(str)  # item_id — bubbled from MobEditPanel tile click
+    ability_open_requested = Signal(str)  # skill_id — bubbled from MobEditPanel tile click
 
     # Left column / center grid / edit panel now live in a draggable
     # QSplitter (see _build_ui) instead of a plain QHBoxLayout, so the user
@@ -214,6 +217,7 @@ class MobsPanel(
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none; font-size: 14px; border-radius: 14px; }}
             QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
@@ -248,10 +252,9 @@ class MobsPanel(
         # the boundary between any two columns — each widget's own
         # minimumSizeHint (or explicit minimumWidth, for the edit panel)
         # is still the floor the splitter won't cross either way.
-        self._body_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._body_splitter = LiveSplitter(Qt.Orientation.Horizontal)
         self._body_splitter.setChildrenCollapsible(False)
         self._body_splitter.setHandleWidth(10)
-        self._body_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
 
         center_widget = QWidget()
         center_widget.setLayout(self._build_center())
@@ -262,6 +265,8 @@ class MobsPanel(
         self._edit_panel.delete_requested.connect(self._on_delete)
         self._edit_panel.asset_add_requested.connect(self._on_asset_add)
         self._edit_panel.asset_delete_requested.connect(self._on_asset_delete)
+        self._edit_panel.item_open_requested.connect(self.item_open_requested.emit)
+        self._edit_panel.ability_open_requested.connect(self.ability_open_requested.emit)
 
         # The right column is a stack: the normal mob edit panel, or (while
         # Importar/Exportar-as-template is active) the tools panel taking

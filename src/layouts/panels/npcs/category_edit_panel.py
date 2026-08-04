@@ -426,6 +426,7 @@ class CategoryEditPanel(QFrame):
         close_btn.setText("✕")
         close_btn.setFixedSize(20, 20)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_SECONDARY}; background: transparent; }}

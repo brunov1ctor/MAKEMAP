@@ -55,6 +55,7 @@ class _Pill(QWidget):
             self._close_btn.setText("✕")
             self._close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             self._close_btn.setFixedSize(14, 14)
+            self._close_btn.setToolTip("Excluir categoria")
             self._close_btn.setStyleSheet(f"""
                 QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 9px; }}
                 QToolButton:hover {{ color: {Colors.ERROR}; }}

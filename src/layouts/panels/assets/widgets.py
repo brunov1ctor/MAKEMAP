@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QFrame, QSizePolicy, QSlider, QToolButton, QFileDialog, QLineEdit,
 )
-from PySide6.QtCore import Qt, Signal, QUrl
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtCore import Qt, Signal, QUrl, QVariantAnimation, QEasingCurve, QTimer
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPainter, QColor, QConicalGradient
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 from src.styles.tokens import Colors
@@ -20,8 +20,7 @@ from src.styles.tokens import Colors
 _SUPPORTED_SND = {".wav", ".mp3", ".ogg", ".flac"}
 _SUPPORTED_IMG = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".mp4", ".webm", ".mov"}
 
-_SHARED_BORDER = "1px solid rgba(255, 183, 77, 0.9)"   # laranja para "compartilhado"
-_SHARED_BG     = "rgba(255, 183, 77, 0.08)"
+_GLOW_STEP_DEG = 6  # avanço do ângulo do glow circulante por tick do timer
 
 
 def _file_hash(path: str) -> str:
@@ -39,6 +38,14 @@ def _file_hash(path: str) -> str:
 class SoundRegistry:
     """Singleton que rastreia SoundColumns pelo hash do arquivo de som."""
     _hash_to_cols: ClassVar[dict[str, set[SoundColumn]]] = {}
+    _hash_to_color: ClassVar[dict[str, QColor]] = {}
+
+    @staticmethod
+    def _color_for_hash(file_hash: str) -> QColor:
+        """Cor determinística por grupo: mesmo arquivo = mesma cor sempre,
+        arquivos diferentes tendem a cores bem distintas (matiz varia com o hash)."""
+        hue = int(file_hash[:8], 16) % 360
+        return QColor.fromHsl(hue, 200, 140)
 
     @classmethod
     def register(cls, col: SoundColumn, file_hash: str):
@@ -66,10 +73,15 @@ class SoundRegistry:
     def _refresh_group(cls, file_hash: str):
         cols = {c for c in cls._hash_to_cols.get(file_hash, set()) if c._sound_hash == file_hash}
         shared = len(cols) > 1
+        color = cls._color_for_hash(file_hash) if shared else None
+        if shared:
+            cls._hash_to_color[file_hash] = color
+        else:
+            cls._hash_to_color.pop(file_hash, None)
         alive = set()
         for c in cols:
             try:
-                c._set_shared_style(shared)
+                c._set_shared_style(shared, color)
                 alive.add(c)
             except RuntimeError:
                 pass  # underlying widget already destroyed — drop the stale entry
@@ -81,6 +93,20 @@ class SoundRegistry:
         for c in list(cls._hash_to_cols.get(file_hash, set())):
             if c is not source:
                 c._apply_display_name(new_display)
+
+    @classmethod
+    def highlight_group(cls, file_hash: str, active: bool):
+        """Liga/desliga o glow neon circulante em todos os membros do grupo
+        (inclusive quem disparou o hover) — só tem efeito em grupos com
+        duplicata (>1 coluna registrada sob o mesmo hash)."""
+        cols = cls._hash_to_cols.get(file_hash, set())
+        if len(cols) < 2:
+            return
+        for c in list(cols):
+            try:
+                c._set_group_glow(active)
+            except RuntimeError:
+                pass
 
 
 class MiniSlider(QWidget):
@@ -125,6 +151,9 @@ class MiniSlider(QWidget):
     def value(self) -> int:
         return self._slider.value()
 
+    def set_value(self, value: int):
+        self._slider.setValue(value)
+
 
 class SoundColumn(QWidget):
     """Coluna de som: lê/escreve em asset_sounds no banco."""
@@ -137,9 +166,22 @@ class SoundColumn(QWidget):
         self._sound_hash: str = ""
         self._player: QMediaPlayer | None = None
         self._output: QAudioOutput | None = None
+        self._group_color: QColor | None = None
+        self._glow_alpha = 0.0
+        self._glow_phase = 0.0
         self.setStyleSheet("background: transparent; border: none;")
         self.setAcceptDrops(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.destroyed.connect(lambda: SoundRegistry.unregister_all(self))
+
+        self._glow_anim = QVariantAnimation(self)
+        self._glow_anim.setDuration(180)
+        self._glow_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._glow_anim.valueChanged.connect(self._on_glow_anim)
+
+        self._glow_timer = QTimer(self)
+        self._glow_timer.setInterval(40)
+        self._glow_timer.timeout.connect(self._advance_glow_phase)
 
         # carrega do banco
         saved_volume = 70
@@ -191,6 +233,7 @@ class SoundColumn(QWidget):
         self._clear_btn.setFixedSize(12, 12)
         self._clear_btn.move(20, 0)
         self._clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._clear_btn.setToolTip("Remover som")
         self._clear_btn.setStyleSheet(
             f"QToolButton {{ background: rgba(0,0,0,0.6); border: none; font-size: 6px; "
             f"color: {Colors.TEXT_MUTED}; border-radius: 6px; }}"
@@ -383,17 +426,73 @@ class SoundColumn(QWidget):
     def _on_name_dblclick(self, event):
         pass  # substituido por _toggle_rename
 
-    def _set_shared_style(self, shared: bool):
-        """Borda laranja quando o som é compartilhado com outro asset."""
-        if shared:
+    def _set_shared_style(self, shared: bool, color: QColor | None = None):
+        """Borda na cor do grupo quando o som é compartilhado com outro asset
+        — cada grupo de arquivo idêntico tem sua própria cor (SoundRegistry)."""
+        self._group_color = color if shared else None
+        if shared and color is not None:
+            border = color.toRgb()
+            bg = QColor(color)
             self._drop_frame.setStyleSheet(
-                f"QFrame {{ background: {_SHARED_BG}; border: {_SHARED_BORDER}; border-radius: 4px; }}"
+                f"QFrame {{ background: rgba({bg.red()},{bg.green()},{bg.blue()},20); "
+                f"border: 1px solid rgba({border.red()},{border.green()},{border.blue()},230); "
+                f"border-radius: 4px; }}"
             )
         else:
             if self._sound_path:
                 self._drop_filled()
             else:
                 self._drop_idle()
+
+    def _advance_glow_phase(self):
+        self._glow_phase = (self._glow_phase + _GLOW_STEP_DEG) % 360
+        self.update()
+
+    def _on_glow_anim(self, value):
+        self._glow_alpha = value
+        self.update()
+
+    def _set_group_glow(self, active: bool):
+        """Liga/desliga o glow neon circulante deste membro do grupo —
+        chamado pelo SoundRegistry.highlight_group ao passar o mouse sobre
+        qualquer coluna do mesmo grupo de som duplicado."""
+        if active:
+            if not self._glow_timer.isActive():
+                self._glow_timer.start()
+        else:
+            self._glow_timer.stop()
+        self._glow_anim.stop()
+        self._glow_anim.setStartValue(self._glow_alpha)
+        self._glow_anim.setEndValue(1.0 if active else 0.0)
+        self._glow_anim.start()
+
+    def enterEvent(self, event):
+        if self._sound_hash:
+            SoundRegistry.highlight_group(self._sound_hash, True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if self._sound_hash:
+            SoundRegistry.highlight_group(self._sound_hash, False)
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._glow_alpha <= 0.01 or self._group_color is None:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self._drop_frame.geometry()
+        grad = QConicalGradient(rect.center(), self._glow_phase)
+        base = QColor(self._group_color)
+        for stop, alpha in ((0.0, 0.75), (0.25, 0.05), (0.5, 0.75), (0.75, 0.05), (1.0, 0.75)):
+            c = QColor(base)
+            c.setAlphaF(alpha * self._glow_alpha)
+            grad.setColorAt(stop, c)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(grad)
+        p.drawRoundedRect(rect.adjusted(-2, -2, 2, 2), 6, 6)
+        p.end()
 
     def _on_rename(self):
         if not self._renaming:

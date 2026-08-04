@@ -47,6 +47,7 @@ class BrushMediator:
         panel.hide()
         panel.close_requested.connect(self._l._close_brush_panels)
         panel.assets_requested.connect(self._l._toggle_asset_browser)
+        panel.content_changed.connect(self._l._reposition)
         self._l.brush_panel = panel
 
         # Asset browser (category tabs + search + grid) rides next to
@@ -368,10 +369,20 @@ class BrushMediator:
         ANIMATED_EFFECTS, same list every time.
         """
         if category == "effects":
-            self._l.asset_browser_panel.set_assets([
-                {"id": f"{BrushTool.EFFECT_ASSET_PREFIX}{key}", "name": key}
-                for key in ANIMATED_EFFECTS
-            ])
+            from src.engines.assets.effect_configs import get_effect_config
+            from src.services.asset_adjustments import apply_brightness_contrast
+            from PySide6.QtGui import QImage
+            items = []
+            for key in ANIMATED_EFFECTS:
+                cfg = get_effect_config(key)
+                pixmap = None
+                if cfg["image_path"]:
+                    img = QImage(cfg["image_path"])
+                    if not img.isNull():
+                        img = apply_brightness_contrast(img, cfg["brightness"], cfg["contrast"])
+                        pixmap = QPixmap.fromImage(img)
+                items.append({"id": f"{BrushTool.EFFECT_ASSET_PREFIX}{key}", "name": key, "pixmap": pixmap})
+            self._l.asset_browser_panel.set_assets(items)
             return
 
         asset_engine = self._l.canvas.engine._asset_engine

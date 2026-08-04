@@ -10,19 +10,17 @@ dezenas de nós isso desenha e amplia melhor do que dezenas de widgets.
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QToolButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QToolButton,
     QFrame, QScrollArea, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF
-from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath
+from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath, QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panels.dungeons.constants import (
     BUILD_STATUSES, STATUS_COLORS, tier_name,
-    _INPUT_STYLE, _no_wheel, panel_frame_style, sub_header,
+    _INPUT_STYLE, panel_frame_style, sub_header,
 )
-
-ROOT_ID = "__root__"
 
 
 class _TreeCanvas(QWidget):
@@ -44,12 +42,30 @@ class _TreeCanvas(QWidget):
         self._hover_id = ""
         self._hitboxes: list[tuple[QRectF, str]] = []
         self._rows: list[tuple[int, list[dict]]] = []
+        # path -> QPixmap, para não reler do disco a cada paintEvent (que
+        # dispara bastante — hover, zoom, resize).
+        self._pixmap_cache: dict[str, QPixmap] = {}
 
     # ── dados ──
 
     def set_buildings(self, buildings: list[dict]):
         self._buildings = buildings
+        # Descarta imagens de construções que não estão mais na lista —
+        # evita crescer pra sempre trocando de categoria repetidamente.
+        paths = {b["image"] for b in buildings if b.get("image")}
+        for stale in set(self._pixmap_cache) - paths:
+            del self._pixmap_cache[stale]
         self._relayout()
+
+    def _pixmap_for(self, path: str) -> QPixmap | None:
+        if not path:
+            return None
+        cached = self._pixmap_cache.get(path)
+        if cached is not None:
+            return cached if not cached.isNull() else None
+        pix = QPixmap(path)
+        self._pixmap_cache[path] = pix
+        return pix if not pix.isNull() else None
 
     def set_selected(self, building_id: str):
         self._selected_id = building_id or ""
@@ -71,11 +87,12 @@ class _TreeCanvas(QWidget):
             by_tier.setdefault(int(building.get("tier") or 1), []).append(building)
         for nodes in by_tier.values():
             nodes.sort(key=lambda b: (int(b.get("sort_order") or 0), b.get("name") or ""))
-        # A raiz é uma linha sintética: dá um ponto de partida visível mesmo
-        # quando nenhuma construção tem parent_id.
-        self._rows = [(0, [{"id": ROOT_ID, "name": "Centro da Vila", "icon": "🏰",
-                            "level": 1, "status": "concluida"}])]
-        self._rows += [(tier, by_tier[tier]) for tier in sorted(by_tier)]
+        # Sem raiz sintética — cada categoria mostra só as construções que
+        # de fato pertencem a ela (um "Centro da Vila" fixo aparecia em toda
+        # aba/ramo, mesmo nas que não tinham nenhuma construção real).
+        # Construções de tier 1 (sem parent_id real) já leem como raiz por
+        # não terem aresta de entrada — ver paintEvent.
+        self._rows = [(tier, by_tier[tier]) for tier in sorted(by_tier)]
 
         widest = max((len(nodes) for _t, nodes in self._rows), default=1)
         width = self.MARGIN_X + widest * (self.NODE_W + self.COL_GAP) + self.MARGIN_X // 2
@@ -117,7 +134,7 @@ class _TreeCanvas(QWidget):
                 continue
             parent_id = building.get("parent_id") or ""
             if parent_id not in known:
-                parent_id = ROOT_ID
+                continue  # sem pai conhecido nesta categoria — lê como raiz, sem aresta
             parent = rects.get(parent_id)
             if parent is None or parent.top() >= child.top():
                 continue
@@ -160,22 +177,58 @@ class _TreeCanvas(QWidget):
         is_selected = node["id"] == self._selected_id
         is_hover = node["id"] == self._hover_id
         locked = status == "bloqueada"
-
-        fill = QColor(color)
-        fill.setAlpha(38 if not is_selected else 70)
         border = QColor(color)
         border.setAlpha(255 if (is_selected or is_hover) else 150)
-        p.setBrush(fill)
-        p.setPen(QPen(border, 2.0 if is_selected else 1.2))
-        p.drawRoundedRect(rect, 8, 8)
+        pixmap = self._pixmap_for(node.get("image") or "")
+
+        card_path = QPainterPath()
+        card_path.addRoundedRect(rect, 8, 8)
+
+        if pixmap is not None:
+            # Preenche o card com a imagem da construção (cover-fit,
+            # recortada nos cantos arredondados) em vez do retângulo sólido
+            # de cor — só cai pro preenchimento de cor quando não há
+            # imagem (ver ramo abaixo).
+            p.save()
+            p.setClipPath(card_path)
+            scaled = pixmap.scaled(rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                    Qt.TransformationMode.SmoothTransformation)
+            x = rect.x() + (rect.width() - scaled.width()) / 2
+            y = rect.y() + (rect.height() - scaled.height()) / 2
+            p.drawPixmap(QPointF(x, y), scaled)
+            # Véu escuro gradual (mais forte embaixo, onde fica o texto) —
+            # sem isso o nome/nível somem contra imagens claras.
+            grad_top = QColor(0, 0, 0, 90 if not locked else 150)
+            grad_bottom = QColor(0, 0, 0, 175 if not locked else 205)
+            p.fillRect(rect, grad_top)
+            p.fillRect(QRectF(rect.x(), rect.bottom() - 36, rect.width(), 36), grad_bottom)
+            p.restore()
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(border, 2.0 if is_selected else 1.2))
+            p.drawPath(card_path)
+        else:
+            fill = QColor(color)
+            fill.setAlpha(38 if not is_selected else 70)
+            p.setBrush(fill)
+            p.setPen(QPen(border, 2.0 if is_selected else 1.2))
+            p.drawRoundedRect(rect, 8, 8)
+
+            font = QFont()
+            font.setPointSizeF(15)
+            p.setFont(font)
+            p.setPen(QColor(255, 255, 255, 90 if locked else 230))
+            p.drawText(QRectF(rect.x(), rect.y() + 5, rect.width(), 22),
+                       Qt.AlignmentFlag.AlignCenter, node.get("icon") or "🏛")
+
+        if locked and pixmap is not None:
+            font = QFont()
+            font.setPointSizeF(13)
+            p.setFont(font)
+            p.setPen(QColor(255, 255, 255, 210))
+            p.drawText(QRectF(rect.x(), rect.y() + 4, rect.width(), 20),
+                       Qt.AlignmentFlag.AlignCenter, "🔒")
 
         font = QFont()
-        font.setPointSizeF(15)
-        p.setFont(font)
-        p.setPen(QColor(255, 255, 255, 90 if locked else 230))
-        p.drawText(QRectF(rect.x(), rect.y() + 5, rect.width(), 22),
-                   Qt.AlignmentFlag.AlignCenter, "🔒" if locked else (node.get("icon") or "🏛"))
-
         font.setPointSizeF(7.5)
         font.setBold(True)
         p.setFont(font)
@@ -205,7 +258,7 @@ class _TreeCanvas(QWidget):
 
     def mousePressEvent(self, event):
         node_id = self._hit(event.position())
-        if node_id and node_id != ROOT_ID:
+        if node_id:
             self.set_selected(node_id)
             self.selected.emit(node_id)
 
@@ -213,8 +266,7 @@ class _TreeCanvas(QWidget):
         hover = self._hit(event.position())
         if hover != self._hover_id:
             self._hover_id = hover
-            self.setCursor(Qt.CursorShape.PointingHandCursor if hover and hover != ROOT_ID
-                           else Qt.CursorShape.ArrowCursor)
+            self.setCursor(Qt.CursorShape.PointingHandCursor if hover else Qt.CursorShape.ArrowCursor)
             self.update()
 
     def leaveEvent(self, event):
@@ -231,16 +283,17 @@ class ProgressionTree(QFrame):
 
     selected = Signal(str)
 
-    def __init__(self, categories_provider=None, parent=None):
-        """`categories_provider` devolve as abas de categoria (banco) —
-        popula o filtro "Todos os Ramos", que deixou de ser uma lista fixa."""
+    def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("subpanel")
         self.setStyleSheet(panel_frame_style() + _INPUT_STYLE)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumWidth(220)
         self._buildings: list[dict] = []
-        self._categories_provider = categories_provider or (lambda: [])
+        # "" = Todas — segue a MESMA aba de categoria que já filtra a lista
+        # (CategoryTabBar em panel.py), em vez de um combo próprio e
+        # desincronizado só desta árvore.
+        self._active_category = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 8)
@@ -249,12 +302,9 @@ class ProgressionTree(QFrame):
 
         controls = QHBoxLayout()
         controls.setSpacing(6)
-        self._branch = QComboBox()
-        self._branch.addItem("Todos os Ramos")
-        self._branch.setFixedHeight(24)
-        _no_wheel(self._branch)
-        self._branch.currentIndexChanged.connect(self._refresh_canvas)
-        controls.addWidget(self._branch, 1)
+        self._branch_lbl = QLabel("Todas as categorias")
+        self._branch_lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none;")
+        controls.addWidget(self._branch_lbl, 1)
         controls.addWidget(self._zoom_btn("−", lambda: self._zoom(-0.1)))
         self._zoom_lbl = QLabel("100%")
         self._zoom_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -316,25 +366,21 @@ class ProgressionTree(QFrame):
         self._buildings = buildings
         self._refresh_canvas()
 
-    def refresh_branch_options(self):
-        """Repopula "Todos os Ramos" com as abas de categoria do banco —
-        chamado pelo DungeonsPanel toda vez que a lista de categorias muda."""
-        current = self._branch.currentText()
-        self._branch.blockSignals(True)
-        self._branch.clear()
-        self._branch.addItem("Todos os Ramos")
-        self._branch.addItems([c["name"] for c in self._categories_provider()])
-        index = self._branch.findText(current)
-        self._branch.setCurrentIndex(index if index >= 0 else 0)
-        self._branch.blockSignals(False)
+    def set_active_category(self, category: str):
+        """Chamado pelo DungeonsPanel quando a aba de categoria da lista
+        muda (CategoryTabBar.selected) — mantém a árvore sempre mostrando
+        o mesmo ramo que a lista, em vez de um filtro próprio e
+        desincronizado."""
+        self._active_category = category or ""
+        self._branch_lbl.setText(f"Ramo: {self._active_category}" if self._active_category else "Todas as categorias")
+        self._refresh_canvas()
 
     def select(self, building_id: str):
         self._canvas.set_selected(building_id)
 
     def _refresh_canvas(self):
-        branch = self._branch.currentText()
-        if self._branch.currentIndex() > 0:
-            visible = [b for b in self._buildings if (b.get("category") or "") == branch]
+        if self._active_category:
+            visible = [b for b in self._buildings if (b.get("category") or "") == self._active_category]
         else:
             visible = list(self._buildings)
         self._canvas.set_buildings(visible)
