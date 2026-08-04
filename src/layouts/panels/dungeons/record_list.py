@@ -96,6 +96,14 @@ class _RecordCard(QFrame):
         self._DELETE_BTN_DEFAULT_STYLE = f"""
             QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 10px; }}
             QToolButton:hover {{ color: {Colors.ERROR}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """
         self._delete_btn.setStyleSheet(self._DELETE_BTN_DEFAULT_STYLE)
         self._delete_btn.clicked.connect(self._on_delete_clicked)
@@ -119,6 +127,14 @@ class _RecordCard(QFrame):
             QToolButton {{ background: {Colors.ERROR}; border: none; border-radius: 4px;
                 color: white; font-size: 9px; font-weight: bold; }}
             QToolButton:hover {{ background: #ff6b6b; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         QTimer.singleShot(self._DELETE_ARM_MS, self._disarm_delete_if_stale)
 

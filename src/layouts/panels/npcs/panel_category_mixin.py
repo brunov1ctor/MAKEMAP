@@ -102,6 +102,14 @@ class CategoryExplorerMixin:
                 QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_SECONDARY}; font-size: 11px; padding: 2px 4px; }}
                 QToolButton:hover:!disabled {{ color: {Colors.TEXT_PRIMARY}; }}
                 QToolButton:disabled {{ color: {Colors.BORDER_SUBTLE}; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
             btn.clicked.connect(slot)
             return btn

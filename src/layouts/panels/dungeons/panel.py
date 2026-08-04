@@ -191,6 +191,14 @@ class DungeonsPanel(DungeonsImportExportMixin, QWidget):
                 border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; font-size: 12px; }}
             QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; border-color: {Colors.ACCENT}; }}
             QToolButton::menu-indicator {{ image: none; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         menu = QMenu(gear)
         menu.setStyleSheet(f"""
@@ -213,6 +221,14 @@ class DungeonsPanel(DungeonsImportExportMixin, QWidget):
             QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none;
                 font-size: 14px; border-radius: 14px; }}
             QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         close_btn.clicked.connect(self.closed.emit)
         header.addWidget(close_btn)

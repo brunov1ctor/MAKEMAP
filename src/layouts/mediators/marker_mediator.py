@@ -64,6 +64,7 @@ class MarkerMediator:
         edit.effect_intensity_changed.connect(self._on_effect_intensity_changed)
 
         self._l.canvas.engine._marker_tool.set_properties_provider(self._provide_properties)
+        self._l.canvas.engine._marker_tool.set_parent_provider(lambda: self._active_boundary.group if self._active_boundary and self._active_boundary._item else None)
         self._l.canvas.engine.selection.selection_changed.connect(self._on_selection_changed)
 
         self._sync_timer = QTimer()
@@ -79,6 +80,12 @@ class MarkerMediator:
 
     def _on_icon_picked(self, icon: str):
         self._pending_icon = icon
+
+    def set_active_terrain(self, terrain_id: str):
+        """Chamado por TerrainMediator.on_selected para sincronizar o label e o boundary ativo."""
+        boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
+        self._active_boundary = boundary
+        self._l.marker_panel.terrain_combo.set_terrain(terrain_id)
 
     def _provide_properties(self) -> MarkerProperties:
         """Read by MarkerTool at the moment a new marker is placed."""

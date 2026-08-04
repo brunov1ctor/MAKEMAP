@@ -19,6 +19,7 @@ from PySide6.QtGui import QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panel_manager import paint_glass_panel
+from src.layouts.panels.terrain_combo import TerrainCombo
 from src.layouts.panels.brush.slider import BrushSlider
 
 _PREVIEW_SIZE = 56
@@ -134,6 +135,14 @@ class SpawnPanel(QFrame):
                 color: {Colors.TEXT_SECONDARY}; background: transparent;
             }}
             QToolButton:hover {{ background: #333; color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         close_btn.clicked.connect(self.close_requested.emit)
         header.addWidget(close_btn)
@@ -156,6 +165,9 @@ class SpawnPanel(QFrame):
         self._apply_kind_button_styles()
 
         top_layout.addWidget(self._sep())
+
+        self.terrain_combo = TerrainCombo()
+        top_layout.addWidget(self.terrain_combo)
 
         self._top_container = container
         outer.addWidget(container)

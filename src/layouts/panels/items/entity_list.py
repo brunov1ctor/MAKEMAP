@@ -290,6 +290,14 @@ class EntityListColumn(QFrame):
             delete_btn.setStyleSheet(f"""
                 QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 10px; }}
                 QToolButton:hover {{ color: {Colors.ERROR}; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
             delete_btn.clicked.connect(lambda _=False, rid=row_id: self.delete_requested.emit(rid))
             self._table.setCellWidget(r, 5, delete_btn)

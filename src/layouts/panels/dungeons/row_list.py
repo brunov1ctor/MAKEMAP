@@ -110,7 +110,14 @@ class EditableRowList(QWidget):
             widget.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
             widget.setFixedHeight(22)
             _no_wheel(widget)
-            widget.valueChanged.connect(self.changed.emit)
+            # Conectar direto em self.changed.emit (em vez de um lambda que
+            # descarta o argumento) faz o Qt tentar chamar emit() do jeito
+            # que valueChanged(int) o invoca — com o int em mão — só que
+            # `changed` é um Signal() sem parâmetro nenhum, então cada edição
+            # levantava "changed() only accepts 0 argument(s), 1 given!" nos
+            # bastidores (Qt engole a exceção da callback, então nada travava,
+            # mas o valor real era descartado silenciosamente do stderr).
+            widget.valueChanged.connect(lambda _v: self.changed.emit())
         elif kind == COMBO:
             widget = QComboBox()
             widget.addItems(list(extra or []))
@@ -119,17 +126,17 @@ class EditableRowList(QWidget):
             _no_wheel(widget)
             if value:
                 widget.setCurrentText(str(value))
-            widget.currentTextChanged.connect(self.changed.emit)
+            widget.currentTextChanged.connect(lambda _t: self.changed.emit())
         elif kind == CHECK:
             widget = QCheckBox()
             widget.setChecked(bool(value))
             widget.setToolTip(placeholder)
-            widget.toggled.connect(self.changed.emit)
+            widget.toggled.connect(lambda _c: self.changed.emit())
         else:
             widget = QLineEdit(str(value or ""))
             widget.setPlaceholderText(placeholder)
             widget.setFixedHeight(22)
-            widget.textChanged.connect(self.changed.emit)
+            widget.textChanged.connect(lambda _t: self.changed.emit())
         return key, widget
 
     def _add_row(self, value: dict, notify: bool):
@@ -155,6 +162,14 @@ class EditableRowList(QWidget):
         remove.setStyleSheet(f"""
             QToolButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none; font-size: 10px; }}
             QToolButton:hover {{ color: {Colors.ERROR}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         row = {"widgets": widgets, "container": container}
         remove.clicked.connect(lambda: self._remove_row(row, notify=True))

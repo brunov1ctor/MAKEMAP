@@ -142,6 +142,14 @@ class _SidebarRow(QFrame):
                 QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 12px; padding: 0 4px; }}
                 QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
                 QToolButton::menu-indicator {{ image: none; width: 0; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
             menu = QMenu(menu_btn)
             menu.setStyleSheet(f"""

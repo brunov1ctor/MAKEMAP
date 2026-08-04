@@ -250,7 +250,17 @@ class NPCCard(QFrame):
         if zone_image is not None and not zone_image.isNull():
             self._sub_label.setText("")
             self._sub_label.setToolTip(zone_label)
-            self._sub_label.setStyleSheet("background: transparent; border: none; padding: 0;")
+            self._sub_label.setStyleSheet(f"""
+                background: transparent; border: none; padding: 0;
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
+            """)
             self._sub_label.setPixmap(_rounded_zone_thumb(zone_image))
         elif zone_label:
             # Região set but no image available (e.g. nothing painted yet
@@ -259,14 +269,32 @@ class NPCCard(QFrame):
             self._sub_label.setToolTip("")
             self._sub_label.setText(zone_label)
             self._sub_label.setStyleSheet(
-                f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none; padding: 0;"
+                f"""color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none; padding: 0;
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
+                """
             )
         else:
             self._sub_label.setPixmap(QPixmap())
             self._sub_label.setToolTip("")
             self._sub_label.setText("Sem região")
             self._sub_label.setStyleSheet(
-                f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none; padding: 0;"
+                f"""color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none; padding: 0;
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
+                """
             )
         self._favorite = favorite
         self._fav_btn.setText("★" if favorite else "☆")
@@ -418,6 +446,14 @@ class NPCListRow(QFrame):
                 color: {Colors.TEXT_SECONDARY}; background: transparent; }}
             QToolButton:hover {{ background: rgba(255,255,255,0.08); color: {Colors.TEXT_PRIMARY}; }}
             QToolButton::menu-indicator {{ image: none; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         menu = QMenu(menu_btn)
         menu.setStyleSheet(f"""

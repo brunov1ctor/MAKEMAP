@@ -7,41 +7,33 @@ Matches the flat-list CRUD mock exactly:
 - Right: eye (visibility) + "..." overflow menu (Renomear, Editar,
   Localizar, Apagar Pintura, Excluir).
 
-Clicking the card body only highlights it (`selected`) — it does NOT open
-the edit sub painel; that's "Editar" from the menu now.
+Clicking anywhere on the card, including the thumbnail, only highlights it
+(`selected`) — it does NOT open a file browser or the edit sub painel;
+the reference photo is picked from RegionEditPanel's own image field now
+(see ImageDropThumb there), and "Editar" from the "..." menu opens it.
 """
 
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QToolButton, QStackedWidget,
-    QLineEdit, QMenu, QSizePolicy, QComboBox, QFileDialog,
+    QLineEdit, QMenu,
 )
-from PySide6.QtCore import Qt, Signal, QSize, QRectF
-from PySide6.QtGui import QColor, QPixmap, QPainter, QPainterPath, QDragEnterEvent, QDropEvent
+from PySide6.QtCore import Qt, Signal, QRectF
+from PySide6.QtGui import QColor, QPixmap, QPainter, QPainterPath
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors
 
 _THUMB_W, _THUMB_H = 84, 72
 
 
 class _RegionThumbLabel(QLabel):
-    """RegionCard's thumbnail — accepts a dragged-in image file, or a
-    plain click to browse (fallback for no drag-and-drop), same idea as
-    the Mobs panel's portrait picker (_DropImageButton) — lets a região
-    carry a real reference photo instead of just the flat color swatch.
-    Once a photo is set it takes priority over the swatch (see
-    RegionCard.set_color) and stays fixed regardless of how the região
-    itself is painted — it's a reference image, not a live preview."""
-
-    image_dropped = Signal(str)  # local file path, dropped or picked
-
-    _ACCEPTED_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+    """RegionCard's thumbnail — display-only (see module docstring): shows
+    the user's reference photo if one is set, else the flat color swatch.
+    Painting logic mirrors ImageDropThumb, minus the drag/click picking."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._photo_pixmap: QPixmap | None = None
 
     def has_photo(self) -> bool:
@@ -69,56 +61,23 @@ class _RegionThumbLabel(QLabel):
         painter.drawPixmap(x, y, scaled)
         painter.end()
 
-    def _first_accepted_path(self, mime_data) -> str | None:
-        for url in mime_data.urls():
-            path = url.toLocalFile()
-            if path and path.lower().endswith(self._ACCEPTED_SUFFIXES):
-                return path
-        return None
-
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls() and self._first_accepted_path(event.mimeData()):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event: QDropEvent):
-        path = self._first_accepted_path(event.mimeData())
-        if path:
-            event.acceptProposedAction()
-            self.image_dropped.emit(path)
-        else:
-            event.ignore()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            path, _selected = QFileDialog.getOpenFileName(
-                self, "Selecionar Imagem da Região", "", "Imagens (*.png *.jpg *.jpeg *.webp)",
-            )
-            if path:
-                self.image_dropped.emit(path)
-        super().mousePressEvent(event)
-
 
 class RegionCard(QFrame):
     """A single região (painted zone) entry."""
 
     selected = Signal(str)
     deleted = Signal(str)
-    edit_requested = Signal(str)  # "Editar" — opens the Região Selecionada sub painel
+    edit_requested = Signal(str)
     renamed = Signal(str, str)
     locate_requested = Signal(str)
     visibility_toggled = Signal(str, bool)
-    paint_cleared = Signal(str)  # "Apagar Pintura" — clears the mask, keeps the card
-    terrain_changed = Signal(str, str)  # region_id, terrain_id ("" = Mapa Infinito)
-    image_changed = Signal(str, str)  # region_id, local file path (dropped or picked)
-    hover_entered = Signal(str)  # mouse entered the card — glow the matching região on the map
+    paint_cleared = Signal(str)
+    hover_entered = Signal(str)
     hover_left = Signal(str)
 
     def __init__(self, region_id: str, name: str, color: QColor, category_label: str = "",
                  area_m2: float = 0.0, object_count: int = 0, visible: bool = True,
-                 terrain_label: str = "Mapa Infinito",
-                 terrain_id: str = "", photo: QPixmap | None = None, parent=None):
+                 photo: QPixmap | None = None, parent=None):
         super().__init__(parent)
         self.region_id = region_id
         self._selected = False
@@ -126,9 +85,6 @@ class RegionCard(QFrame):
         self._category_label = category_label
         self._area_m2 = area_m2
         self._object_count = object_count
-        self._terrain_label = terrain_label
-        self._terrain_options: list[tuple[str, str]] = []
-        self._terrain_id = terrain_id
         self._color = QColor(color)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(self._build_style(False))
@@ -137,20 +93,18 @@ class RegionCard(QFrame):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(8)
 
-        # ─── Left: panoramic thumbnail — a user photo (dropped/picked via
-        # _RegionThumbLabel) takes priority over the flat color swatch;
-        # never the painted mask's own shape, which would make the
-        # thumbnail visibly change on every stroke instead of staying a
-        # stable "what this região represents" preview. ───
+        # ─── Left: panoramic thumbnail — a user photo (picked from
+        # RegionEditPanel's own image field) takes priority over the flat
+        # color swatch; never the painted mask's own shape, which would
+        # make the thumbnail visibly change on every stroke instead of
+        # staying a stable "what this região represents" preview. ───
         self._thumb = _RegionThumbLabel()
         self._thumb.setFixedSize(_THUMB_W, _THUMB_H)
         self._thumb.setScaledContents(True)
-        self._thumb.setToolTip("Clique ou arraste uma imagem")
         self._thumb.setStyleSheet(f"""
             background: {color.name()}; border-radius: 8px;
             border: 1px solid rgba(255,255,255,0.15);
         """)
-        self._thumb.image_dropped.connect(self._on_image_dropped)
         if photo is not None and not photo.isNull():
             self._thumb.set_photo_pixmap(photo)
         layout.addWidget(self._thumb)
@@ -207,29 +161,6 @@ class RegionCard(QFrame):
         """)
         center_col.addWidget(self._type_label)
 
-        terrain_row = QHBoxLayout()
-        terrain_row.setSpacing(4)
-        terrain_icon = QLabel("🖌")
-        terrain_icon.setStyleSheet("font-size: 9px; background: transparent; border: none;")
-        terrain_row.addWidget(terrain_icon)
-
-        self._terrain_combo = QComboBox()
-        self._terrain_combo.setFixedHeight(16)
-        self._terrain_combo.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._terrain_combo.setStyleSheet(f"""
-            QComboBox {{
-                color: {Colors.TEXT_MUTED}; font-size: 9px;
-                background: transparent; border: none; padding: 0 2px;
-            }}
-            QComboBox:hover {{ color: {Colors.TEXT_SECONDARY}; }}
-            QComboBox::drop-down {{ border: none; width: 10px; }}
-            {combo_popup_qss()}
-        """)
-        self._terrain_combo.addItem("Mapa Infinito", "")
-        self._terrain_combo.currentIndexChanged.connect(self._on_terrain_combo_changed)
-        terrain_row.addWidget(self._terrain_combo, 1)
-        center_col.addLayout(terrain_row)
-
         stats_row = QHBoxLayout()
         stats_row.setSpacing(10)
         self._area_label = QLabel()
@@ -266,6 +197,14 @@ class RegionCard(QFrame):
                 color: {Colors.TEXT_SECONDARY}; background: transparent;
             }}
             QToolButton:hover {{ background: rgba(255,255,255,0.08); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._refresh_eye()
         self._eye_btn.clicked.connect(self._on_eye_clicked)
@@ -284,6 +223,14 @@ class RegionCard(QFrame):
             }}
             QToolButton:hover {{ background: rgba(255,255,255,0.08); color: {Colors.TEXT_PRIMARY}; }}
             QToolButton::menu-indicator {{ image: none; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         menu_style = f"""
             QMenu {{
@@ -382,38 +329,6 @@ class RegionCard(QFrame):
         self._category_label = label
         self._refresh_meta()
 
-    def set_terrain_label(self, label: str):
-        self._terrain_label = label or "Mapa Infinito"
-        self._refresh_meta()
-
-    def set_terrain_options(self, options: list[tuple[str, str]]):
-        """Populate the "pintando em" dropdown — (terrain_id, name) pairs,
-        keeping the current selection if it's still one of the options."""
-        current_id = self._terrain_id
-        self._terrain_options = options
-        self._terrain_combo.blockSignals(True)
-        self._terrain_combo.clear()
-        self._terrain_combo.addItem("Mapa Infinito", "")
-        idx_to_select = 0
-        for i, (tid, name) in enumerate(options, start=1):
-            self._terrain_combo.addItem(name, tid)
-            if tid == current_id:
-                idx_to_select = i
-        self._terrain_combo.setCurrentIndex(idx_to_select)
-        self._terrain_combo.blockSignals(False)
-
-    def set_terrain_id(self, terrain_id: str):
-        self._terrain_id = terrain_id or ""
-        self._terrain_combo.blockSignals(True)
-        idx = self._terrain_combo.findData(self._terrain_id)
-        self._terrain_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self._terrain_combo.blockSignals(False)
-
-    def _on_terrain_combo_changed(self, index: int):
-        terrain_id = self._terrain_combo.itemData(index) or ""
-        self._terrain_id = terrain_id
-        self.terrain_changed.emit(self.region_id, terrain_id)
-
     def set_color(self, color: QColor):
         self._color = QColor(color)
         self._dot.setStyleSheet(f"background: {self._color.name()}; border-radius: 4px;")
@@ -424,16 +339,12 @@ class RegionCard(QFrame):
             """)
 
     def set_photo(self, pixmap: QPixmap | None):
-        """The user-uploaded reference photo (dropped/picked on the
-        thumbnail, or loaded back from mobs.image_path-equivalent
-        painted_zones.image_path) — takes priority over the flat color
-        swatch (see set_color)."""
+        """The user-uploaded reference photo (picked from RegionEditPanel's
+        own image field, or loaded back from painted_zones.image_path) —
+        takes priority over the flat color swatch (see set_color)."""
         self._thumb.set_photo_pixmap(pixmap)
         if pixmap is None or pixmap.isNull():
             self.set_color(self._color)
-
-    def _on_image_dropped(self, path: str):
-        self.image_changed.emit(self.region_id, path)
 
     def set_stats(self, area_m2: float, object_count: int):
         self._area_m2 = area_m2

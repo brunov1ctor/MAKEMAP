@@ -100,6 +100,14 @@ class MaterialThumbnail(QToolButton):
                 color: {_TEXT}; font-size: 10px; padding: 0;
             }}
             QToolButton:hover {{ color: {_ACCENT}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._fav_btn.clicked.connect(lambda: self.favorited.emit(self.asset_id))
         right_col.addWidget(self._fav_btn)
@@ -118,6 +126,14 @@ class MaterialThumbnail(QToolButton):
                 color: {_TEXT_SEC}; font-size: 11px; font-weight: bold; padding: 0;
             }}
             QToolButton:hover {{ color: {_TEXT}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._menu_btn.clicked.connect(lambda: self.effects_requested.emit(self.asset_id))
         right_col.addWidget(self._menu_btn)
@@ -182,6 +198,14 @@ class MaterialThumbnail(QToolButton):
             QToolButton:hover {{ border-color: {_TEXT_SEC}; }}
             QToolButton:checked {{
                 border-color: {_ACCENT}; background: {_ACCENT_DIM};
+            }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
             }}
         """)
 
@@ -265,6 +289,14 @@ class AssetBrowserPanel(QFrame):
                     color: {_TEXT_SEC}; background: transparent;
                 }}
                 QToolButton:hover {{ background: #333; color: {_TEXT}; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
             close_btn.clicked.connect(self.close_requested.emit)
             header.addWidget(close_btn)

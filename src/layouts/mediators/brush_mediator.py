@@ -72,6 +72,16 @@ class BrushMediator:
         self._effects_timer.timeout.connect(self._tick_effects)
         self._effects_timer.start(_EFFECTS_TICK_MS)
 
+        # Bounded map, no terreno selected — see BrushTool.on_bounds_missing.
+        self._l.canvas.engine._brush_tool.on_bounds_missing = self._on_bounds_missing
+
+    def _on_bounds_missing(self):
+        self._l.info_modal.show_message(
+            "Nenhum terreno selecionado. Crie um terreno antes de pintar, "
+            "ou ative o Mapa Infinito."
+        )
+        self._l._reposition()
+
     def _tick_effects(self):
         """Drives BrushEffectsOverlay's animated effects (Névoa's
         breathe/drift) — the overlay's paint() is time.monotonic()-driven,
@@ -238,7 +248,7 @@ class BrushMediator:
                     panel.softness_slider.value_changed, panel.density_slider.value_changed,
                     panel.scale_slider.value_changed, panel.rotation_slider.value_changed,
                     panel.roughness_slider.value_changed, panel.smoothness_slider.value_changed,
-                    panel.mode_changed, panel.terrain_changed, panel.random_rotation_check.toggled,
+                    panel.mode_changed, panel.random_rotation_check.toggled,
                     browser.asset_selected, browser.favorite_toggled,
                     browser.tab_changed, browser.style_changed, browser.effects_requested):
             try:
@@ -256,7 +266,6 @@ class BrushMediator:
         panel.smoothness_slider.value_changed.connect(self._on_smoothness_changed)
         panel.random_rotation_check.toggled.connect(lambda on: setattr(brush_tool, 'random_rotation', on))
         panel.mode_changed.connect(self.on_mode_changed)
-        panel.terrain_changed.connect(self._on_terrain_target_changed)
         browser.asset_selected.connect(self.on_asset_selected)
         browser.tab_changed.connect(self.on_tab_changed)
         browser.favorite_toggled.connect(self.on_favorite_toggled)
@@ -275,11 +284,7 @@ class BrushMediator:
             library.asset_added.connect(self.on_library_changed)
             library.asset_removed.connect(self.on_library_changed)
 
-        # "Pintando em" dropdown — targeted disconnect only (never a blanket
-        # `.disconnect()`, these signals are shared with TerrainMediator's
-        # own connections made once in main_layout.py). Refreshes the
-        # option list whenever terrains are added/renamed/removed; doesn't
-        # touch the current selection (set_terrain_options keeps it).
+        # Refreshes the terrain label whenever terrains are added/renamed/removed.
         terrain_panel = self._l.terrain_panel
         for sig in (terrain_panel.terrain_added, terrain_panel.terrain_renamed,
                     terrain_panel.terrain_removed):
@@ -335,23 +340,17 @@ class BrushMediator:
         self.on_asset_selected(asset_id)
 
     def _on_terrain_context_changed(self, *_args):
-        self._l.brush_panel.set_terrain_options(self._terrain_options())
+        options = self._terrain_options()
+        self._l.brush_panel.set_terrain_options(options)
+        for panel_attr in ("text_panel", "marker_panel", "spawn_panel", "light_panel"):
+            panel = getattr(self._l, panel_attr, None)
+            if panel and hasattr(panel, "terrain_combo"):
+                panel.terrain_combo.set_options(options)
         self._l._refresh_compass_hud()
 
     def _terrain_options(self) -> list[tuple[str, str]]:
-        """(terrain_id, name) for every terrain that currently exists —
-        feeds the "Pintando em" dropdown."""
         cards = self._l.terrain_panel._cards
         return [(tid, card.name) for tid, card in cards.items()]
-
-    def _on_terrain_target_changed(self, terrain_id: str):
-        """"Pintando em" dropdown picked a terrain (or "" for Mapa
-        Infinito) — constrains the terrain brush to it, same mechanism
-        TerrainMediator already uses for the currently-selected terrain
-        card, just driven independently from this panel."""
-        boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
-        self._l.canvas.engine._brush_tool.set_active_boundary(boundary)
-        self._l._refresh_compass_hud()
 
     def populate_assets(self, category: str = None):
         """Load asset thumbnails into the asset browser grid.

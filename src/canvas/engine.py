@@ -18,6 +18,7 @@ from src.canvas.text_item import TextItem
 from src.canvas.tools.spawn_tool import SpawnTool
 from src.canvas.tools.marker_tool import MarkerTool
 from src.canvas.tools.light_tool import LightTool
+from src.canvas.tools.terrain_freehand_tool import TerrainFreehandTool
 from src.engines.map.region_layer import RegionLayer
 from src.engines.map.terrain_layer import TerrainLayer
 from src.canvas.map_boundary import MovableBoundaryItem
@@ -162,7 +163,8 @@ class CanvasEngine(QWidget):
 
         # Brush (asset painting)
         self.brush_engine = BrushEngine(self)
-        self._brush_tool = BrushTool(self.viewport, self.brush_engine, history_engine=self.history)
+        self._brush_tool = BrushTool(
+            self.viewport, self.brush_engine, history_engine=self.history, tool_manager=self.tool_manager)
         self.tool_manager.register(self._brush_tool)
 
         # Region tool with procedural generation callback
@@ -200,6 +202,12 @@ class CanvasEngine(QWidget):
             self.viewport, self.tool_manager, self.history, self.selection, self.transform,
         )
         self.tool_manager.register(self._light_tool)
+
+        # Terreno panel's "Livre" freehand boundary drawing (see
+        # TerrainMediator/terrain_freehand_tool.py)
+        self._terrain_freehand_tool = TerrainFreehandTool(self.viewport)
+        self._terrain_freehand_tool.set_snap_manager(self.snap)
+        self.tool_manager.register(self._terrain_freehand_tool)
 
     def set_asset_engine(self, asset_engine):
         """Injeta o AssetEngine após o projeto ser carregado."""

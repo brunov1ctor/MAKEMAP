@@ -80,11 +80,17 @@ class BrushTool(BaseTool):
     CARTOON_WAVE_ALPHA = 215                # white, same as _alpha_stencil's fixed tint color
 
     def __init__(self, viewport: Viewport, brush_engine: BrushEngine,
-                 asset_engine: AssetEngine = None, history_engine: HistoryEngine = None):
+                 asset_engine: AssetEngine = None, history_engine: HistoryEngine = None,
+                 tool_manager=None):
         super().__init__(viewport)
         self._engine = brush_engine
         self._asset_engine = asset_engine
         self._history = history_engine
+        # Handed to every TerrainLayer this tool creates, so painted
+        # terrain/brush-effect layers only show their hover glow while
+        # Selecionar is the active tool — hovering one mid-stroke while
+        # actively painting/erasing shouldn't light up a "click me" cue.
+        self._tool_manager = tool_manager
         self._minimap = None
         self._sound_engine = None
         self._snap_manager = None
@@ -154,6 +160,13 @@ class BrushTool(BaseTool):
         # All bounded terrains currently shown — used by the grid overlay to
         # clip across every terrain at once, not just the active one.
         self._all_boundaries: list = []
+
+        # Plain callback (BaseTool isn't a QObject, same convention as
+        # MapBoundary.on_moved) fired from mouse_press when the map is
+        # bounded (not "Mapa Infinito") but no terrain is selected to
+        # paint into — BrushMediator wires this to show an info panel
+        # instead of silently falling back to a generic centered shape.
+        self.on_bounds_missing = None
 
     @property
     def size(self) -> float:
@@ -254,6 +267,14 @@ class BrushTool(BaseTool):
     def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
         is_right = event.button() == Qt.MouseButton.RightButton
         if event.button() != Qt.MouseButton.LeftButton and not is_right:
+            return
+        if self._bounds_width is not None and self._active_boundary is None:
+            # Bounded map, but no terreno selected to paint into — without
+            # this check _is_within_bounds falls back to a generic centered
+            # rectangle/circle, which would silently paint into nothing in
+            # particular instead of telling the user why nothing happened.
+            if self.on_bounds_missing:
+                self.on_bounds_missing()
             return
         if not self._is_within_bounds(scene_pos):
             return
@@ -797,14 +818,14 @@ class BrushTool(BaseTool):
                     layer.set_texture(pixmap, self.texture_scale, self.texture_rotation)
             return layer
 
-        # Determine parent item (boundary item if active)
+        # Determine parent item (boundary group if active)
         parent_item = None
         if self._active_boundary and self._active_boundary._item:
-            parent_item = self._active_boundary._item
+            parent_item = self._active_boundary.group
 
         # Create layer — starts small and expands dynamically
         map_size = self.INITIAL_LAYER_SIZE
-        layer = TerrainLayer(self.viewport.scene(), map_size, map_size, parent_item=parent_item)
+        layer = TerrainLayer(self.viewport.scene(), map_size, map_size, parent_item=parent_item, tool_manager=self._tool_manager)
 
         if parent_item:
             # Position relative to parent (boundary center is 0,0)
@@ -836,10 +857,10 @@ class BrushTool(BaseTool):
 
         parent_item = None
         if self._active_boundary and self._active_boundary._item:
-            parent_item = self._active_boundary._item
+            parent_item = self._active_boundary.group
 
         map_size = self.INITIAL_LAYER_SIZE
-        layer = TerrainLayer(self.viewport.scene(), map_size, map_size, parent_item=parent_item)
+        layer = TerrainLayer(self.viewport.scene(), map_size, map_size, parent_item=parent_item, tool_manager=self._tool_manager)
         layer.item.setPos(-map_size / 2, -map_size / 2)
         layer.set_mask_only(True)
         # Overrides TerrainLayer's own default {"item_type": "terrain"} —
@@ -889,17 +910,16 @@ class BrushTool(BaseTool):
         if not pixmap or pixmap.isNull():
             return None
 
-        # Parent to boundary item so stamp moves with the terrain
+        # Parent to boundary group so stamp moves with the terrain
         parent_item = None
         if self._active_boundary and self._active_boundary._item:
-            parent_item = self._active_boundary._item
+            parent_item = self._active_boundary.group
 
         item = QGraphicsPixmapItem(pixmap, parent_item)
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         item.setTransformOriginPoint(pixmap.width() / 2, pixmap.height() / 2)
 
         if parent_item:
-            # Convert scene position to parent-local
             local_pos = parent_item.mapFromScene(position)
             item.setPos(
                 local_pos.x() - pixmap.width() / 2,
@@ -920,6 +940,13 @@ class BrushTool(BaseTool):
         item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
         item.setData(0, {"item_type": "asset", "asset_id": asset_id})
         suppress_selection_decoration(item)
+        # TransformEngine._item_bounds usa selection_bounding_rect() quando
+        # presente — sem isso, sceneBoundingRect() inclui filhos (e.g.
+        # AssetEffectsOverlay) e o canvas de seleção fica inflado.
+        # Usa lambda com weak-ref implícita via pixmap size para evitar
+        # ciclo de referência no Shiboken que poderia deletar o item cedo.
+        _w, _h = pixmap.width(), pixmap.height()
+        item.selection_bounding_rect = lambda: QRectF(0, 0, _w, _h)
         return item
 
     def _on_object_stamp(self, stamp):

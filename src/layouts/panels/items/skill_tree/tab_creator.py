@@ -86,6 +86,14 @@ class _TreeTabCreatePanel(QFrame):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_SECONDARY}; background: transparent; }}
             QToolButton:hover {{ background: #333; color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         close_btn.clicked.connect(self.close_requested.emit)
         header.addWidget(close_btn)

@@ -68,7 +68,6 @@ class RegionMediator:
         panel.content_changed.connect(self._l._reposition)
         self._l.region_edit_panel = panel
         panel.name_changed.connect(self._on_name_changed)
-        panel.terrain_changed.connect(self._on_terrain_changed)
         panel.category_changed.connect(self._on_category_changed)
         panel.color_changed.connect(self._on_color_changed)
         panel.radius_changed.connect(self._on_radius_changed)
@@ -77,6 +76,7 @@ class RegionMediator:
         panel.stars_changed.connect(self._on_stars_changed)
         panel.estilo_changed.connect(self._on_estilo_changed)
         panel.observacao_changed.connect(self._on_observacao_changed)
+        panel.image_changed.connect(self._on_image_changed)
         panel.close_requested.connect(self.on_close_edit)
         panel.save_requested.connect(self.on_save_requested)
 
@@ -92,7 +92,6 @@ class RegionMediator:
         region_panel.region_locate_requested.connect(self.on_locate)
         region_panel.region_visibility_toggled.connect(self.on_card_visibility_toggled)
         region_panel.region_paint_cleared.connect(self.on_paint_cleared)
-        region_panel.region_image_changed.connect(self.on_card_image_changed)
         region_panel.region_hover_entered.connect(self.on_card_hover_entered)
         region_panel.region_hover_left.connect(self.on_card_hover_left)
         # Deferred (not a direct connect): this one fires right after a
@@ -102,20 +101,6 @@ class RegionMediator:
         # synchronously here would undercount and leave the panel too
         # short to show the just-added card.
         region_panel.content_changed.connect(lambda: QTimer.singleShot(0, self._l._reposition))
-        region_panel.region_terrain_changed.connect(self._on_card_terrain_changed)
-
-        # Refresh every "pintando em" dropdown (card list + edit panel)
-        # whenever terrains are added/renamed/removed — mirrors the
-        # pattern BrushMediator uses for its own dropdown.
-        # Deferred via QTimer: RegionMediator is constructed (and thus
-        # connects here) before main_layout.py wires
-        # terrain_panel.terrain_added → TerrainMediator.on_added, which is
-        # what registers the boundary this reads — running synchronously
-        # would see a stale/missing boundary for the just-added terrain.
-        terrain_panel = self._l.terrain_panel
-        for sig in (terrain_panel.terrain_added, terrain_panel.terrain_renamed,
-                    terrain_panel.terrain_removed):
-            sig.connect(lambda *_a: QTimer.singleShot(0, self._on_terrain_context_changed))
 
     # ─── Persistence wiring (called by application.py on project load) ───
 
@@ -150,9 +135,7 @@ class RegionMediator:
             self._l.region_panel.add_region_card(
                 zone.id, zone.name, zone.category_key, zone.color,
                 area_m2=layer.area_m2(), object_count=self._count_objects_in(zone),
-                visible=zone.visible,
-                terrain_label=self._terrain_label(zone.terrain_id),
-                terrain_id=zone.terrain_id, photo=photo,
+                visible=zone.visible, photo=photo,
             )
             layer.update_label(zone.name, zone.stars)
 
@@ -164,19 +147,28 @@ class RegionMediator:
         layer = self._l.canvas.engine.create_region_layer(DEFAULT_ZONE_COLOR)
         region_id = str(uuid.uuid4())
         name = f"Região {self._l.region_panel.region_count() + 1}"
-        zone = _Zone(id=region_id, category_key="", name=name, color=QColor(DEFAULT_ZONE_COLOR), layer=layer)
+        # Herda o terreno atualmente ativo no pincel para a nova região
+        # já nascer vinculada ao terreno selecionado.
+        active_terrain_id = self._l.brush_panel.active_terrain_id()
+        zone = _Zone(id=region_id, category_key="", name=name, color=QColor(DEFAULT_ZONE_COLOR),
+                     layer=layer, terrain_id=active_terrain_id)
         layer.set_opacity(zone.opacity)
+        # Arm the brush boundary right away so painting respects the terrain.
+        if active_terrain_id:
+            boundary = self._l._terrain_med.boundaries.get(active_terrain_id)
+            self._l.canvas.engine._region_brush_tool.set_active_boundary(boundary)
         self._zones[region_id] = zone
         self._active_id = region_id
         self._is_creating = True
 
         panel = self._l.region_edit_panel
-        panel.set_terrain_options(self._terrain_options())
+        panel.set_terrain_label(active_terrain_id, self._l.brush_panel.active_terrain_name())
         panel.load(
             zone.name, zone.category_key, zone.color,
             zone.radius, zone.softness, zone.mode, zone.opacity,
             zone.stars, zone.estilo, zone.observacao, zone.terrain_id,
         )
+        panel.set_image(None)
         panel.set_create_mode(True)
         panel.show()
         panel.raise_()
@@ -193,7 +185,7 @@ class RegionMediator:
         self._l.region_panel.add_region_card(
             zone.id, zone.name, zone.category_key, zone.color,
             area_m2=0.0, object_count=0, visible=zone.visible,
-            terrain_label=self._terrain_label(zone.terrain_id),
+            photo=self._load_photo(zone.image_path),
         )
         self._persist_create(zone)
         self._is_creating = False
@@ -272,38 +264,6 @@ class RegionMediator:
                 return zone.id
         return None
 
-    def _terrain_options(self) -> list[tuple[str, str]]:
-        """(terrain_id, name) for every terrain that currently exists —
-        feeds the "Pintando em" dropdown."""
-        boundaries = self._l._terrain_med.boundaries
-        cards = self._l.terrain_panel._cards
-        return [(tid, cards[tid].name) for tid in boundaries if tid in cards]
-
-    def _terrain_label(self, terrain_id: str) -> str:
-        if not terrain_id:
-            return "Mapa Infinito"
-        card = self._l.terrain_panel._cards.get(terrain_id)
-        return card.name if card else "Mapa Infinito"
-
-    def _on_terrain_context_changed(self, *_args):
-        options = self._terrain_options()
-        self._l.region_panel.set_terrain_options(options)
-        self._l.region_edit_panel.set_terrain_options(options)
-
-    def _on_card_terrain_changed(self, region_id: str, terrain_id: str):
-        """"Pintando em" dropdown changed directly on a card (not via the
-        edit panel) — same effect as _on_terrain_changed, just triggered
-        from the card list instead of the open edit panel."""
-        zone = self._zones.get(region_id)
-        if zone is None:
-            return
-        zone.terrain_id = terrain_id
-        self._persist_fields(zone, terrain_id=terrain_id)
-        if self._active_id == zone.id:
-            boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
-            self._l.canvas.engine._region_brush_tool.set_active_boundary(boundary)
-            self._l.region_edit_panel.set_terrain_id(terrain_id)
-
     def _arm_brush(self, zone: _Zone):
         tool = self._l.canvas.engine._region_brush_tool
         tool.set_target(zone.layer)
@@ -318,28 +278,19 @@ class RegionMediator:
         tool.set_active_boundary(boundary)
         self._l.canvas.engine.tool_manager.activate("RegiãoPincel")
 
-    def _on_terrain_changed(self, terrain_id: str):
-        zone = self._current_zone()
-        if not zone:
-            return
-        zone.terrain_id = terrain_id
-        self._persist_fields(zone, terrain_id=terrain_id)
-        boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
-        self._l.canvas.engine._region_brush_tool.set_active_boundary(boundary)
-        card = self._l.region_panel.get_card(zone.id)
-        if card:
-            card.set_terrain_label(self._terrain_label(terrain_id))
-            card.set_terrain_id(terrain_id)
-
     def _open_edit(self, zone: _Zone):
         self._active_id = zone.id
         panel = self._l.region_edit_panel
-        panel.set_terrain_options(self._terrain_options())
+        # Popula o nome do terreno antes do load() para o label aparecer correto.
+        terr = self._l._terrain_med._terrains.get(zone.terrain_id)
+        terrain_name = terr.name if terr else "Mapa Infinito"
+        panel.set_terrain_label(zone.terrain_id, terrain_name)
         panel.load(
             zone.name, zone.category_key, zone.color,
             zone.radius, zone.softness, zone.mode, zone.opacity,
             zone.stars, zone.estilo, zone.observacao, zone.terrain_id,
         )
+        panel.set_image(self._load_photo(zone.image_path))
         panel.set_create_mode(False)
         panel.show()
         panel.raise_()
@@ -458,20 +409,22 @@ class RegionMediator:
         pixmap = QPixmap(resolve_asset_path(self._project_dir(), image_path))
         return pixmap if not pixmap.isNull() else None
 
-    def on_card_image_changed(self, region_id: str, path: str):
-        """A photo was dropped/picked directly on the card's thumbnail
-        (see RegionCard._on_image_dropped) — copies it into the project
-        folder (same reasoning as Mobs' portrait, see project_assets.py)
-        and persists the relative path, then swaps the card's display in
-        immediately rather than waiting for a reload."""
-        zone = self._zones.get(region_id)
+    def _on_image_changed(self, path: str):
+        """A photo was dropped/picked on RegionEditPanel's own image field
+        — copies it into the project folder (same reasoning as Mobs'
+        portrait, see project_assets.py) and persists the relative path,
+        then swaps the card's display in immediately rather than waiting
+        for a reload."""
+        zone = self._current_zone()
         if not zone:
             return
-        stored_path = import_asset(self._project_dir(), path, "assets/regions", region_id)
+        stored_path = import_asset(self._project_dir(), path, "assets/regions", zone.id)
         zone.image_path = stored_path
-        card = self._l.region_panel.get_card(region_id)
+        photo = self._load_photo(stored_path)
+        card = self._l.region_panel.get_card(zone.id)
         if card:
-            card.set_photo(self._load_photo(stored_path))
+            card.set_photo(photo)
+        self._l.region_edit_panel.set_image(photo)
         self._persist_fields(zone, image_path=stored_path)
 
     def on_paint_cleared(self, region_id: str):
@@ -598,7 +551,7 @@ class RegionMediator:
             color=zone.color.name(QColor.NameFormat.HexArgb), mask_png=mask_png, mask_x=mx, mask_y=my,
             stars=zone.stars, estilo=zone.estilo, observacao=zone.observacao,
             visible=int(zone.visible), brush_radius=zone.radius, brush_softness=zone.softness,
-            brush_opacity=zone.opacity,
+            brush_opacity=zone.opacity, terrain_id=zone.terrain_id, image_path=zone.image_path,
         )
 
     def _persist_mask(self, zone: _Zone):

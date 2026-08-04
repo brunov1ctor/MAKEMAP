@@ -25,18 +25,16 @@ class RegionSettingsPanel(QFrame):
 
     PANEL_WIDTH = 300
 
-    region_add_requested = Signal()         # "Nova Região" clicked
-    region_renamed = Signal(str, str)       # region_id, new_name
-    region_removed = Signal(str)            # region_id
-    region_selected = Signal(str)           # region_id — highlight only, no panel
-    region_edit_requested = Signal(str)     # region_id — "Editar" from the "..." menu
-    region_locate_requested = Signal(str)   # region_id
-    region_visibility_toggled = Signal(str, bool)  # region_id, visible
-    region_paint_cleared = Signal(str)      # region_id
-    region_terrain_changed = Signal(str, str)  # region_id, terrain_id ("" = Mapa Infinito)
-    region_image_changed = Signal(str, str)  # region_id, local file path (dropped/picked on the card)
-    region_hover_entered = Signal(str)      # region_id — mouse entered a card
-    region_hover_left = Signal(str)         # region_id — mouse left a card
+    region_add_requested = Signal()
+    region_renamed = Signal(str, str)
+    region_removed = Signal(str)
+    region_selected = Signal(str)
+    region_edit_requested = Signal(str)
+    region_locate_requested = Signal(str)
+    region_visibility_toggled = Signal(str, bool)
+    region_paint_cleared = Signal(str)
+    region_hover_entered = Signal(str)
+    region_hover_left = Signal(str)
     close_requested = Signal()
     content_changed = Signal()
 
@@ -49,7 +47,6 @@ class RegionSettingsPanel(QFrame):
 
         self._cards: dict[str, RegionCard] = {}
         self._selected_id = ""
-        self._terrain_options: list[tuple[str, str]] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -177,10 +174,9 @@ class RegionSettingsPanel(QFrame):
 
     def add_region_card(self, region_id: str, name: str, category_label: str, color: QColor,
                          area_m2: float = 0.0, object_count: int = 0, visible: bool = True,
-                         terrain_label: str = "Mapa Infinito",
-                         terrain_id: str = "", photo=None) -> RegionCard:
+                         photo=None) -> RegionCard:
         card = RegionCard(region_id, name, color, category_label, area_m2, object_count,
-                           visible, terrain_label, terrain_id, photo)
+                           visible, photo)
         card.selected.connect(self._on_card_selected)
         card.deleted.connect(self._on_card_deleted)
         card.renamed.connect(self.region_renamed.emit)
@@ -188,23 +184,12 @@ class RegionSettingsPanel(QFrame):
         card.edit_requested.connect(self.region_edit_requested.emit)
         card.visibility_toggled.connect(self.region_visibility_toggled.emit)
         card.paint_cleared.connect(self.region_paint_cleared.emit)
-        card.terrain_changed.connect(self.region_terrain_changed.emit)
-        card.image_changed.connect(self.region_image_changed.emit)
         card.hover_entered.connect(self.region_hover_entered.emit)
         card.hover_left.connect(self.region_hover_left.emit)
-        card.set_terrain_options(self._terrain_options)
         self._list_layout.insertWidget(self._list_layout.count() - 1, card)
         self._cards[region_id] = card
         self.content_changed.emit()
         return card
-
-    def set_terrain_options(self, options: list[tuple[str, str]]):
-        """Feeds every card's "pintando em" dropdown — called whenever
-        terrains are added/renamed/removed, same list the edit panel and
-        brush panel dropdowns use."""
-        self._terrain_options = options
-        for card in self._cards.values():
-            card.set_terrain_options(options)
 
     def get_card(self, region_id: str) -> RegionCard | None:
         return self._cards.get(region_id)

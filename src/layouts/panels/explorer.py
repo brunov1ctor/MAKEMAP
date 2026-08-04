@@ -51,6 +51,14 @@ class ExplorerToolbar(QFrame):
                     font-size: 13px; color: {Colors.TEXT_MUTED}; background: transparent;
                 }}
                 QToolButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
             layout.addWidget(btn)
 
@@ -63,6 +71,14 @@ class ExplorerToolbar(QFrame):
         self.btn_expand.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 6px; font-size: 13px; color: {Colors.TEXT_MUTED}; }}
             QToolButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         layout.addWidget(self.btn_expand)
 
@@ -73,6 +89,14 @@ class ExplorerToolbar(QFrame):
         self.btn_collapse.setStyleSheet(f"""
             QToolButton {{ border: none; border-radius: 6px; font-size: 13px; color: {Colors.TEXT_MUTED}; }}
             QToolButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         layout.addWidget(self.btn_collapse)
 
@@ -287,6 +311,14 @@ class ExplorerPanel(CollapsiblePanel):
                 color: {Colors.TEXT_MUTED}; background: transparent;
             }}
             QToolButton:hover {{ color: {Colors.ERROR}; background: rgba(239,83,80,0.2); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         btn_x.clicked.connect(lambda: self._delete_item(item))
         row.addWidget(btn_x)

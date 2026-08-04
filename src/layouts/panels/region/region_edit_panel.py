@@ -20,13 +20,14 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QTextEdit, QScrollArea, QWidget,
 )
 from PySide6.QtCore import Qt, Signal, QRectF
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush, QPixmap
 
 from src.styles.tokens import Colors, combo_popup_qss
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.region.star_rating import StarRating
 from src.layouts.panels.collapsible_section import CollapsibleSection
 from src.layouts.panels.terrain.color_picker import HueBar, SatValSquare, ColorSlider
+from src.layouts.panels.image_drop_thumb import ImageDropThumb
 from src.engines.map.region_styles import STYLE_NAMES as ESTILOS
 
 
@@ -36,7 +37,6 @@ class RegionEditPanel(QFrame):
     PANEL_WIDTH = 300
 
     name_changed = Signal(str)
-    terrain_changed = Signal(str)         # terrain_id ("" = Mapa Infinito)
     category_changed = Signal(str)       # category_key
     color_changed = Signal(QColor)
     radius_changed = Signal(float)
@@ -45,6 +45,7 @@ class RegionEditPanel(QFrame):
     stars_changed = Signal(int)
     estilo_changed = Signal(str)
     observacao_changed = Signal(str)
+    image_changed = Signal(str)  # local file path, dropped or picked
     close_requested = Signal()
     save_requested = Signal()  # "Salvar Região" — only shown while creating
     content_changed = Signal()  # a section expanded/collapsed — panel needs re-sizing
@@ -117,17 +118,12 @@ class RegionEditPanel(QFrame):
         terrain_icon = QLabel("🖌")
         terrain_icon.setStyleSheet("font-size: 10px; background: transparent; border: none;")
         terrain_row.addWidget(terrain_icon)
-        terrain_label = QLabel("Pintando em")
-        terrain_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none;")
-        terrain_row.addWidget(terrain_label)
-        self._terrain_combo = QComboBox()
-        self._terrain_combo.addItem("🌍 Mapa Infinito", "")
-        self._terrain_combo.setStyleSheet(self._combo_style())
-        self._terrain_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._terrain_combo.currentIndexChanged.connect(
-            lambda i: self.terrain_changed.emit(self._terrain_combo.itemData(i))
-        )
-        terrain_row.addWidget(self._terrain_combo, 1)
+        terrain_label_lbl = QLabel("Pintando em")
+        terrain_label_lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none;")
+        terrain_row.addWidget(terrain_label_lbl)
+        self._terrain_lbl = QLabel("Mapa Infinito")
+        self._terrain_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px; background: transparent; border: none;")
+        terrain_row.addWidget(self._terrain_lbl, 1)
         layout.addLayout(terrain_row)
         layout.addWidget(self._sep())
 
@@ -146,6 +142,35 @@ class RegionEditPanel(QFrame):
         self._type_edit.setStyleSheet(self._input_style())
         self._type_edit.editingFinished.connect(lambda: self.category_changed.emit(self._type_edit.text().strip()))
         info_section.content_layout.addWidget(self._field_row("Tipo", self._type_edit))
+
+        # Reference photo — moved up here from the card's own thumbnail
+        # (which used to open a file browser on click); now the thumbnail
+        # is display-only and this is the one place that actually picks
+        # the image, right above the color choice per the mock.
+        image_row = QHBoxLayout()
+        image_row.setSpacing(8)
+        self._thumb = ImageDropThumb("Selecionar Imagem da Região")
+        self._thumb.setFixedSize(56, 56)
+        self._thumb.setScaledContents(True)
+        self._set_thumb_placeholder_style()
+        self._thumb.image_dropped.connect(self.image_changed.emit)
+        image_row.addWidget(self._thumb)
+
+        image_col = QVBoxLayout()
+        image_col.setSpacing(1)
+        self._image_name = QLabel("Nenhuma Imagem Selecionada")
+        self._image_name.setWordWrap(True)
+        self._image_name.setStyleSheet(f"""
+            color: {Colors.TEXT_PRIMARY}; font-size: 11px; font-weight: bold;
+            background: transparent; border: none;
+        """)
+        image_col.addWidget(self._image_name)
+        image_hint = QLabel("Clique ou arraste uma imagem")
+        image_hint.setWordWrap(True)
+        image_hint.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
+        image_col.addWidget(image_hint)
+        image_row.addLayout(image_col, 1)
+        info_section.content_layout.addLayout(image_row)
 
         self._color_btn = QToolButton()
         self._color_btn.setFixedHeight(24)
@@ -280,6 +305,12 @@ class RegionEditPanel(QFrame):
             QComboBox::drop-down {{ border: none; width: 14px; }}
             {combo_popup_qss()}
         """
+
+    def _set_thumb_placeholder_style(self):
+        self._thumb.setStyleSheet(f"""
+            background: rgba(255,255,255,0.06); border-radius: 8px;
+            border: 1px solid {Colors.BORDER_SUBTLE};
+        """)
 
     def _sep(self) -> QFrame:
         sep = QFrame()
@@ -420,24 +451,28 @@ class RegionEditPanel(QFrame):
     # ─── Public API (populate without re-emitting signals) ───
 
     def set_terrain_options(self, options: list[tuple[str, str]]):
-        """Rebuild the "Pintando em" dropdown. `options` is a list of
-        (terrain_id, name) for every currently-existing terrain — "Mapa
-        Infinito" (id "") is always prepended automatically."""
-        self._terrain_combo.blockSignals(True)
-        self._terrain_combo.clear()
-        self._terrain_combo.addItem("🌍 Mapa Infinito", "")
-        for terrain_id, name in options:
-            self._terrain_combo.addItem(f"🗺 {name}", terrain_id)
-        self._terrain_combo.blockSignals(False)
+        self._terrain_names = {tid: name for tid, name in options}
+        self._refresh_terrain_label()
 
     def set_terrain_id(self, terrain_id: str):
-        """Sync the combo's selection without re-emitting terrain_changed —
-        used when the terrain is changed from elsewhere (e.g. the card's
-        own dropdown) while this panel is open for the same region."""
-        self._terrain_combo.blockSignals(True)
-        idx = self._terrain_combo.findData(terrain_id)
-        self._terrain_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self._terrain_combo.blockSignals(False)
+        self._terrain_id_val = terrain_id or ""
+        self._refresh_terrain_label()
+
+    def set_terrain_label(self, terrain_id: str, name: str):
+        """Atualiza o label diretamente com id e nome — chamado por
+        TerrainMediator.on_selected sem depender de _terrain_names."""
+        self._terrain_id_val = terrain_id or ""
+        if not hasattr(self, "_terrain_names"):
+            self._terrain_names = {}
+        if terrain_id:
+            self._terrain_names[terrain_id] = name
+        self._refresh_terrain_label()
+
+    def _refresh_terrain_label(self):
+        names = getattr(self, "_terrain_names", {})
+        tid = getattr(self, "_terrain_id_val", "")
+        name = names.get(tid, "Mapa Infinito") if tid else "Mapa Infinito"
+        self._terrain_lbl.setText(name)
 
     def load(self, name: str, category_key: str, color: QColor,
              radius: float, softness: float, mode: str, opacity: float,
@@ -452,10 +487,8 @@ class RegionEditPanel(QFrame):
         self._name_edit.setText(name)
         self._name_edit.blockSignals(False)
 
-        self._terrain_combo.blockSignals(True)
-        idx = self._terrain_combo.findData(terrain_id)
-        self._terrain_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self._terrain_combo.blockSignals(False)
+        self._terrain_id_val = terrain_id or ""
+        self._refresh_terrain_label()
 
         self._type_edit.blockSignals(True)
         self._type_edit.setText(category_key)
@@ -507,6 +540,13 @@ class RegionEditPanel(QFrame):
         self._name_edit.setText(name)
         self._name_edit.blockSignals(False)
 
+    def set_image(self, pixmap: QPixmap | None):
+        has_photo = pixmap is not None and not pixmap.isNull()
+        self._thumb.set_photo_pixmap(pixmap if has_photo else None)
+        if not has_photo:
+            self._set_thumb_placeholder_style()
+        self._image_name.setText("Imagem Selecionada" if has_photo else "Nenhuma Imagem Selecionada")
+
     def set_create_mode(self, is_creating: bool):
         """Show "Salvar Região" only while creating a brand-new região —
         editing an existing card auto-persists each field as it changes."""
@@ -518,16 +558,5 @@ class RegionEditPanel(QFrame):
         self._name_edit.selectAll()
 
     def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), 10, 10)
-        p.fillPath(path, QColor(11, 25, 41, 235))
-        grad = QLinearGradient(0, 0, 0, h * 0.15)
-        grad.setColorAt(0.0, QColor(255, 255, 255, 10))
-        grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-        p.fillPath(path, QBrush(grad))
-        p.setPen(QPen(QColor(255, 255, 255, 25), 1))
-        p.drawPath(path)
-        p.end()
+        from src.layouts.panel_manager import paint_glass_panel
+        paint_glass_panel(self)

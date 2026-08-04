@@ -66,12 +66,17 @@ class SpawnTool(BaseTool):
         self._last_pos: QPointF | None = None
         self._stroke_had_items = False
         self._stamp_placed_callbacks: list = []
+        self._parent_provider = None
 
     def on_stamp_placed(self, callback):
         """Registers callback(entity_id, scene_pos) fired after every stamp —
         SpawnMediator uses this to auto-tag the entity with whichever região
         (if any) it was just stamped into (see RegionMediator.region_at_point)."""
         self._stamp_placed_callbacks.append(callback)
+
+    def set_parent_provider(self, provider):
+        """provider() -> QGraphicsItem | None — boundary group para parenting."""
+        self._parent_provider = provider
 
     def set_entity(self, kind: str, entity_id: str, name: str, face_pixmap: QPixmap | None, height: float = 0.0):
         self.entity_kind = kind
@@ -128,11 +133,16 @@ class SpawnTool(BaseTool):
         self._stroke_had_items = False
 
     def _place(self, scene_pos: QPointF):
+        parent_item = self._parent_provider() if self._parent_provider else None
         item = self.build_stamp_item(
             self.mob_id, self.mob_name, self.quantity, self.size, self.face_pixmap, scene_pos,
             height=self.height, entity_kind=self.entity_kind,
         )
-        self.viewport.scene().addItem(item)
+        if parent_item:
+            item.setParentItem(parent_item)
+            item.setPos(parent_item.mapFromScene(scene_pos))
+        else:
+            self.viewport.scene().addItem(item)
         self._stroke_had_items = True
         if self._history:
             self._history.push(PlaceObjectCommand(item))

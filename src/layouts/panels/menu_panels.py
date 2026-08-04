@@ -56,6 +56,14 @@ class MenuPanel(QWidget):
             f"QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; "
             f"border: none; font-size: 14px; border-radius: 14px; }}"
             f"QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.closed.emit)
@@ -139,12 +147,6 @@ class MenuPanel(QWidget):
 
 # ─── Specific Menu Panels ────────────────────────────────────────────────────
 
-class QuestsPanel(MenuPanel):
-    def __init__(self, parent=None):
-        super().__init__("Quests", "📜", parent)
-        self.add_empty_state("Crie missões e objetivos para seus jogadores.")
-
-
 class LorePanel(MenuPanel):
     def __init__(self, parent=None):
         super().__init__("Lore", "📖", parent)
@@ -161,12 +163,12 @@ class ConfigPanel(MenuPanel):
         self.content_layout.addWidget(manager)
 
 
-# Registry for easy lookup. "Itens", "Dungeons" and "NPCs" are intentionally
-# absent — they're handled directly in MenuViewMediator._show_menu_view by
-# the full ItemsSkillsPanel / DungeonsPanel / NPCsPanel (all need the
-# project's UnitOfWork, like Mobs), not by an empty-state placeholder.
+# Registry for easy lookup. "Itens", "Dungeons", "NPCs" and "Quests" are
+# intentionally absent — they're handled directly in
+# MenuViewMediator._show_menu_view by the full ItemsSkillsPanel /
+# DungeonsPanel / NPCsPanel / QuestsPanel (all need the project's
+# UnitOfWork, like Mobs), not by an empty-state placeholder.
 MENU_PANELS = {
-    "Quests": QuestsPanel,
     "Lore": LorePanel,
     "Config": ConfigPanel,
 }

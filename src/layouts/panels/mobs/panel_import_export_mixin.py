@@ -58,6 +58,14 @@ class ImportExportMixin:
         tools_close_btn.setStyleSheet(f"""
             QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 12px; padding: 2px 6px; }}
             QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         tools_close_btn.clicked.connect(self._close_tools_mode)
         head_row.addWidget(tools_close_btn)

@@ -17,6 +17,8 @@ from src.layouts.panels.background_panel import BackgroundPanel
 from src.layouts.panels.inspector import InspectorPanel, QuestPanel, LayersPanel
 from src.layouts.panels.progression import ProgressionBar
 from src.layouts.panels.status_bar import StatusBar
+from src.layouts.panels.info_modal import InfoModal
+from src.layouts.panels.freehand_badge import FreehandBadge
 from src.layouts.panels.logs_panel import QtLogHandler
 from src.canvas.overlays import Compass, CompassHUD, MiniMap
 from src.canvas.map_boundary import MapBoundary
@@ -60,6 +62,18 @@ class MainLayout(QWidget):
         self.select_panel.layers_changed.connect(self.canvas.engine.selection.set_layer_filter)
         self.select_panel.color_changed.connect(self.canvas.engine.transform.set_selection_color)
         self.select_panel.content_changed.connect(self._reposition)
+
+        # One-off "you need to do X first" message, centered over the
+        # canvas — not tied to any specific side panel (see info_modal.py).
+        self.info_modal = InfoModal(self)
+        self.info_modal.hide()
+
+        # Follows the mouse while a "Livre" terreno boundary is being
+        # drawn (see TerrainMediator) — positioned by a QTimer poll, not
+        # panel_layout_engine's resize-driven apply(), since it needs to
+        # track the cursor continuously, not just on layout changes.
+        self.freehand_badge = FreehandBadge(self)
+        self.freehand_badge.hide()
 
         # ═══ Mediators ═══
         # Every other panel (Brush/AssetBrowser, Grid, Terrain, Região/
@@ -106,6 +120,7 @@ class MainLayout(QWidget):
         )
         self._panel_mgr.register(
             "Terrain", self.terrain_panel,
+            on_hide=self._on_terrain_panel_hidden,
         )
         self._panel_mgr.register(
             "Background", self.background_panel,
@@ -300,6 +315,13 @@ class MainLayout(QWidget):
         else:
             self.asset_browser_panel.show()
             self.asset_browser_panel.raise_()
+        self._reposition()
+
+    def _on_terrain_panel_hidden(self):
+        """Same reasoning as _on_region_panel_hidden — the edit sub painel
+        has no CRUD list to ride next to (or card to add to) once Terrain
+        itself is closed, by PanelManager's exclusivity or otherwise."""
+        self._terrain_med.on_close_edit()
         self._reposition()
 
     def _on_region_panel_hidden(self):
@@ -525,19 +547,23 @@ class MainLayout(QWidget):
         return preset.show_info if preset else True
 
     def _refresh_compass_hud(self):
-        # Shown purely by the "Info" checkbox, independent of whether the
-        # compass face itself is expanded/collapsed — tying it to expanded
-        # meant checking the box silently did nothing unless the compass
-        # had *also* been separately double-clicked open first.
         allowed = self._hud_allowed()
         self.compass_hud.setVisible(allowed)
         if not allowed:
             return
         viewport = self.canvas.engine.viewport
         center = viewport.mapToScene(viewport.viewport().rect().center())
+        terrain_id = self.brush_panel.active_terrain_id()
+        # Busca o terreno diretamente do mediator para garantir nome correto
+        # mesmo que brush_panel._terrain_names ainda não tenha sido populado.
+        terr = self._terrain_med._terrains.get(terrain_id) if terrain_id else None
+        terrain_name = terr.name if terr else ("Mapa Infinito" if not terrain_id else "")
+        boundary = self._terrain_med.boundaries.get(terrain_id) if terrain_id else None
+        map_w = float(boundary.width) if boundary else 0.0
+        map_h = float(boundary.height) if boundary else 0.0
         self.compass_hud.update_info(
-            self.brush_panel.active_terrain_name(),
-            float(self.terrain_panel.map_width), float(self.terrain_panel.map_height),
+            terrain_name,
+            map_w, map_h,
             center.x(), center.y(),
         )
 

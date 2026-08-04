@@ -71,6 +71,14 @@ class _TagChip(QWidget):
         close_btn.setStyleSheet(f"""
             QToolButton {{ border: none; background: transparent; color: {color}; font-size: 9px; }}
             QToolButton:hover {{ color: {Colors.ERROR}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         close_btn.clicked.connect(lambda: self.remove_requested.emit(self.tag_id))
         lay.addWidget(close_btn)

@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors
 from src.layouts.panel_manager import paint_glass_panel
+from src.layouts.panels.terrain_combo import TerrainCombo
 from src.engines.light import LIGHT_TYPES
 
 
@@ -89,6 +90,9 @@ class LightPanel(QFrame):
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10pt; background: transparent; border: none;")
         layout.addWidget(hint)
+
+        self.terrain_combo = TerrainCombo()
+        layout.addWidget(self.terrain_combo)
 
         for key, icon, label in LIGHT_TYPES:
             row = _TypeRow(key, icon, label)

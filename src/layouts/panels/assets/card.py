@@ -225,7 +225,17 @@ class AssetRowCard(QFrame):
         self._name_label = QLabel(file_path.name)
         self._name_label.setFixedHeight(16)
         self._name_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        self._name_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 8pt; background: transparent; border: none; padding: 0;")
+        self._name_label.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; font-size: 8pt; background: transparent; border: none; padding: 0;"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
+        )
         self._name_label.setToolTip(file_path.name)
         name_row.addWidget(self._name_label)
 
@@ -250,6 +260,14 @@ class AssetRowCard(QFrame):
             f"QToolButton {{ background: transparent; border: none; font-size: 11px; "
             f"color: {Colors.TEXT_MUTED}; padding: 0; margin: 0; }}"
             f"QToolButton:hover {{ color: {Colors.ACCENT}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         self._rename_btn.clicked.connect(self._toggle_rename)
         name_row.addWidget(self._rename_btn)
@@ -648,6 +666,14 @@ class CategorySection(QWidget):
             f"QToolButton {{ background: transparent; border: none; font-size: 11px; "
             f"color: {Colors.TEXT_MUTED}; padding: 0; margin: 0; }}"
             f"QToolButton:hover {{ color: {Colors.ACCENT}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         self._rename_btn.clicked.connect(self._toggle_rename)
         col1_hdr.addWidget(self._rename_btn)
@@ -698,6 +724,14 @@ class CategorySection(QWidget):
             f"QToolButton {{ background: transparent; border: none; font-size: 11px; "
             f"color: {Colors.TEXT_MUTED}; padding: 0; }}"
             f"QToolButton:hover {{ color: {Colors.ERROR}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         self._del_cat_btn.clicked.connect(self._on_delete_category)
         self._del_cat_btn.hide()

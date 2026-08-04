@@ -1126,6 +1126,54 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         -- section, above Assets.
         ALTER TABLE npcs ADD COLUMN provides_items_json TEXT DEFAULT '[]';
     """),
+    (32, "Terrain panel — Região-style add/edit sub painel: reference photo per terreno", """
+        -- Terrain gets the same "Nova Região"-style creation flow: a
+        -- TerrainEditPanel sub painel with name/forma/dimensões/cor da
+        -- borda (the existing terrains.color column, now user-editable
+        -- instead of auto-assigned from a fixed palette) and a
+        -- user-uploaded reference photo (mirrors painted_zones.image_path,
+        -- migration 18).
+        ALTER TABLE terrains ADD COLUMN image_path TEXT DEFAULT '';
+    """),
+    (33, "Terrain panel — freehand ('Livre') boundary points, click-to-place polygon", """
+        -- The "Livre" shape preset used to silently fall back to a plain
+        -- rectangle (see MapBoundary._build_path) — it now stores its own
+        -- click-placed point list instead of width/height defining the
+        -- shape. Same loose JSON-column convention as mobs.drops_json.
+        ALTER TABLE terrains ADD COLUMN points_json TEXT DEFAULT '[]';
+    """),
+    (34, "Terrain panel — curved segments on a 'Livre' boundary (quadratic Bézier control points)", """
+        -- Right-click-dragging the most recently placed segment while
+        -- drawing "Livre" bows it into a curve (see
+        -- TerrainFreehandTool.on_curve_changed) — {"<segment_index>":
+        -- [cx, cy]} control points, sparse (straight segments just have
+        -- no entry), same loose JSON-column convention as points_json.
+        ALTER TABLE terrains ADD COLUMN curve_controls_json TEXT DEFAULT '{}';
+    """),
+    (35, "Quests panel — full parity fields for the fullscreen module (list status, propriedades, configurações, recompensas)", """
+        ALTER TABLE quests ADD COLUMN code TEXT DEFAULT '';
+        ALTER TABLE quests ADD COLUMN title TEXT DEFAULT '';
+        ALTER TABLE quests ADD COLUMN status TEXT DEFAULT 'rascunho';
+        ALTER TABLE quests ADD COLUMN image_path TEXT DEFAULT '';
+        ALTER TABLE quests ADD COLUMN level_max INTEGER DEFAULT 1;
+        ALTER TABLE quests ADD COLUMN tags_json TEXT DEFAULT '[]';
+        ALTER TABLE quests ADD COLUMN repeatable INTEGER DEFAULT 0;
+        ALTER TABLE quests ADD COLUMN time_limit_seconds INTEGER DEFAULT 0;
+        ALTER TABLE quests ADD COLUMN fail_on_abandon INTEGER DEFAULT 0;
+        ALTER TABLE quests ADD COLUMN auto_accept INTEGER DEFAULT 0;
+        ALTER TABLE quests ADD COLUMN hide_on_map INTEGER DEFAULT 0;
+        ALTER TABLE quests ADD COLUMN priority TEXT DEFAULT 'media';
+    """),
+    (36, "Quests panel — Condições/Eventos/Scripts/Notas/Diálogo, as últimas colunas soltas do editor de conteúdo", """
+        ALTER TABLE quests ADD COLUMN conditions_json TEXT DEFAULT '[]';
+        ALTER TABLE quests ADD COLUMN events_json TEXT DEFAULT '[]';
+        ALTER TABLE quests ADD COLUMN scripts TEXT DEFAULT '';
+        ALTER TABLE quests ADD COLUMN notes TEXT DEFAULT '';
+        ALTER TABLE quests ADD COLUMN dialogue TEXT DEFAULT '';
+    """),
+    (37, "Quests panel — aba Fluxo: grafo de nós (Início/Objetivo/Condição/Evento/Fim) com conexões rotuladas", """
+        ALTER TABLE quests ADD COLUMN flow_json TEXT DEFAULT '{}';
+    """),
 ]
 
 

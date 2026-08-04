@@ -59,6 +59,14 @@ class _Pill(QWidget):
             self._close_btn.setStyleSheet(f"""
                 QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 9px; }}
                 QToolButton:hover {{ color: {Colors.ERROR}; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
             self._close_btn.clicked.connect(lambda: self.delete_requested.emit(self._key))
             self._row.addWidget(self._close_btn)

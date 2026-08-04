@@ -134,6 +134,14 @@ class NavigationPresetSection(QFrame):
         self._drag_handle.setToolTip("Arraste para reordenar este preset")
         self._drag_handle.setStyleSheet(
             f"color: {Colors.TEXT_MUTED}; font-size: 13px; background: transparent; border: none;"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         self._setup_preset_drag(self._drag_handle)
         h_lay.addWidget(self._drag_handle)
@@ -214,6 +222,14 @@ class NavigationPresetSection(QFrame):
             f"QToolButton {{ background: rgba(255,255,255,0.05); border: 1px solid {Colors.BORDER_SUBTLE}; "
             f"padding: 2px 6px; color: {Colors.TEXT_SECONDARY}; font-size: 9px; font-weight: bold; border-radius: 4px; }}"
             f"QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; border-color: {Colors.ACCENT}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         json_btn.clicked.connect(self._toggle_json_import)
         h_lay.addWidget(json_btn)
@@ -230,6 +246,14 @@ class NavigationPresetSection(QFrame):
         )
         info_check.setStyleSheet(
             f"QCheckBox {{ color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; spacing: 4px; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         info_check.toggled.connect(self._on_show_info_toggled)
         h_lay.addWidget(info_check)
@@ -243,6 +267,14 @@ class NavigationPresetSection(QFrame):
             f"QToolButton {{ background: transparent; border: none; font-size: 11px; "
             f"color: {Colors.TEXT_MUTED}; padding: 0; }}"
             f"QToolButton:hover {{ color: {Colors.ERROR}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         del_btn.clicked.connect(lambda: self.delete_requested.emit(self.preset_key))
         h_lay.addWidget(del_btn)
@@ -348,6 +380,14 @@ class NavigationPresetSection(QFrame):
                 background: {Colors.ACCENT_DIM if active else 'transparent'};
             }}
             QToolButton:hover {{ background: rgba(79,195,247,0.3); color: {Colors.ACCENT}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._header.setStyleSheet(self._header_style(active, self._drop_target))
 

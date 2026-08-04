@@ -109,6 +109,19 @@ class PanelLayoutEngine:
             tp_h = min(l.terrain_panel.content_height(), avail.height())
             l.terrain_panel.setGeometry(tp.x(), tp.y(), tp.width(), tp_h)
 
+        # Terreno's edit sub painel rides next to the CRUD list, same
+        # convention as Região's edit panel below — sized to its own
+        # content, capped to the available work area rather than Terreno's
+        # own height, so one being shorter never squashes the other.
+        if l.terrain_panel.isVisible() and l.terrain_edit_panel.isVisible():
+            tp_rect = l.terrain_panel.geometry()
+            te_x = tp_rect.right() + 8
+            te_w = min(l.terrain_edit_panel.PANEL_WIDTH, max(0, avail.right() - te_x))
+            max_h = max(0, avail.bottom() - tp_rect.y())
+            te_h = min(PanelManager._content_height(l.terrain_edit_panel), max_h)
+            l.terrain_edit_panel.setGeometry(te_x, tp_rect.y(), te_w, te_h)
+            l.terrain_edit_panel.raise_()
+
         # Same nested-QScrollArea ambiguity as Terrain above (this panel
         # wraps BackgroundSection, which owns its own image-browser grid
         # scroll area) — same content_height() override.
@@ -179,6 +192,16 @@ class PanelLayoutEngine:
             else:
                 l.asset_effects_panel.move((w - ae_w) // 2, (h - ae_h) // 2)
             l.asset_effects_panel.raise_()
+
+        # Info modal — always centered over the canvas, no drag support
+        # (it's a one-off dismiss-with-OK message, not a panel worth
+        # remembering a position for).
+        if l.info_modal.isVisible():
+            im_w = l.info_modal.width()
+            im_h = l.info_modal.sizeHint().height()
+            l.info_modal.resize(im_w, im_h)
+            l.info_modal.move((w - im_w) // 2, (h - im_h) // 2)
+            l.info_modal.raise_()
 
         l.progression.setGeometry(center_x, body_bottom - prog_h, center_w, prog_h)
         l.status_bar.setGeometry(0, h - status_h, w, status_h)

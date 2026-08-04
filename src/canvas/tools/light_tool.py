@@ -35,12 +35,17 @@ class LightTool(BaseTool):
         self._selection = selection_engine
         self._on_placed = on_placed
         self._properties_provider = properties_provider
+        self._parent_provider = None
         self._interaction = ItemInteraction(viewport, selection_engine, transform_engine, history_engine) \
             if selection_engine and transform_engine else None
         self._ghost: LightGhostItem | None = None
 
     def set_properties_provider(self, provider):
         self._properties_provider = provider
+
+    def set_parent_provider(self, provider):
+        """provider() -> QGraphicsItem | None — boundary group para parenting."""
+        self._parent_provider = provider
 
     def activate(self):
         super().activate()
@@ -78,17 +83,14 @@ class LightTool(BaseTool):
             return
 
         props = self._properties_provider() if self._properties_provider else LightProperties()
+        parent_item = self._parent_provider() if self._parent_provider else None
         item = LightItem(props)
-        item.setPos(scene_pos)
-        # Same "precise click target" z-value MarkerItem uses (60) — a
-        # light has no visible icon of its own, just a boundingRect square
-        # to click on, and used to sit at z=9, BELOW generic assets/mob
-        # stamps (z=10, some with a generous BoundingRectShape hitbox
-        # covering their whole padded canvas) — any light placed near one
-        # was completely unclickable, itemAt() always returning the
-        # asset/mob on top of it instead.
+        item.setPos(scene_pos if not parent_item else parent_item.mapFromScene(scene_pos))
         item.setZValue(60)
-        self.viewport.scene().addItem(item)
+        if parent_item:
+            item.setParentItem(parent_item)
+        else:
+            self.viewport.scene().addItem(item)
         if self._history:
             self._history.push(PlaceObjectCommand(item))
 

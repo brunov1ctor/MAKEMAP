@@ -280,6 +280,14 @@ class BackgroundSection(QFrame):
                 background: {Colors.ACCENT_DIM}; color: {Colors.ACCENT};
                 border: 1px solid {Colors.ACCENT};
             }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """
 
     # ─── Toggle logic ───
@@ -449,6 +457,14 @@ class BackgroundSection(QFrame):
                     background: rgba(255,255,255,0.04); padding: 1px;
                 }}
                 QFrame:hover {{ border-color: {Colors.TEXT_SECONDARY}; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
             item_lay = QVBoxLayout(item_widget)
             item_lay.setContentsMargins(2, 2, 2, 2)
@@ -565,6 +581,14 @@ class BackgroundSection(QFrame):
                     background: rgba(255,255,255,0.04); padding: 1px;
                 }}
                 QFrame:hover {{ border-color: {Colors.TEXT_SECONDARY}; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
         widget.setStyleSheet(f"""
             QFrame {{

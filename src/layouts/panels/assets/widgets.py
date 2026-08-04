@@ -238,6 +238,14 @@ class SoundColumn(QWidget):
             f"QToolButton {{ background: rgba(0,0,0,0.6); border: none; font-size: 6px; "
             f"color: {Colors.TEXT_MUTED}; border-radius: 6px; }}"
             f"QToolButton:hover {{ color: {Colors.ERROR}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         self._clear_btn.clicked.connect(self._clear_sound)
         self._clear_btn.hide()
@@ -306,6 +314,14 @@ class SoundColumn(QWidget):
             f"QToolButton {{ background: transparent; border: none; font-size: 11px; "
             f"color: {Colors.TEXT_MUTED}; padding: 0; margin: 0; }}"
             f"QToolButton:hover {{ color: {Colors.ACCENT}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         self._rename_btn.clicked.connect(self._toggle_rename)
         self._rename_btn.hide()

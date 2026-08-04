@@ -29,6 +29,7 @@ class MarkerTool(BaseTool):
         self._selection = selection_engine
         self._on_placed = on_placed
         self._properties_provider = properties_provider
+        self._parent_provider = None
         self._interaction = ItemInteraction(viewport, selection_engine, transform_engine, history_engine) \
             if selection_engine and transform_engine else None
 
@@ -37,6 +38,11 @@ class MarkerTool(BaseTool):
         is placed — MarkerMediator hands over whichever icon is currently
         picked in the Marcador tool panel."""
         self._properties_provider = provider
+
+    def set_parent_provider(self, provider):
+        """provider() -> QGraphicsItem | None — returns the boundary group
+        to parent new markers into, or None for infinite map."""
+        self._parent_provider = provider
 
     def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
         if event.button() != Qt.MouseButton.LeftButton:
@@ -51,10 +57,14 @@ class MarkerTool(BaseTool):
             return
 
         props = self._properties_provider() if self._properties_provider else MarkerProperties()
+        parent_item = self._parent_provider() if self._parent_provider else None
         item = MarkerItem(props)
-        item.setPos(scene_pos)
+        item.setPos(scene_pos if not parent_item else parent_item.mapFromScene(scene_pos))
         item.setZValue(60)
-        self.viewport.scene().addItem(item)
+        if parent_item:
+            item.setParentItem(parent_item)
+        else:
+            self.viewport.scene().addItem(item)
         if self._history:
             self._history.push(PlaceObjectCommand(item))
 

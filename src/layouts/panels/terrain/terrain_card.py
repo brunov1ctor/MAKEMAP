@@ -1,67 +1,101 @@
-"""Terrain Card — single terrain entry with name, visibility, drag/drop, and delete."""
+"""Terrain Card — compact two-zone card: thumbnail | name/stats | actions.
+
+Mirrors RegionCard's layout (see region/region_card.py) now that Terrain
+gets the same flat-list CRUD treatment: a reference photo (or flat color
+swatch) on the left, name + área/objetos stats in the middle, and a
+locate + "..." overflow menu (Renomear, Editar, Localizar, Excluir) on the
+right. Drag-to-reorder (grabbing the card's own border) is unchanged from
+the old thin-row version.
+"""
 
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QToolButton, QStackedWidget, QLineEdit,
+    QFrame, QHBoxLayout, QVBoxLayout, QLabel, QToolButton, QStackedWidget,
+    QLineEdit, QMenu,
 )
-from PySide6.QtCore import Qt, Signal, QPoint, QMimeData
-from PySide6.QtGui import QColor, QDrag
+from PySide6.QtCore import Qt, Signal, QPoint, QMimeData, QRectF
+from PySide6.QtGui import QColor, QDrag, QPixmap, QPainter, QPainterPath
 
 from src.styles.tokens import Colors
 
+_THUMB_W, _THUMB_H = 84, 72
+
 
 class TerrainCard(QFrame):
-    """A single terrain entry card with name, visibility toggle, and delete."""
+    """A single terreno entry card with thumbnail, stats, and actions."""
 
-    toggled = Signal(str, bool)
-    deleted = Signal(str)
     selected = Signal(str)
+    deleted = Signal(str)
+    delete_requested = Signal(str)  # pede confirmação antes de excluir
+    edit_requested = Signal(str)  # "Editar" — opens the Terreno sub painel
     renamed = Signal(str, str)
-    drag_started = Signal(str)
+    locate_requested = Signal(str)
 
     DRAG_MARGIN = 8
 
-    def __init__(self, terrain_id: str, name: str, color: QColor, parent=None):
+    def __init__(self, terrain_id: str, name: str, color: QColor,
+                 area_m2: float = 0.0, object_count: int = 0,
+                 photo: QPixmap | None = None, parent=None):
         super().__init__(parent)
         self.terrain_id = terrain_id
         self._selected = False
+        self._color = QColor(color)
+        self._area_m2 = area_m2
+        self._object_count = object_count
         self._drag_start_pos: QPoint | None = None
-        self.setFixedHeight(36)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAcceptDrops(True)
-        self._base_style = self._build_style(False)
-        self.setStyleSheet(self._base_style)
+        self.setStyleSheet(self._build_style(False))
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(6)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(8)
 
-        # Color swatch
-        swatch = QLabel()
-        swatch.setFixedSize(14, 14)
-        swatch.setStyleSheet(f"""
-            background: {color.name()}; border-radius: 3px; border: 1px solid rgba(255,255,255,0.2);
+        # ─── Left: thumbnail — a user photo takes priority over the flat
+        # color swatch, same rule as RegionCard. ───
+        self._thumb = QLabel()
+        self._thumb.setFixedSize(_THUMB_W, _THUMB_H)
+        self._thumb.setScaledContents(True)
+        self._thumb.setStyleSheet(f"""
+            background: {color.name()}; border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.15);
         """)
-        layout.addWidget(swatch)
+        self._photo_pixmap: QPixmap | None = None
+        if photo is not None and not photo.isNull():
+            self._set_photo_pixmap(photo)
+        layout.addWidget(self._thumb)
 
-        # Name (label + edit stacked)
+        # ─── Center: name + stats ───
+        center_col = QVBoxLayout()
+        center_col.setSpacing(3)
+        center_col.setContentsMargins(0, 2, 0, 2)
+
+        name_row = QHBoxLayout()
+        name_row.setSpacing(6)
+
+        self._dot = QLabel()
+        self._dot.setFixedSize(9, 9)
+        self._dot.setStyleSheet(f"background: {color.name()}; border-radius: 4px;")
+        name_row.addWidget(self._dot)
+
         self._name_stack = QStackedWidget()
-        self._name_stack.setFixedHeight(22)
+        self._name_stack.setFixedHeight(18)
+        self._name_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
 
         self._name_label = QLabel(name)
         self._name_label.setStyleSheet(f"""
-            color: {Colors.TEXT_PRIMARY}; font-size: 11px;
+            color: {Colors.TEXT_PRIMARY}; font-size: 12px; font-weight: bold;
             background: transparent; border: none;
         """)
 
         self._name_edit = QLineEdit(name)
         self._name_edit.setStyleSheet(f"""
             QLineEdit {{
-                color: {Colors.TEXT_PRIMARY}; font-size: 11px;
-                background: rgba(255,255,255,0.08); border: 1px solid {Colors.ACCENT};
-                border-radius: 3px; padding: 0 4px;
+                color: {Colors.TEXT_PRIMARY}; font-size: 12px; font-weight: bold;
+                background: transparent; border: none; padding: 0;
             }}
+            QLineEdit:focus {{ background: transparent; border: none; }}
         """)
         self._name_edit.returnPressed.connect(self._finish_rename)
         self._name_edit.editingFinished.connect(self._finish_rename)
@@ -69,53 +103,100 @@ class TerrainCard(QFrame):
         self._name_stack.addWidget(self._name_label)
         self._name_stack.addWidget(self._name_edit)
         self._name_stack.setCurrentIndex(0)
-        layout.addWidget(self._name_stack, 1)
+        name_row.addWidget(self._name_stack, 1)
+        center_col.addLayout(name_row)
 
-        # Locate button
-        self._vis_btn = QToolButton()
-        self._vis_btn.setText("📍")
-        self._vis_btn.setFixedSize(22, 22)
-        self._vis_btn.setToolTip("Localizar no mapa")
-        self._vis_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._vis_btn.setStyleSheet(f"""
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(10)
+        self._area_label = QLabel()
+        self._area_label.setStyleSheet(f"""
+            color: {Colors.TEXT_SECONDARY}; font-size: 9px;
+            background: transparent; border: none;
+        """)
+        self._count_label = QLabel()
+        self._count_label.setStyleSheet(f"""
+            color: {Colors.TEXT_SECONDARY}; font-size: 9px;
+            background: transparent; border: none;
+        """)
+        stats_row.addWidget(self._area_label)
+        stats_row.addWidget(self._count_label)
+        stats_row.addStretch()
+        center_col.addLayout(stats_row)
+        center_col.addStretch()
+
+        self._refresh_stats()
+
+        layout.addLayout(center_col, 1)
+
+        # ─── Right: locate + "..." menu ───
+        actions_col = QVBoxLayout()
+        actions_col.setSpacing(2)
+
+        self._locate_btn = QToolButton()
+        self._locate_btn.setText("📍")
+        self._locate_btn.setFixedSize(22, 22)
+        self._locate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._locate_btn.setToolTip("Localizar no mapa")
+        self._locate_btn.setStyleSheet(f"""
             QToolButton {{
-                border: none; border-radius: 4px; font-size: 11px;
+                border: none; border-radius: 4px; font-size: 12px;
                 color: {Colors.TEXT_SECONDARY}; background: transparent;
             }}
             QToolButton:hover {{ background: rgba(255,255,255,0.08); color: {Colors.ACCENT}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
-        self._vis_btn.clicked.connect(lambda: self.toggled.emit(self.terrain_id, True))
-        layout.addWidget(self._vis_btn)
+        self._locate_btn.clicked.connect(lambda: self.locate_requested.emit(self.terrain_id))
+        actions_col.addWidget(self._locate_btn)
 
-        # Rename button
-        rename_btn = QToolButton()
-        rename_btn.setText("✎")
-        rename_btn.setFixedSize(22, 22)
-        rename_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        rename_btn.setStyleSheet(f"""
+        self._menu_btn = QToolButton()
+        self._menu_btn.setText("⋯")
+        self._menu_btn.setFixedSize(22, 22)
+        self._menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._menu_btn.setToolTip("Mais opções")
+        self._menu_btn.setStyleSheet(f"""
             QToolButton {{
-                border: none; border-radius: 4px; font-size: 12px;
-                color: {Colors.TEXT_MUTED}; background: transparent;
+                border: none; border-radius: 4px; font-size: 14px; font-weight: bold;
+                color: {Colors.TEXT_SECONDARY}; background: transparent;
             }}
             QToolButton:hover {{ background: rgba(255,255,255,0.08); color: {Colors.TEXT_PRIMARY}; }}
-        """)
-        rename_btn.clicked.connect(self._start_rename)
-        layout.addWidget(rename_btn)
-
-        # Delete button
-        del_btn = QToolButton()
-        del_btn.setText("🗑")
-        del_btn.setFixedSize(22, 22)
-        del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        del_btn.setStyleSheet(f"""
-            QToolButton {{
-                border: none; border-radius: 4px; font-size: 11px;
-                color: {Colors.TEXT_MUTED}; background: transparent;
+            QToolButton::menu-indicator {{ image: none; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
             }}
-            QToolButton:hover {{ background: rgba(239,83,80,0.2); color: {Colors.ERROR}; }}
         """)
-        del_btn.clicked.connect(lambda: self.deleted.emit(self.terrain_id))
-        layout.addWidget(del_btn)
+        menu_style = f"""
+            QMenu {{
+                background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER}; padding: 4px;
+            }}
+            QMenu::item {{ padding: 4px 20px 4px 8px; border-radius: 3px; font-size: 10px; }}
+            QMenu::item:selected {{ background: {Colors.ACCENT_DIM}; }}
+        """
+        menu = QMenu(self._menu_btn)
+        menu.setStyleSheet(menu_style)
+        menu.addAction("Renomear", self._start_rename)
+        menu.addAction("Editar", lambda: self.edit_requested.emit(self.terrain_id))
+        menu.addAction("Localizar", lambda: self.locate_requested.emit(self.terrain_id))
+        menu.addSeparator()
+        menu.addAction("Excluir", lambda: self.delete_requested.emit(self.terrain_id))
+        self._menu_btn.setMenu(menu)
+        actions_col.addWidget(self._menu_btn)
+        actions_col.addStretch()
+
+        layout.addLayout(actions_col)
 
     def _is_on_border(self, pos: QPoint) -> bool:
         m = self.DRAG_MARGIN
@@ -175,20 +256,20 @@ class TerrainCard(QFrame):
             return f"""
                 QFrame {{
                     background: rgba(79,195,247,0.1); border: 2px dashed {Colors.ACCENT};
-                    border-radius: 6px;
+                    border-radius: 10px;
                 }}
             """
         if sel:
             return f"""
                 QFrame {{
-                    background: {Colors.ACCENT_DIM}; border: 1px solid {Colors.ACCENT};
-                    border-radius: 6px;
+                    background: rgba(79,195,247,0.12); border: 1.5px solid {Colors.ACCENT};
+                    border-radius: 10px;
                 }}
             """
         return f"""
             QFrame {{
                 background: rgba(255,255,255,0.04); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 6px;
+                border-radius: 10px;
             }}
             QFrame:hover {{ background: rgba(255,255,255,0.08); }}
         """
@@ -207,6 +288,57 @@ class TerrainCard(QFrame):
             self._name_label.setText(new_name)
             self.renamed.emit(self.terrain_id, new_name)
         self._name_stack.setCurrentIndex(0)
+
+    def set_name(self, name: str):
+        self._name_label.setText(name)
+
+    def set_color(self, color: QColor):
+        self._color = QColor(color)
+        self._dot.setStyleSheet(f"background: {self._color.name()}; border-radius: 4px;")
+        if self._photo_pixmap is None:
+            self._thumb.setStyleSheet(f"""
+                background: {self._color.name()}; border-radius: 8px;
+                border: 1px solid rgba(255,255,255,0.15);
+            """)
+
+    def _set_photo_pixmap(self, pixmap: QPixmap):
+        rounded = QPixmap(_THUMB_W, _THUMB_H)
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, _THUMB_W, _THUMB_H), 8, 8)
+        painter.setClipPath(path)
+        scaled = pixmap.scaled(
+            _THUMB_W, _THUMB_H, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation,
+        )
+        x = (_THUMB_W - scaled.width()) // 2
+        y = (_THUMB_H - scaled.height()) // 2
+        painter.drawPixmap(x, y, scaled)
+        painter.end()
+        self._photo_pixmap = pixmap
+        self._thumb.setStyleSheet("background: transparent; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;")
+        self._thumb.setPixmap(rounded)
+
+    def set_photo(self, pixmap: QPixmap | None):
+        if pixmap is not None and not pixmap.isNull():
+            self._set_photo_pixmap(pixmap)
+        else:
+            self._photo_pixmap = None
+            self._thumb.setPixmap(QPixmap())
+            self.set_color(self._color)
+
+    def set_stats(self, area_m2: float, object_count: int):
+        self._area_m2 = area_m2
+        self._object_count = object_count
+        self._refresh_stats()
+
+    def _refresh_stats(self):
+        area_km2 = self._area_m2 / 1_000_000
+        area_text = f"{area_km2:.0f} km²" if area_km2 >= 1 else f"{area_km2:.2f} km²" if area_km2 >= 0.01 else f"{self._area_m2:.0f} m²"
+        self._area_label.setText(f"📐 {area_text}")
+        self._count_label.setText(f"📦 {self._object_count} objeto{'s' if self._object_count != 1 else ''}")
 
     @property
     def name(self) -> str:

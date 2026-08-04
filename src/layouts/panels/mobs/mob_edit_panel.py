@@ -161,6 +161,14 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._fav_btn.setToolTip("Favoritar")
         self._fav_btn.setStyleSheet(f"""
             QToolButton {{ border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; background: rgba(255,255,255,0.06); font-size: 14px; color: gold; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._fav_btn.toggled.connect(lambda c: self._fav_btn.setText("★" if c else "☆"))
         header.addWidget(self._fav_btn)
@@ -176,6 +184,14 @@ class MobEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
                 font-size: 14px; font-weight: bold; color: {Colors.TEXT_SECONDARY}; }}
             QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
             QToolButton::menu-indicator {{ image: none; width: 0; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         menu = QMenu(menu_btn)
         menu.setStyleSheet(f"""

@@ -323,6 +323,14 @@ class _LayerRow(QFrame):
         clear_btn.setStyleSheet(f"""
             QToolButton {{ border: none; font-size: 10px; color: {Colors.TEXT_MUTED}; background: transparent; }}
             QToolButton:hover {{ color: {Colors.ERROR}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         clear_btn.clicked.connect(lambda: self.clear_requested.emit(self.key))
         row.addWidget(clear_btn)
@@ -373,6 +381,14 @@ class _EffectConfigBlock(QFrame):
         self._vis_btn.setStyleSheet(f"""
             QToolButton {{ border: none; font-size: 10px; color: {Colors.TEXT_MUTED}; background: transparent; }}
             QToolButton:checked {{ color: {Colors.ACCENT}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._vis_btn.toggled.connect(self._on_changed)
         header.addWidget(self._vis_btn)
@@ -384,6 +400,14 @@ class _EffectConfigBlock(QFrame):
         clear_btn.setStyleSheet(f"""
             QToolButton {{ border: none; font-size: 10px; color: {Colors.TEXT_MUTED}; background: transparent; }}
             QToolButton:hover {{ color: {Colors.ERROR}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         clear_btn.clicked.connect(self.clear_requested.emit)
         header.addWidget(clear_btn)
@@ -405,6 +429,14 @@ class _EffectConfigBlock(QFrame):
             QComboBox {{ background: rgba(255,255,255,0.05); color: {Colors.TEXT_SECONDARY};
                 border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px; padding: 2px 6px; font-size: 9px; }}
             {combo_popup_qss()}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._blend_combo.currentIndexChanged.connect(self._on_changed)
         bo_row.addWidget(self._blend_combo)
@@ -414,6 +446,14 @@ class _EffectConfigBlock(QFrame):
         self._opacity_slider.setStyleSheet(f"""
             QSlider::groove:horizontal {{ background: {Colors.BG_TERTIARY}; height: 3px; border-radius: 1px; }}
             QSlider::handle:horizontal {{ background: {Colors.ACCENT}; width: 8px; height: 8px; margin: -3px 0; border-radius: 4px; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._opacity_lbl = QLabel("100%")
         self._opacity_lbl.setFixedWidth(32)
@@ -548,6 +588,14 @@ class _EffectConfigBlock(QFrame):
         self._hex_input.blockSignals(False)
         self._swatch_btn.setStyleSheet(
             f"QToolButton {{ background: {self._color}; border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         if emit:
             self._on_changed()
@@ -635,6 +683,14 @@ class AssetEffectsPanel(QFrame):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_SECONDARY}; background: transparent; }}
             QToolButton:hover {{ background: #333; color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         close_btn.clicked.connect(self._flush_and_close)
         header.addWidget(close_btn)
@@ -705,6 +761,14 @@ class AssetEffectsPanel(QFrame):
                 background: rgba(255,255,255,0.04); color: {Colors.TEXT_SECONDARY}; font-size: 12px; }}
             QToolButton:hover {{ border-color: {Colors.BORDER_HOVER}; }}
             QToolButton:checked {{ border-color: {Colors.WARNING}; background: rgba(255,167,38,0.15); color: {Colors.WARNING}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._erase_btn.clicked.connect(self._on_eraser_selected)
         search_row.addWidget(self._erase_btn)
@@ -767,7 +831,17 @@ class AssetEffectsPanel(QFrame):
         foam_lay.setSpacing(8)
         foam_label = QLabel("🌊 Maresia")
         foam_label.setToolTip("Maresia (espuma junto à terra)")
-        foam_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 10px; background: transparent; border: none;")
+        foam_label.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; font-size: 10px; background: transparent; border: none;"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
+        )
         foam_lay.addWidget(foam_label, 1)
         self._foam_check = SquareCheck(checked=True)
         self._foam_check.toggled.connect(self._on_foam_toggled)

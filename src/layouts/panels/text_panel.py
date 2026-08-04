@@ -20,6 +20,7 @@ from PySide6.QtGui import QColor, QPainter, QPixmap
 
 from src.styles.tokens import Colors, combo_popup_qss
 from src.layouts.panel_manager import paint_glass_panel
+from src.layouts.panels.terrain_combo import TerrainCombo
 from src.layouts.panels.collapsible_section import CollapsibleSection
 from src.layouts.panels.color_field import ColorField
 from src.engines.typography import TextAlign, TextProperties
@@ -188,6 +189,10 @@ class TextToolPanel(QFrame):
         scroll.setWidget(container)
 
         layout.addLayout(self._build_header())
+        layout.addWidget(self._separator())
+
+        self.terrain_combo = TerrainCombo()
+        layout.addWidget(self.terrain_combo)
         layout.addWidget(self._separator())
 
         # Section 1 — content, font, color, alignment, spacing: everything
@@ -623,6 +628,14 @@ class TextToolPanel(QFrame):
                 color: {Colors.TEXT_SECONDARY}; background: transparent;
             }}
             QToolButton:hover {{ background: #333; color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         close_btn.clicked.connect(self.close_requested.emit)
         header.addWidget(close_btn)
@@ -676,6 +689,14 @@ class TextToolPanel(QFrame):
                 background: {Colors.ACCENT_DIM}; color: {Colors.ACCENT}; border-color: {Colors.ACCENT};
             }}
             QToolButton:disabled {{ color: {Colors.TEXT_DISABLED}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """
 
     # ─── Interaction ───

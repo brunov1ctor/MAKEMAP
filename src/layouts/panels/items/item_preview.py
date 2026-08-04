@@ -108,6 +108,14 @@ class ItemPreview(QWidget):
         self._image.setStyleSheet(
             f"font-size: 56px; background: qradialgradient(cx:0.5, cy:0.4, radius:0.7, "
             f"stop:0 rgba(79,195,247,0.10), stop:1 transparent); border: none; border-radius: 8px;"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         self._image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._image.image_dropped.connect(self.image_dropped.emit)

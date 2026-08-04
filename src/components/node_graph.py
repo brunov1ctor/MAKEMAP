@@ -329,6 +329,14 @@ class ChainCanvas(QWidget):
                 font-size: 9px; font-weight: bold; color: #ffffff;
                 background: #2E7D32; }}
             QToolButton:hover {{ background: #388E3C; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._add_rect_btn.clicked.connect(self.rect_requested.emit)
         self._add_rect_btn.move(8, 8)

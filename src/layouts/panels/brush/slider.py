@@ -47,7 +47,17 @@ class BrushSlider(QFrame):
     def __init__(self, label: str, icon: str, min_val: float, max_val: float,
                  default: float, suffix: str = "", parent=None):
         super().__init__(parent)
-        self.setStyleSheet("background: transparent; border: none;")
+        self.setStyleSheet(f"""
+            background: transparent; border: none;
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
+        """)
         self._min = min_val
         self._max = max_val
         self._suffix = suffix

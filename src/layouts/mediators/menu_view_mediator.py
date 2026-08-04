@@ -164,6 +164,18 @@ class MenuViewMediator:
             panel = DungeonsPanel(uow, project_dir=project_dir, parent=container)
             panel.closed.connect(self._hide_menu_view)
             layout.addWidget(panel)
+        elif menu_name == "Quests":
+            from src.layouts.panels.quests.panel import QuestsPanel
+            window = l.window()
+            uow = window.uow if window and hasattr(window, 'uow') else None
+            project_dir = window.project.path if window and getattr(window, 'project', None) else None
+            panel = QuestsPanel(
+                uow, project_dir=project_dir,
+                scene_provider=lambda: l.canvas.engine.viewport.scene(),
+                parent=container,
+            )
+            panel.closed.connect(self._hide_menu_view)
+            layout.addWidget(panel)
         elif menu_name in MENU_PANELS:
             panel_class = MENU_PANELS[menu_name]
             panel = panel_class(container)

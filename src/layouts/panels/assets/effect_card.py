@@ -60,6 +60,14 @@ class EffectCard(QFrame):
         self._thumb.setStyleSheet(f"""
             QToolButton {{ border-radius: 6px; border: 1px dashed {Colors.BORDER_SUBTLE};
                 background: rgba(255,255,255,0.05); font-size: 18px; color: {Colors.TEXT_MUTED}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._thumb.setText("✨")
         self._thumb.clicked.connect(self._on_pick_image)

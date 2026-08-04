@@ -57,8 +57,24 @@ class TopNavigationButton(QToolButton):
         self.setFixedHeight(62)
         self.setMinimumWidth(72)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        # Remove all default styling — we paint everything ourselves
-        self.setStyleSheet("QToolButton { background: transparent; border: none; }")
+        # Remove all default styling — we paint everything ourselves. The
+        # QToolTip block is required here too (not just relying on the
+        # app's global QSS) — a widget with its own local setStyleSheet
+        # doesn't reliably inherit the global QToolTip rule, same bug
+        # already fixed in toolbar.py/view_dropdown.py: without it, this
+        # button's tooltip renders as a native opaque black box on Windows
+        # instead of the intended glass style.
+        self.setStyleSheet(f"""
+            QToolButton {{ background: transparent; border: none; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
+        """)
 
     def sizeHint(self):
         if self._wrap:

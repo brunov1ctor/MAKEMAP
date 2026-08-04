@@ -214,8 +214,16 @@ class OverviewSectionMixin:
             self._thumb.setIconSize(self._thumb.size())
             self._thumb.set_cover_pixmap(self._thumb_pixmap)
             self._thumb.setText("")
-            self._thumb.setStyleSheet("""
-                QToolButton { border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); }
+            self._thumb.setStyleSheet(f"""
+                QToolButton {{ border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
         else:
             self._thumb.setFixedSize(self._THUMB_MAX_W, self._THUMB_DEFAULT_H)
@@ -225,6 +233,14 @@ class OverviewSectionMixin:
             self._thumb.setStyleSheet(f"""
                 QToolButton {{ border-radius: 8px; border: 1px dashed {Colors.BORDER_SUBTLE};
                 background: rgba(255,255,255,0.05); font-size: 48px; color: {Colors.TEXT_MUTED}; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
 
     def _on_pick_image(self):

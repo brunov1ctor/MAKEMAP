@@ -14,12 +14,12 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QSizePolicy, QScrollArea, QWidget, QToolButton,
-    QCheckBox, QComboBox, QStackedWidget,
+    QCheckBox, QStackedWidget,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QBrush, QPixmap
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panel_manager import paint_glass_panel
 
@@ -61,6 +61,14 @@ class TexturePreviewWidget(QFrame):
                 background: {_BG_SECTION};
                 border: 1px solid {border};
                 border-radius: 6px;
+            }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
             }}
         """)
 
@@ -130,10 +138,9 @@ class BrushToolPanel(QFrame):
     PANEL_WIDTH = 300
 
     mode_changed = Signal(str)
-    terrain_changed = Signal(str)  # terrain_id ("" = Mapa Infinito) — "Pintando em" dropdown
     close_requested = Signal()
-    assets_requested = Signal()  # texture preview clicked — MainLayout opens the adjacent AssetBrowserPanel
-    content_changed = Signal()  # emitted when visible content changes size (e.g. Parâmetros <-> Assets tab)
+    assets_requested = Signal()
+    content_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -143,7 +150,8 @@ class BrushToolPanel(QFrame):
         self.setStyleSheet("background: transparent; border: none;")
 
         self._current_section = "params"  # read by _refresh_section_tab_style, built below
-        self._terrain_names: dict[str, str] = {}  # terrain_id -> name, kept by set_terrain_options — see active_terrain_name()
+        self._terrain_names: dict[str, str] = {}
+        self._active_terrain_id: str = ""
 
         # layout raiz do QFrame — tudo dentro dele recebe o fundo glass via paintEvent
         root = QVBoxLayout(self)
@@ -225,6 +233,14 @@ class BrushToolPanel(QFrame):
                 color: {_TEXT_SEC}; background: transparent;
             }}
             QToolButton:hover {{ background: #333; color: {_TEXT}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         close_btn.clicked.connect(self.close_requested.emit)
         header.addWidget(close_btn)
@@ -290,10 +306,6 @@ class BrushToolPanel(QFrame):
         self._assets_tab_btn.setStyleSheet(active if self._current_section == "assets" else inactive)
 
     def _build_terrain_indicator(self):
-        """"Pintando em" — a real dropdown (not just a label reflecting
-        whatever's selected over in the Terrain panel), same as Região's
-        own, so you can pick which terrain to paint into (or "Mapa
-        Infinito") directly from here."""
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 2)
         row.setSpacing(4)
@@ -306,53 +318,32 @@ class BrushToolPanel(QFrame):
         label.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 10px; background: transparent; border: none;")
         row.addWidget(label)
 
-        self._terrain_combo = QComboBox()
-        self._terrain_combo.addItem("🌍 Mapa Infinito", "")
-        self._terrain_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._terrain_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: rgba(255,255,255,0.04); color: {_TEXT_SEC};
-                border: 1px solid {_BORDER}; border-radius: 4px;
-                padding: 3px 8px; font-size: 10px;
-            }}
-            QComboBox::drop-down {{ border: none; width: 14px; }}
-            {combo_popup_qss()}
-        """)
-        self._terrain_combo.currentIndexChanged.connect(
-            lambda i: self.terrain_changed.emit(self._terrain_combo.itemData(i))
-        )
-        row.addWidget(self._terrain_combo, 1)
+        self._terrain_lbl = QLabel("Mapa Infinito")
+        self._terrain_lbl.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 10px; background: transparent; border: none;")
+        row.addWidget(self._terrain_lbl, 1)
 
         self._layout.addLayout(row)
 
     def set_terrain_options(self, options: list[tuple[str, str]]):
-        """Rebuild the "Pintando em" dropdown. `options` is a list of
-        (terrain_id, name) for every currently-existing terrain — "Mapa
-        Infinito" (id "") is always prepended automatically."""
-        current = self._terrain_combo.itemData(self._terrain_combo.currentIndex())
-        self._terrain_combo.blockSignals(True)
-        self._terrain_combo.clear()
-        self._terrain_combo.addItem("🌍 Mapa Infinito", "")
-        self._terrain_names = {}
-        for terrain_id, name in options:
-            self._terrain_combo.addItem(f"🗺 {name}", terrain_id)
-            self._terrain_names[terrain_id] = name
-        idx = self._terrain_combo.findData(current)
-        self._terrain_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self._terrain_combo.blockSignals(False)
+        self._terrain_names = {tid: name for tid, name in options}
+        self._refresh_terrain_label()
 
     def active_terrain_name(self) -> str:
-        """Display name of the currently-selected "Pintando em" target —
-        "Mapa Infinito" itself is a real answer (unbounded is still a
-        selected target, not "nothing selected"), not "" — what the compass
-        HUD's TERRENO field reads, so it tracks which terrain the brush is
-        actually bounded to painting into right now, not whatever's
-        separately selected over in the Terrain panel's own (unrelated)
-        card list."""
-        terrain_id = self._terrain_combo.itemData(self._terrain_combo.currentIndex()) or ""
-        if not terrain_id:
+        if not self._active_terrain_id:
             return "Mapa Infinito"
-        return self._terrain_names.get(terrain_id, "Mapa Infinito")
+        return self._terrain_names.get(self._active_terrain_id, "Mapa Infinito")
+
+    def active_terrain_id(self) -> str:
+        return self._active_terrain_id
+
+    def set_active_terrain(self, terrain_id: str):
+        self._active_terrain_id = terrain_id or ""
+        self._refresh_terrain_label()
+
+    def _refresh_terrain_label(self):
+        name = self._terrain_names.get(self._active_terrain_id, "Mapa Infinito") \
+            if self._active_terrain_id else "Mapa Infinito"
+        self._terrain_lbl.setText(name)
 
     def _build_sliders_grid(self):
         # 2 columns — each BrushSlider's name label wraps (see slider.py)
@@ -417,6 +408,14 @@ class BrushToolPanel(QFrame):
                 padding: 3px 4px;
             }}
             QToolButton:hover {{ background: #333; color: {_TEXT}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """
 
         self._paint_btn = QToolButton()
@@ -463,6 +462,14 @@ class BrushToolPanel(QFrame):
         self._material_label.setStyleSheet(f"""
             color: {_TEXT}; font-size: 11px; font-weight: bold;
             background: transparent; border: none;
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._material_label.setMinimumWidth(0)
         layout.addWidget(self._material_label)

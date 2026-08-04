@@ -34,6 +34,14 @@ class JsonBulkEditor(QObject):
             QToolButton {{ background: rgba(255,255,255,0.05); border: 1px solid {Colors.BORDER_SUBTLE};
                 padding: 4px 10px; color: {Colors.TEXT_SECONDARY}; font-size: 10px; font-weight: bold; border-radius: 6px; }}
             QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; border-color: {Colors.ACCENT}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self.button.clicked.connect(self._toggle)
 

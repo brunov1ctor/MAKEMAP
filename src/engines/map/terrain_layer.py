@@ -13,7 +13,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene
 
-from src.canvas.item_utils import suppress_selection_decoration
+from src.canvas.item_utils import suppress_selection_decoration, enable_hover_glow
+from src.styles.tokens import Colors
 
 
 class _LayerItem(QGraphicsItem):
@@ -27,10 +28,61 @@ class _LayerItem(QGraphicsItem):
     pixmap() are kept so existing full-image call sites (stroke-finish,
     style/texture changes, RegionLayer's border compositing) work unchanged."""
 
-    def __init__(self, parent=None):
+    # Deve bater com SelectTool.name (src/canvas/tools/defaults.py) — não
+    # importado direto pra evitar canvas.tools <-> engines.map se
+    # entrelaçarem; every other "qual ferramenta está ativa?" check no app
+    # já compara por esse mesmo nome em vez de isinstance (ver
+    # text_mediator.py, terrain_mediator.py, ...).
+    _SELECT_TOOL_NAME = "Selecionar"
+
+    def __init__(self, parent=None, tool_manager=None):
         super().__init__(parent)
         self._pixmap = QPixmap()
         self._shape_cache: QPainterPath | None = None
+        self._terrain_layer: "TerrainLayer | None" = None  # set by TerrainLayer after construction
+        self._hovered = False
+        # Só acende com a ferramenta Selecionar ativa — pintar/mover/etc.
+        # com o mouse passando por cima de um terreno não deveria fazer
+        # brilhar um destaque de "isto é selecionável", já que nenhuma
+        # dessas outras ferramentas de fato seleciona ao clicar. None (o
+        # caso de um TerrainLayer criado sem tool_manager, ex.: dentro de
+        # RegionLayer, que sobrescreve esses handlers de hover com os
+        # próprios logo em seguida de qualquer forma) mantém o
+        # comportamento antigo de "sempre mostrar".
+        self._tool_manager = tool_manager
+        # Unlike markers/spawn stamps (enable_hover_glow's usual scale+drop-
+        # shadow callback), a terrain layer's own item spans its whole
+        # raster canvas (up to 4096px) — scaling it or applying a
+        # QGraphicsDropShadowEffect over that area would be both visually
+        # wrong (the "painted" look would balloon outward past the actual
+        # brushed edge) and expensive. Painting a glow outline traced from
+        # shape() (the real painted-pixel contour, not the raster bounding
+        # box) in our own paint() instead gives every terrain/region/brush-
+        # effect layer the same hover feedback markers/mobs/NPCs already
+        # have, without those costs — this item type previously had NONE
+        # (no setAcceptHoverEvents at all), the one gap enable_hover_glow's
+        # other 3 adopters didn't share.
+        enable_hover_glow(self, self._on_hover_changed)
+
+    def _is_select_tool_active(self) -> bool:
+        return self._tool_manager is None or self._tool_manager.active_name == self._SELECT_TOOL_NAME
+
+    def _on_hover_changed(self, hovered: bool):
+        if hovered and not self._is_select_tool_active():
+            return
+        self._hovered = hovered
+        self.update()
+
+    def selection_bounding_rect(self) -> QRectF:
+        """Tight bounding rect of the actually-painted pixels (item-local
+        coords) — used by TransformEngine._item_bounds so the selection
+        border/handles hug the painted area instead of the full raster
+        canvas (which can be 4096x4096 even for a tiny painted patch)."""
+        if self._terrain_layer is not None:
+            bounds = self._terrain_layer.opaque_bounds_local()
+            if bounds is not None:
+                return QRectF(bounds)
+        return self.boundingRect()
 
     def boundingRect(self) -> QRectF:
         return QRectF(0, 0, self._pixmap.width(), self._pixmap.height())
@@ -45,7 +97,23 @@ class _LayerItem(QGraphicsItem):
         drops the cache), only actually rebuilt the next time a hit-test
         is needed (click / hover / box-select), not on every brush stamp."""
         if self._shape_cache is None:
-            if self._pixmap.isNull():
+            layer = self._terrain_layer
+            if layer is not None and layer.is_mask_only() and not layer.has_stencil_data():
+                # Brush-painted effect layers (Névoa, Poeira, ...) are
+                # mask_only with no stencil ever painted — TerrainLayer.
+                # _recomposite_rect then has neither a texture (Layer 1)
+                # nor stencil data (Layer 2) to draw, so self._pixmap stays
+                # permanently transparent by design (the visible glow comes
+                # from BrushEffectsOverlay reading the raw mask instead, see
+                # brush_tool.py._get_or_create_effect_layer). Deriving the
+                # hit-test shape from that same empty pixmap would make the
+                # painted effect permanently unselectable/unclickable no
+                # matter how much was painted — read the real paint mask
+                # directly instead.
+                path = QPainterPath()
+                path.addRegion(QRegion(QPixmap.fromImage(layer.mask).mask()))
+                self._shape_cache = path
+            elif self._pixmap.isNull():
                 self._shape_cache = QPainterPath()
             else:
                 path = QPainterPath()
@@ -54,10 +122,50 @@ class _LayerItem(QGraphicsItem):
         return self._shape_cache
 
     def paint(self, painter, option, widget=None):
-        if self._pixmap.isNull():
+        if not self._pixmap.isNull():
+            exposed = option.exposedRect.intersected(self.boundingRect())
+            painter.drawPixmap(exposed, self._pixmap, exposed)
+        if self._hovered:
+            self._paint_hover_glow(painter)
+
+    def _paint_hover_glow(self, painter: QPainter):
+        """Neon outline traced along the real painted silhouette — same
+        layered alpha/width passes FlowCanvas uses for its connection
+        lines, for the same "glowing edge" look used everywhere else
+        selectable things get highlighted in this app.
+
+        Deliberately NOT shape() here: that path is built from a QRegion
+        (a union of many small rectangles, good enough for hit-testing),
+        and stroking it directly draws the outline of every one of those
+        little rectangles rather than one clean silhouette — on a filled
+        area that reads as the whole object glowing solid blue instead of
+        just its edge. effect_geometry()'s traced_silhouette (used
+        elsewhere for the exact same "clean outline" need — RegionLayer's
+        border bake, BrushEffectsOverlay's clip) already solves this with
+        a morphological close + single contour trace, in this same
+        item-local coordinate space paint() already draws in."""
+        if not self._is_select_tool_active():
+            # Defensive re-check, not just at hover-enter: if the user
+            # switches tools via keyboard shortcut while the cursor sits
+            # still over this item (no hoverLeave fires), _hovered stays
+            # True — the next repaint this triggers (however it's
+            # triggered) should still suppress the glow instead of leaving
+            # it stuck on under a tool that never re-checks it.
             return
-        exposed = option.exposedRect.intersected(self.boundingRect())
-        painter.drawPixmap(exposed, self._pixmap, exposed)
+        if self._terrain_layer is None:
+            return
+        traced = self._terrain_layer.effect_geometry()
+        if traced is None:
+            return
+        path, _bounds = traced
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor(Colors.ACCENT)
+        for alpha, width in ((60, 7), (160, 3), (255, 1.2)):
+            c = QColor(color)
+            c.setAlpha(alpha)
+            painter.setPen(QPen(c, width))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
 
     def setPixmap(self, pixmap: QPixmap):
         prev_size = self._pixmap.size()
@@ -376,7 +484,7 @@ class TerrainLayer:
     EXPAND_CHUNK = 2048  # growth increment in pixels
 
     def __init__(self, scene: QGraphicsScene, map_width: int = 4096, map_height: int = 4096,
-                 parent_item=None):
+                 parent_item=None, tool_manager=None):
         self._scene = scene
         self._width = map_width
         self._height = map_height
@@ -403,7 +511,8 @@ class TerrainLayer:
         self._has_stencil = False
 
         # Scene item (child of parent_item if provided, so it moves with it)
-        self._item = _LayerItem(parent_item)
+        self._item = _LayerItem(parent_item, tool_manager=tool_manager)
+        self._item._terrain_layer = self
         self._item.setZValue(1)
         self._item.setPos(0, 0)
         self._item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -442,6 +551,12 @@ class TerrainLayer:
 
     def has_texture(self) -> bool:
         return self._texture is not None and not self._texture.isNull()
+
+    def is_mask_only(self) -> bool:
+        return self._mask_only
+
+    def has_stencil_data(self) -> bool:
+        return self._has_stencil
 
     def set_texture(self, pixmap: QPixmap, scale: float = 1.0, rotation: float = 0.0):
         self._texture = pixmap
@@ -552,6 +667,7 @@ class TerrainLayer:
             self._stroke_dirty = stamp_rect
         else:
             self._stroke_dirty = self._stroke_dirty.united(stamp_rect)
+        self._traced_cache = None
 
     def paint_cell(self, polygon: QPolygonF, params: TerrainBrushParams):
         """Flood-fill an entire grid cell — used instead of paint_at() when
@@ -602,6 +718,7 @@ class TerrainLayer:
             self._stroke_dirty = stamp_rect
         else:
             self._stroke_dirty = self._stroke_dirty.united(stamp_rect)
+        self._traced_cache = None
 
     def update_live(self):
         """Incremental update: recomposite only the dirty region."""
@@ -783,6 +900,7 @@ class TerrainLayer:
         self._height = state["height"]
         self._item.setPos(state["pos"])
         self._result = QImage(self._width, self._height, QImage.Format.Format_ARGB32_Premultiplied)
+        self._traced_cache = None
         self._recomposite_full()
 
     # ─── Serialization ───────────────────────────────────────────────────

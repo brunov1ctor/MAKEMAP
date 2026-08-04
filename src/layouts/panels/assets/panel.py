@@ -344,6 +344,14 @@ class AssetSoundManager(QWidget):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
             QToolButton:hover {{ background: rgba(79,195,247,0.3); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         row_lay.addWidget(confirm_btn)
 
@@ -356,6 +364,14 @@ class AssetSoundManager(QWidget):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_MUTED}; background: transparent; }}
             QToolButton:hover {{ color: {Colors.ERROR}; background: rgba(239,83,80,0.2); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         row_lay.addWidget(cancel_btn)
 
@@ -467,6 +483,14 @@ class AssetSoundManager(QWidget):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
             QToolButton:hover {{ background: rgba(79,195,247,0.3); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         row_lay.addWidget(confirm_btn)
 
@@ -479,6 +503,14 @@ class AssetSoundManager(QWidget):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_MUTED}; background: transparent; }}
             QToolButton:hover {{ color: {Colors.ERROR}; background: rgba(239,83,80,0.2); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         row_lay.addWidget(cancel_btn)
 
@@ -583,6 +615,14 @@ class AssetSoundManager(QWidget):
                 QToolButton {{ border: none; background: transparent;
                     color: {Colors.TEXT_MUTED}; font-size: 9px; }}
                 QToolButton:hover {{ color: {Colors.ERROR}; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
             close_btn.clicked.connect(lambda checked=False, k=key: self._on_delete_style(k))
             chip_lay.addWidget(close_btn)
@@ -604,6 +644,14 @@ class AssetSoundManager(QWidget):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
             QToolButton:hover {{ background: rgba(79,195,247,0.3); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         add_btn.clicked.connect(self._add_style)
         self._style_tab_flow.addWidget(add_btn)
@@ -669,6 +717,14 @@ class AssetSoundManager(QWidget):
             f"QToolButton {{ background: {Colors.ACCENT_DIM}; border: none; "
             f"color: {Colors.ACCENT}; font-size: 14px; font-weight: bold; border-radius: 4px; }}"
             f"QToolButton:hover {{ background: rgba(79,195,247,0.3); }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         add_btn.clicked.connect(self._add_category)
         t_lay.addWidget(add_btn)
@@ -744,6 +800,14 @@ class AssetSoundManager(QWidget):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
             QToolButton:hover {{ background: rgba(79,195,247,0.3); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         row_lay.addWidget(confirm_btn)
 
@@ -756,6 +820,14 @@ class AssetSoundManager(QWidget):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_MUTED}; background: transparent; }}
             QToolButton:hover {{ color: {Colors.ERROR}; background: rgba(239,83,80,0.2); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         row_lay.addWidget(cancel_btn)
 
@@ -873,6 +945,14 @@ class AssetSoundManager(QWidget):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
             QToolButton:hover {{ background: rgba(79,195,247,0.3); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         row_lay.addWidget(confirm_btn)
 
@@ -885,6 +965,14 @@ class AssetSoundManager(QWidget):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_MUTED}; background: transparent; }}
             QToolButton:hover {{ color: {Colors.ERROR}; background: rgba(239,83,80,0.2); }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         row_lay.addWidget(cancel_btn)
 

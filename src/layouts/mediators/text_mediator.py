@@ -125,6 +125,10 @@ class TextMediator:
         )
 
         self._l.canvas.engine._text_tool.set_properties_provider(self._provide_text_properties)
+        self._l.canvas.engine._text_tool.set_parent_provider(
+            lambda: self._active_boundary.group if self._active_boundary and self._active_boundary._item else None
+        )
+        self._active_boundary = None
         self._l.canvas.engine.selection.selection_changed.connect(self._on_selection_for_text_panel)
         self._l.canvas.engine.text_committed.connect(self._close_text_panel)
 
@@ -150,6 +154,12 @@ class TextMediator:
             return
         self._pending_text = _PendingText(TextProperties(text="Texto", font_size=20, font_weight=600))
         self._l.text_panel.set_values(self._pending_text.props)
+
+    def set_active_terrain(self, terrain_id: str):
+        """Chamado por TerrainMediator.on_selected para sincronizar o label e o boundary ativo."""
+        boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
+        self._active_boundary = boundary
+        self._l.text_panel.terrain_combo.set_terrain(terrain_id)
 
     # ─── Targets: real selection, or the not-yet-placed draft ───
 

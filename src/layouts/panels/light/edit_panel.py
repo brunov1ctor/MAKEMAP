@@ -109,6 +109,14 @@ class _ColorField(QFrame):
             QToolButton {{ border: none; border-radius: 4px; font-size: 12px;
                 color: {Colors.TEXT_SECONDARY}; background: transparent; }}
             QToolButton:hover {{ background: #333; color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._revert_btn.clicked.connect(self._revert)
         row.addWidget(self._revert_btn)
@@ -130,6 +138,14 @@ class _ColorField(QFrame):
                 swatch.setStyleSheet(f"""
                     QToolButton {{ background: {hex_color}; border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 3px; }}
                     QToolButton:hover {{ border-color: {Colors.ACCENT}; }}
+                    QToolTip {{
+                        background-color: {Colors.BG_ELEVATED};
+                        color: {Colors.TEXT_PRIMARY};
+                        border: 1px solid {Colors.BORDER};
+                        border-radius: 8px;
+                        padding: 6px 10px;
+                        font-size: 11px;
+                    }}
                 """)
                 swatch.clicked.connect(lambda _checked=False, c=hex_color: self.set_color(c, emit=True))
                 preset_row.addWidget(swatch)

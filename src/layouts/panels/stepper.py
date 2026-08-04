@@ -139,6 +139,11 @@ class NumberStepper(QFrame):
     def value(self) -> float:
         return self._value
 
+    def set_minimum(self, min_val: float):
+        self._min = min_val
+        if self._value < self._min:
+            self.set_value(self._min)
+
     def set_value(self, val: float, emit: bool = True):
         val = self._clamp(val)
         if val == self._value and self._value_label.text() == self._format(val):

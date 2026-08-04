@@ -1,25 +1,27 @@
-"""Terrain Settings Panel — orchestrator combining terrain cards, background, and boundary config."""
+"""Terrain Settings Panel — Região-style flat CRUD list of terrain cards.
+
+Creation (name/forma/dimensões/imagem/cor da borda) now lives entirely in
+TerrainEditPanel, opened via "+ Novo Terreno" — this panel is just the
+"Mapa Infinito" toggle plus the resulting card list, mirroring
+RegionSettingsPanel.
+"""
 
 from __future__ import annotations
 
-import uuid
-
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy,
-    QToolButton, QWidget, QButtonGroup, QScrollArea, QLineEdit,
+    QToolButton, QWidget, QScrollArea,
 )
-from PySide6.QtCore import Qt, Signal, QRectF
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QPixmap
 
 from src.styles.tokens import Colors
-from src.layouts.panels.stepper import NumberStepper
 from src.layouts.panels.terrain.terrain_card import TerrainCard
-from src.layouts.panels.collapsible_section import CollapsibleSection
 from src.layouts.panel_manager import paint_glass_panel
 
 
 class TerrainSettingsPanel(QFrame):
-    """Side panel for map terrain/boundary configuration."""
+    """Side panel for Terreno CRUD — flat list of cards."""
 
     PANEL_WIDTH = 300
     DEFAULT_SHAPE = "rectangle"
@@ -27,15 +29,17 @@ class TerrainSettingsPanel(QFrame):
     DEFAULT_HEIGHT = 4096
 
     # Signals
-    dimensions_changed = Signal(int, int)
-    shape_changed = Signal(str)
     infinite_toggled = Signal(bool)
+    infinite_blocked = Signal()  # tentou desmarcar sem terrenos
     close_requested = Signal()
+    terrain_add_requested = Signal()
     terrain_added = Signal(str, str)
     terrain_removed = Signal(str)
+    terrain_delete_requested = Signal(str)  # pede confirmação antes de excluir
     terrain_selected = Signal(str)
     terrain_renamed = Signal(str, str)
-    terrain_visibility = Signal(str, bool)
+    terrain_edit_requested = Signal(str)   # "Editar" from the "..." menu
+    terrain_locate_requested = Signal(str)
     content_changed = Signal()  # emitted when visible content changes size
 
     _PALETTE = [
@@ -52,33 +56,20 @@ class TerrainSettingsPanel(QFrame):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
 
+        self._cards: dict[str, TerrainCard] = {}
+        self._selected_id: str = ""
+        self._color_idx = 0
+        self._edit_open = False  # True while TerrainEditPanel is open (create or edit)
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        scroll.setStyleSheet(f"""
-            QScrollArea {{ background: transparent; border: none; }}
-            QScrollArea > QWidget > QWidget {{ background: transparent; }}
-            QScrollBar:vertical {{
-                width: 4px; background: transparent;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {Colors.TEXT_MUTED}; border-radius: 2px; min-height: 20px;
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
-        """)
-
         container = QWidget()
         container.setStyleSheet("background: transparent;")
-        self._container = container
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(10, 6, 10, 8)
-        layout.setSpacing(6)
+        top_layout = QVBoxLayout(container)
+        top_layout.setContentsMargins(10, 6, 10, 8)
+        top_layout.setSpacing(8)
 
         # ─── Header ───
         header = QHBoxLayout()
@@ -110,8 +101,7 @@ class TerrainSettingsPanel(QFrame):
         """)
         close_btn.clicked.connect(self.close_requested.emit)
         header.addWidget(close_btn)
-        layout.addLayout(header)
-        layout.addWidget(self._sep())
+        top_layout.addLayout(header)
 
         # ─── Infinite toggle ───
         self._infinite_widget = QFrame()
@@ -125,6 +115,7 @@ class TerrainSettingsPanel(QFrame):
         self._inf_box.setFixedSize(16, 16)
         self._inf_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._inf_checked = True
+        self._inf_disabled = False
         self._update_inf_style()
         inf_layout.addWidget(self._inf_box)
 
@@ -136,175 +127,104 @@ class TerrainSettingsPanel(QFrame):
         inf_layout.addWidget(inf_label)
         inf_layout.addStretch()
         self._infinite_widget.mousePressEvent = self._on_inf_click
-        layout.addWidget(self._infinite_widget)
+        top_layout.addWidget(self._infinite_widget)
 
-        # ─── Dimensions + Shape section (hidden when infinite) ───
-        self._bounds_section = CollapsibleSection("Dimensões e Forma", expanded=True)
-        self._bounds_section.content_changed.connect(self.content_changed.emit)
-        bounds_layout = self._bounds_section.content_layout
-
-        dims_header = QHBoxLayout()
-        dims_header.setSpacing(6)
-        dims_label = QLabel("Dimensões")
-        dims_label.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY}; font-size: 10px; font-weight: bold;
-            background: transparent; border: none;
-        """)
-        dims_header.addWidget(dims_label)
-        dims_header.addStretch()
-
-        # "Novo" replaces the old lone "+" — terrain creation (name + size +
-        # shape) now happens together here instead of split across sections.
+        # ─── "+ Novo Terreno" — always visible, prominent ───
         new_btn = QToolButton()
-        new_btn.setText("+ Novo")
+        new_btn.setText("+ Novo Terreno")
         new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        new_btn.setStyleSheet(f"""
-            QToolButton {{
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;
-                font-size: 10px; font-weight: bold; padding: 3px 8px;
-                color: {Colors.ACCENT}; background: rgba(79,195,247,0.08);
-            }}
-            QToolButton:hover {{ background: rgba(79,195,247,0.2); }}
-        """)
-        new_btn.clicked.connect(self._on_add_terrain)
-        dims_header.addWidget(new_btn)
-        bounds_layout.addLayout(dims_header)
+        new_btn.setMinimumHeight(36)
+        new_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        new_btn.clicked.connect(self.terrain_add_requested.emit)
+        self._new_btn = new_btn
+        self._refresh_new_btn_state()
+        top_layout.addWidget(new_btn)
+        top_layout.addWidget(self._sep())
 
-        self._name_input = QLineEdit()
-        self._name_input.setPlaceholderText("Nome do terreno...")
-        self._name_input.setFixedHeight(26)
-        self._name_input.setStyleSheet(f"""
-            QLineEdit {{
-                background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 4px; color: {Colors.TEXT_PRIMARY}; font-size: 11px;
-                padding: 2px 6px;
-            }}
-            QLineEdit:focus {{ border-color: {Colors.ACCENT}; }}
-        """)
-        self._name_input.returnPressed.connect(self._on_add_terrain)
-        bounds_layout.addWidget(self._name_input)
+        self._top_container = container
+        outer.addWidget(container)
 
-        # Meters, not pixels — 1 scene unit == 1 meter (see scale_bar.py) —
-        # and a stepper reads exact values better than dragging a slider
-        # across a 512-16384 range.
-        self.width_slider = NumberStepper("Largura", "↔", 16, 16384, self.DEFAULT_WIDTH, step=64, decimals=1, suffix="m")
-        self.height_slider = NumberStepper("Altura", "↕", 16, 16384, self.DEFAULT_HEIGHT, step=64, decimals=1, suffix="m")
-        bounds_layout.addWidget(self.width_slider)
-        bounds_layout.addWidget(self.height_slider)
-        self.width_slider.value_changed.connect(self._on_dims_changed)
-        self.height_slider.value_changed.connect(self._on_dims_changed)
-
-        bounds_layout.addWidget(self._sep())
-
-        shape_label = QLabel("Forma do Limite")
-        shape_label.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY}; font-size: 10px; font-weight: bold;
-            background: transparent; border: none;
-        """)
-        bounds_layout.addWidget(shape_label)
-
-        shape_row1 = QHBoxLayout()
-        shape_row1.setSpacing(6)
-        shape_row2 = QHBoxLayout()
-        shape_row2.setSpacing(6)
-
-        self._shape_group = QButtonGroup(self)
-        self._shape_group.setExclusive(True)
-        self._shape_buttons: dict[str, QToolButton] = {}
-
-        for icon_text, shape_id, tooltip in [
-            ("▭", "rectangle", "Retângulo"), ("□", "square", "Quadrado"),
-            ("○", "circle", "Círculo"), ("⬡", "hexagon", "Hexágono"),
-        ]:
-            btn = self._make_shape_btn(icon_text, shape_id, tooltip)
-            shape_row1.addWidget(btn)
-        shape_row1.addStretch()
-
-        for icon_text, shape_id, tooltip in [
-            ("△", "triangle", "Triângulo"), ("⬬", "ellipse", "Elipse"),
-            ("⬠", "pentagon", "Pentágono"), ("✏", "freehand", "Forma Livre"),
-        ]:
-            btn = self._make_shape_btn(icon_text, shape_id, tooltip)
-            shape_row2.addWidget(btn)
-        shape_row2.addStretch()
-
-        bounds_layout.addLayout(shape_row1)
-        bounds_layout.addLayout(shape_row2)
-        self._shape_buttons[self.DEFAULT_SHAPE].setChecked(True)
-        self._current_shape = self.DEFAULT_SHAPE
-
-        layout.addWidget(self._bounds_section)
-        self._bounds_section.hide()
-
-        # ─── Terrenos (CRUD list) section ───
-        self._crud_section = CollapsibleSection("Terrenos", expanded=True)
-        self._crud_section.content_changed.connect(self.content_changed.emit)
-        crud_layout = self._crud_section.content_layout
-
-        # Creation (name + "Novo") now lives up in Dimensões — this section
-        # is just the resulting list.
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._scroll.setStyleSheet(f"""
+        # ─── Card list (scrollable) ───
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        scroll.setStyleSheet(f"""
             QScrollArea {{ background: transparent; border: none; }}
-            QScrollBar:vertical {{
-                width: 4px; background: transparent;
-            }}
-            QScrollBar::handle:vertical {{
-                background: rgba(255,255,255,0.2); border-radius: 2px;
-            }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{ width: 4px; background: transparent; }}
+            QScrollBar::handle:vertical {{ background: {Colors.TEXT_MUTED}; border-radius: 2px; min-height: 20px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
         """)
 
-        self._list_widget = QWidget()
-        self._list_widget.setStyleSheet("background: transparent;")
-        self._list_layout = QVBoxLayout(self._list_widget)
-        self._list_layout.setContentsMargins(0, 0, 0, 0)
-        self._list_layout.setSpacing(4)
+        list_container = QWidget()
+        list_container.setStyleSheet("background: transparent;")
+        self._list_layout = QVBoxLayout(list_container)
+        self._list_layout.setContentsMargins(10, 0, 10, 8)
+        self._list_layout.setSpacing(6)
         self._list_layout.addStretch()
-        self._scroll.setWidget(self._list_widget)
-        crud_layout.addWidget(self._scroll)
 
-        layout.addWidget(self._crud_section)
-        self._crud_section.hide()
-
-        # "Plano de Fundo" (color/image/parallax) used to be a collapsible
-        # section here — it now lives exclusively in its own top-bar menu
-        # (see BackgroundMenuPanel in menu_panels.py), not duplicated here,
-        # so this panel stays focused on the map's own bounds/terrains.
-
-        layout.addStretch()
-        scroll.setWidget(container)
-        outer.addWidget(scroll)
-
-        # State
-        self._cards: dict[str, TerrainCard] = {}
-        self._selected_id: str = ""
-        self._color_idx = 0
+        self._list_container = list_container
+        scroll.setWidget(list_container)
+        self._card_scroll = scroll
+        self._card_scroll.setVisible(not self._inf_checked)
+        outer.addWidget(scroll, 1)
 
     def content_height(self) -> int:
-        """Natural height of the panel's actual content.
+        """Natural height for THIS panel's actual content — header +
+        infinite toggle + "+ Novo Terreno" button (outside the scroll
+        area) plus the card list's own natural height (inside it). Same
+        reasoning as RegionSettingsPanel.content_height."""
+        self._top_container.adjustSize()
+        top_h = self._top_container.sizeHint().height()
+        self._list_container.adjustSize()
+        list_h = self._list_container.sizeHint().height()
+        return top_h + list_h + 16
 
-        A QScrollArea's own sizeHint() doesn't grow with its scrolled
-        content (it reports a nominal size regardless of how many terrain
-        cards are inside), so measuring `self._container` alone silently
-        ignores the card list growing/shrinking — same reason
-        PanelManager's generic _content_height() has to reach into
-        `scroll.widget()` instead of the QScrollArea itself. Here, on top
-        of that, this panel nests scroll areas two levels deep (whole-panel
-        → terrain-card-list), so it needs its own explicit correction: measure
-        the list's actual inner widget and swap it in for whatever nominal
-        size the scroll area itself contributed.
-        """
-        self._container.adjustSize()
-        height = self._container.sizeHint().height()
-        if self._crud_section.isVisible() and self._crud_section._expanded:
-            self._list_widget.adjustSize()
-            list_h = self._list_widget.sizeHint().height()
-            height += max(0, list_h - self._scroll.sizeHint().height())
-        return height + 20
+    def set_new_button_enabled(self, enabled: bool):
+        """Called by TerrainMediator: False while the edit sub painel is
+        already open (create or edit in progress), same reasoning as
+        RegionSettingsPanel.set_new_button_enabled. Combined here with the
+        "Mapa Infinito" checkbox (see _refresh_new_btn_state) — a bounded
+        terreno makes no sense to create while the map itself is
+        unbounded, so that condition alone keeps the button disabled
+        regardless of what's passed here."""
+        self._edit_open = not enabled
+        self._refresh_new_btn_state()
+
+    def _refresh_new_btn_state(self):
+        # Habilitado quando: não há edição em andamento E
+        # (mapa finito OU não há terrenos ainda — para criar o primeiro).
+        can_create = not self._edit_open and (not self._inf_checked or not self._cards)
+        self._new_btn.setEnabled(can_create)
+        if self._inf_checked and self._cards:
+            self._new_btn.setToolTip("Desative o Mapa Infinito para criar um terreno")
+        else:
+            self._new_btn.setToolTip("")
+        self._refresh_new_btn_style()
+
+    def _refresh_new_btn_style(self):
+        enabled = self._new_btn.isEnabled()
+        bg = Colors.SUCCESS if enabled else "rgba(255,255,255,0.06)"
+        color = "white" if enabled else Colors.TEXT_MUTED
+        hover = "#7bc97e" if enabled else "rgba(255,255,255,0.06)"
+        self._new_btn.setStyleSheet(f"""
+            QToolButton {{
+                background: {bg};
+                border: none; border-radius: 6px; padding: 8px;
+                color: {color}; font-size: 11px; font-weight: bold;
+            }}
+            QToolButton:hover {{ background: {hover}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
+        """)
 
     # ─── Helpers ───
 
@@ -315,13 +235,22 @@ class TerrainSettingsPanel(QFrame):
         return sep
 
     def _update_inf_style(self):
-        if self._inf_checked:
+        if self._inf_disabled:
+            self._infinite_widget.setCursor(Qt.CursorShape.ForbiddenCursor)
+            self._inf_box.setStyleSheet(f"""
+                background: rgba(79,195,247,0.25); border: 1px solid rgba(79,195,247,0.3);
+                border-radius: 3px; color: rgba(255,255,255,0.4); font-size: 10px; font-weight: bold;
+            """)
+            self._inf_box.setText("✓")
+        elif self._inf_checked:
+            self._infinite_widget.setCursor(Qt.CursorShape.PointingHandCursor)
             self._inf_box.setStyleSheet(f"""
                 background: {Colors.ACCENT}; border: 1px solid {Colors.ACCENT};
                 border-radius: 3px; color: #ffffff; font-size: 10px; font-weight: bold;
             """)
             self._inf_box.setText("✓")
         else:
+            self._infinite_widget.setCursor(Qt.CursorShape.PointingHandCursor)
             self._inf_box.setStyleSheet(f"""
                 background: transparent; border: 1px solid {Colors.BORDER_SUBTLE};
                 border-radius: 3px; color: transparent; font-size: 10px;
@@ -329,67 +258,48 @@ class TerrainSettingsPanel(QFrame):
             self._inf_box.setText("")
 
     def _on_inf_click(self, event):
+        if self._inf_disabled:
+            return
+        # Não permite desmarcar se não há terrenos criados.
+        if self._inf_checked and not self._cards:
+            self.infinite_blocked.emit()
+            return
         self._inf_checked = not self._inf_checked
         self._update_inf_style()
-        self._on_infinite_toggled(self._inf_checked)
+        self._refresh_new_btn_state()
+        self._card_scroll.setVisible(not self._inf_checked)
+        self.content_changed.emit()
+        self.infinite_toggled.emit(self._inf_checked)
 
-    def _make_shape_btn(self, icon_text: str, shape_id: str, tooltip: str) -> QToolButton:
-        btn = QToolButton()
-        btn.setText(icon_text)
-        btn.setToolTip(tooltip)
-        btn.setFixedSize(48, 32)
-        btn.setCheckable(True)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(f"""
-            QToolButton {{
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px;
-                font-size: 16px; color: {Colors.TEXT_SECONDARY};
-                background: rgba(255,255,255,0.04);
-            }}
-            QToolButton:hover {{
-                background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY};
-            }}
-            QToolButton:checked {{
-                background: {Colors.ACCENT_DIM}; color: {Colors.ACCENT};
-                border: 1px solid {Colors.ACCENT};
-            }}
-        """)
-        btn.clicked.connect(lambda checked, s=shape_id: self._on_shape_selected(s))
-        self._shape_group.addButton(btn)
-        self._shape_buttons[shape_id] = btn
-        return btn
+    # ─── Card list ───
 
-    # ─── CRUD ───
-
-    def _on_add_terrain(self):
-        name = self._name_input.text().strip()
-        if not name:
-            name = f"Terreno {len(self._cards) + 1}"
-        terrain_id = str(uuid.uuid4())
-        color = self._PALETTE[self._color_idx % len(self._PALETTE)]
-        self._color_idx += 1
-        self._add_card(terrain_id, name, color)
-        self._name_input.clear()
-        # A new terrain must not silently inherit whatever shape/size was
-        # last customized for the previously selected terrain — reset
-        # before terrain_added fires, since on_added reads these widgets.
-        self._reset_to_defaults()
-        self.terrain_added.emit(terrain_id, name)
-        # The new terrain becomes the live-edit target — otherwise the
-        # previously-selected terrain stays selected and subsequent
-        # shape/dimension tweaks (meant for the new one) mutate it instead.
-        self._on_card_selected(terrain_id)
-
-    def _add_card(self, terrain_id: str, name: str, color: QColor):
-        card = TerrainCard(terrain_id, name, color)
+    def add_terrain_card(self, terrain_id: str, name: str, color: QColor,
+                          area_m2: float = 0.0, object_count: int = 0,
+                          photo: QPixmap | None = None) -> TerrainCard:
+        card = TerrainCard(terrain_id, name, color, area_m2, object_count, photo)
         card.selected.connect(self._on_card_selected)
         card.deleted.connect(self._on_card_deleted)
-        card.toggled.connect(self._on_card_toggled)
+        card.delete_requested.connect(self.terrain_delete_requested.emit)
         card.renamed.connect(self._on_card_renamed)
+        card.locate_requested.connect(self.terrain_locate_requested.emit)
+        card.edit_requested.connect(self.terrain_edit_requested.emit)
         self._list_layout.insertWidget(self._list_layout.count() - 1, card)
         self._cards[terrain_id] = card
-        self._update_crud_visibility()
         self.content_changed.emit()
+        self._refresh_new_btn_state()  # reavalia se o botão deve ficar habilitado
+        self._update_inf_disabled()
+        self.terrain_added.emit(terrain_id, name)
+        return card
+
+    def get_card(self, terrain_id: str) -> TerrainCard | None:
+        return self._cards.get(terrain_id)
+
+    def select_terrain(self, terrain_id: str):
+        """Programmatic equivalent of clicking a card — used by
+        TerrainMediator to auto-select the very first terreno created, so
+        it's immediately ready for the brush without an extra click."""
+        if terrain_id in self._cards:
+            self._on_card_selected(terrain_id)
 
     def _on_card_selected(self, terrain_id: str):
         self._selected_id = terrain_id
@@ -404,15 +314,13 @@ class TerrainSettingsPanel(QFrame):
             card.deleteLater()
         if self._selected_id == terrain_id:
             self._selected_id = ""
-            if self._cards:
-                next_id = next(iter(self._cards))
-                self._on_card_selected(next_id)
-        self._update_crud_visibility()
         self.content_changed.emit()
+        self._refresh_new_btn_state()  # reavalia — se ficou sem terrenos, reabilita
+        self._update_inf_disabled()
         self.terrain_removed.emit(terrain_id)
 
-    def _on_card_toggled(self, terrain_id: str, visible: bool):
-        self.terrain_visibility.emit(terrain_id, visible)
+    def _update_inf_disabled(self):
+        self.set_infinite_disabled(bool(self._cards))
 
     def _on_card_renamed(self, terrain_id: str, new_name: str):
         self.terrain_renamed.emit(terrain_id, new_name)
@@ -428,15 +336,10 @@ class TerrainSettingsPanel(QFrame):
 
     # ─── Public API ───
 
-    def add_terrain(self, terrain_id: str, name: str, color: QColor = None):
-        if terrain_id in self._cards:
-            return
-        c = color or self._PALETTE[self._color_idx % len(self._PALETTE)]
+    def next_palette_color(self) -> QColor:
+        c = self._PALETTE[self._color_idx % len(self._PALETTE)]
         self._color_idx += 1
-        self._add_card(terrain_id, name, c)
-
-    def remove_terrain(self, terrain_id: str):
-        self._on_card_deleted(terrain_id)
+        return c
 
     def clear_terrains(self):
         """Drops every card without emitting terrain_removed — used when
@@ -448,7 +351,7 @@ class TerrainSettingsPanel(QFrame):
                 self._list_layout.removeWidget(card)
                 card.deleteLater()
         self._selected_id = ""
-        self._update_crud_visibility()
+        self._update_inf_disabled()
         self.content_changed.emit()
 
     @property
@@ -460,81 +363,31 @@ class TerrainSettingsPanel(QFrame):
         card = self._cards.get(self._selected_id)
         return card.name if card else ""
 
-    # ─── Signal handlers ───
-
-    def _on_infinite_toggled(self, checked: bool):
-        show = not checked
-        self._bounds_section.setVisible(show)
-        self._update_crud_visibility()
-        self.content_changed.emit()
-        self.infinite_toggled.emit(checked)
-
-    def _update_crud_visibility(self):
-        """"Terrenos" only makes sense when bounded (not infinite) AND at
-        least one terrain already exists — an empty list here is just dead
-        space, not a useful CRUD section."""
-        self._crud_section.setVisible(not self._inf_checked and bool(self._cards))
-
-    def _on_dims_changed(self, _value):
-        w = int(self.width_slider.value)
-        h = int(self.height_slider.value)
-        if self._current_shape in ("square", "circle"):
-            sender = self.sender()
-            if sender is self.width_slider:
-                self.height_slider.set_value(w, emit=False)
-                h = w
-            else:
-                self.width_slider.set_value(h, emit=False)
-                w = h
-        self.dimensions_changed.emit(w, h)
-
-    def _reset_to_defaults(self):
-        """Restores shape/dimension controls to defaults for a newly
-        created terrain, so it doesn't silently inherit whatever the
-        previously selected/edited terrain left in these widgets."""
-        self._current_shape = self.DEFAULT_SHAPE
-        btn = self._shape_buttons.get(self.DEFAULT_SHAPE)
-        if btn:
-            btn.setChecked(True)
-        self.width_slider.set_value(self.DEFAULT_WIDTH, emit=False)
-        self.height_slider.set_value(self.DEFAULT_HEIGHT, emit=False)
-
-    def sync_from_boundary(self, shape: str, width: int, height: int):
-        """Reflects an existing terrain's stored shape/dimensions in the
-        controls when it's (re)selected, without emitting shape_changed /
-        dimensions_changed — those would re-apply the (unchanged) values to
-        the boundary we just read them from."""
-        self._current_shape = shape
-        btn = self._shape_buttons.get(shape)
-        if btn:
-            btn.setChecked(True)
-        self.width_slider.set_value(width, emit=False)
-        self.height_slider.set_value(height, emit=False)
-
-    def _on_shape_selected(self, shape: str):
-        self._current_shape = shape
-        if shape in ("square", "circle"):
-            val = int(self.width_slider.value)
-            self.height_slider.set_value(val, emit=False)
-        self.shape_changed.emit(shape)
-
     # ─── Properties ───
+
+    def set_infinite(self, infinite: bool):
+        """Ativa/desativa o mapa infinito programaticamente — mesmo efeito
+        que o usuário clicar no checkbox, incluindo atualizar o visual e
+        emitir infinite_toggled."""
+        if self._inf_checked == infinite:
+            return
+        self._inf_checked = infinite
+        self._update_inf_style()
+        self._refresh_new_btn_state()
+        self._card_scroll.setVisible(not self._inf_checked)
+        self.content_changed.emit()
+        self.infinite_toggled.emit(self._inf_checked)
+
+    def set_infinite_disabled(self, disabled: bool):
+        """Desabilita/habilita o checkbox de Mapa Infinito — desabilitado
+        quando há terrenos criados (o usuário não pode voltar para infinito
+        manualmente enquanto existirem terrenos)."""
+        self._inf_disabled = disabled
+        self._update_inf_style()
 
     @property
     def is_infinite(self) -> bool:
         return self._inf_checked
-
-    @property
-    def map_width(self) -> int:
-        return int(self.width_slider.value)
-
-    @property
-    def map_height(self) -> int:
-        return int(self.height_slider.value)
-
-    @property
-    def map_shape(self) -> str:
-        return self._current_shape
 
     def paintEvent(self, event):
         paint_glass_panel(self)

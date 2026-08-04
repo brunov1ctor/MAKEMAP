@@ -291,6 +291,14 @@ class SkillTreeCanvas(QWidget):
                 border: 1px solid {Colors.ACCENT}; border-radius: 4px; padding: 2px 8px; font-size: 9px; font-weight: bold; }}
             QToolButton:hover {{ background: {Colors.ACCENT_DIM}; }}
             QToolButton:disabled {{ color: {Colors.TEXT_MUTED}; border-color: {Colors.BORDER_SUBTLE}; background: transparent; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         self._add_node_btn.clicked.connect(self._on_add_node_clicked)
         footer.addWidget(self._add_node_btn)
@@ -536,6 +544,14 @@ class SkillTreeCanvas(QWidget):
             close_btn.setStyleSheet(f"""
                 QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 9px; }}
                 QToolButton:hover {{ color: {Colors.ERROR}; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
             close_btn.clicked.connect(lambda _c=False, key=tree["tree_key"]: self._delete_tab(key))
             lay.addWidget(close_btn)
@@ -550,6 +566,14 @@ class SkillTreeCanvas(QWidget):
             QToolButton {{ background: transparent; color: {Colors.ACCENT}; border: none;
                 padding: 4px 8px; font-size: 11px; font-weight: bold; }}
             QToolButton:hover {{ color: {Colors.ACCENT_HOVER}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         btn.clicked.connect(self._open_tab_creator)
         return btn

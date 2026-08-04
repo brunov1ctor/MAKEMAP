@@ -7,9 +7,70 @@ import math
 from PySide6.QtCore import Qt, QRectF, QTimer, QPointF, QLineF
 from PySide6.QtGui import QPen, QColor, QPainterPath, QPainterPathStroker
 from PySide6.QtWidgets import (
-    QGraphicsPathItem, QGraphicsScene, QGraphicsItem,
+    QGraphicsPathItem, QGraphicsScene, QGraphicsItem, QGraphicsItemGroup,
     QGraphicsSceneMouseEvent, QGraphicsLineItem,
 )
+
+# Shapes with a real, discrete corner list — used both to build their path
+# (see MapBoundary._build_path) and, distinctly, by TerrainMediator's
+# "Livre" insert-mode to let a new point splice into an EXISTING preset's
+# corners instead of only ever drawing a polygon from scratch. Circle/
+# ellipse/trefoil aren't included: they're curved/overlapping constructions
+# with no single natural vertex list.
+POLYGON_SHAPES = ("rectangle", "square", "triangle", "hexagon", "pentagon", "star", "cross")
+
+
+def polygon_vertices_local(shape: str, width: float, height: float) -> list[QPointF] | None:
+    """Ordered local-space (centered on origin) corner list for a polygonal
+    shape preset, or None if `shape` isn't one of POLYGON_SHAPES."""
+    if shape not in POLYGON_SHAPES:
+        return None
+    half_w, half_h = width / 2, height / 2
+    if shape == "square":
+        s = min(width, height) / 2
+        return [QPointF(-s, -s), QPointF(s, -s), QPointF(s, s), QPointF(-s, s)]
+    if shape == "hexagon":
+        radius = min(half_w, half_h)
+        return [QPointF(radius * math.cos(math.radians(60 * i)), radius * math.sin(math.radians(60 * i)))
+                for i in range(6)]
+    if shape == "triangle":
+        r = min(half_w, half_h)
+        return [
+            QPointF(0, -r),
+            QPointF(r * math.cos(math.radians(210)), r * math.sin(math.radians(210))),
+            QPointF(r * math.cos(math.radians(330)), r * math.sin(math.radians(330))),
+        ]
+    if shape == "pentagon":
+        radius = min(half_w, half_h)
+        return [QPointF(radius * math.cos(math.radians(-90 + 72 * i)), radius * math.sin(math.radians(-90 + 72 * i)))
+                for i in range(5)]
+    if shape == "star":
+        outer = min(half_w, half_h)
+        inner = outer * 0.4
+        pts = []
+        for i in range(10):
+            r = inner if i % 2 else outer
+            angle = math.radians(-90 + 36 * i)
+            pts.append(QPointF(r * math.cos(angle), r * math.sin(angle)))
+        return pts
+    if shape == "cross":
+        r = min(half_w, half_h)
+        t = r * 0.4
+        return [QPointF(x, y) for x, y in [
+            (-t, -r), (t, -r), (t, -t), (r, -t), (r, t), (t, t),
+            (t, r), (-t, r), (-t, t), (-r, t), (-r, -t), (-t, -t),
+        ]]
+    # rectangle (default)
+    return [QPointF(-half_w, -half_h), QPointF(half_w, -half_h), QPointF(half_w, half_h), QPointF(-half_w, half_h)]
+
+
+def _path_from_vertices(vertices: list[QPointF]) -> QPainterPath:
+    path = QPainterPath()
+    path.moveTo(vertices[0])
+    for pt in vertices[1:]:
+        path.lineTo(pt)
+    path.closeSubpath()
+    return path
 
 
 # ─── Alignment Guides ────────────────────────────────────────────────────────
@@ -165,7 +226,7 @@ class MovableBoundaryItem(QGraphicsPathItem):
         if event.button() == Qt.MouseButton.LeftButton and self._hit_border(event.pos()):
             self._dragging = True
             self._drag_start_scene = event.scenePos()
-            self._drag_start_pos = self.pos()
+            self._drag_start_pos = self.parentItem().pos() if self.parentItem() else self.pos()
             if self.scene():
                 self._guides = AlignmentGuides(self.scene())
             event.accept()
@@ -176,14 +237,20 @@ class MovableBoundaryItem(QGraphicsPathItem):
         if self._dragging:
             delta = event.scenePos() - self._drag_start_scene
             new_pos = self._drag_start_pos + delta
-            self.setPos(new_pos)
-            # Snap to alignment guides
+            parent = self.parentItem()
+            if parent:
+                parent.setPos(new_pos)
+            else:
+                self.setPos(new_pos)
             if self._guides and self.scene():
                 others = [item for item in self.scene().items()
                           if isinstance(item, MovableBoundaryItem) and item is not self]
                 snap_offset = self._guides.update(self, others)
                 if snap_offset.x() != 0 or snap_offset.y() != 0:
-                    self.setPos(new_pos + snap_offset)
+                    if parent:
+                        parent.setPos(new_pos + snap_offset)
+                    else:
+                        self.setPos(new_pos + snap_offset)
             event.accept()
         else:
             super().mouseMoveEvent(event)
@@ -195,7 +262,8 @@ class MovableBoundaryItem(QGraphicsPathItem):
                 self._guides.clear()
                 self._guides = None
             if self.on_moved:
-                self.on_moved(self.pos())
+                pos = self.parentItem().pos() if self.parentItem() else self.pos()
+                self.on_moved(pos)
             event.accept()
         else:
             super().mouseReleaseEvent(event)
@@ -221,6 +289,12 @@ class MapBoundary:
 
     def __init__(self, scene: QGraphicsScene, color: QColor = None):
         self._scene = scene
+        # Stable container — added to scene only on show(), removed on hide().
+        self._group = QGraphicsItemGroup()
+        self._group.setZValue(0)
+        self._group.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self._group.setHandlesChildEvents(False)
+        # NOT added to scene here — only when show()/set_points() is called.
         self._item: MovableBoundaryItem | None = None
         self._visible = False
         self._shape = self.DEFAULT_SHAPE
@@ -228,6 +302,10 @@ class MapBoundary:
         self._height = self.DEFAULT_HEIGHT
         self._color = color or self.BORDER_COLOR_BASE
         self._preview = False
+        self._points: list[QPointF] = []  # only used when self._shape == "freehand"
+        # segment start index -> Bézier control point (scene coords) — only
+        # used when self._shape == "freehand"; see set_points.
+        self._curve_controls: dict[int, QPointF] = {}
         self._on_position_changed = None  # set via set_on_position_changed
 
         # Pulse animation state
@@ -254,14 +332,23 @@ class MapBoundary:
         return self._height
 
     @property
+    def group(self) -> QGraphicsItemGroup:
+        """Stable content container — parent scene items here instead of
+        to _item so they survive _rebuild() replacing the border item."""
+        return self._group
+
+    @property
     def position(self) -> QPointF:
-        if self._item:
-            return self._item.pos()
-        return QPointF(0, 0)
+        return self._group.pos()
 
     def set_position(self, pos: QPointF):
-        if self._item:
-            self._item.setPos(pos)
+        self._group.setPos(pos)
+
+    def contains_point(self, scene_pos: QPointF) -> bool:
+        if not self._item:
+            return False
+        local = self._item.mapFromScene(scene_pos)
+        return self._item.path().contains(local)
 
     def set_on_position_changed(self, callback):
         """`callback(QPointF)` fires when the user finishes dragging this
@@ -278,28 +365,37 @@ class MapBoundary:
         self._shape = shape
         self._visible = True
         self._preview = False
+        if not self._group.scene():
+            self._scene.addItem(self._group)
         self._rebuild()
         self._timer.start()
 
     def show_preview(self, width: int, height: int, shape: str = "rectangle"):
-        """Lightweight draft outline for a terrain that hasn't been
-        created yet (no terrain_id/card) — static dashed line, no pulse,
-        so it visibly reads as "not real yet" rather than a confirmed
-        terrain."""
         self._width = width
         self._height = height
         self._shape = shape
         self._visible = True
         self._preview = True
+        if not self._group.scene():
+            self._scene.addItem(self._group)
         self._rebuild()
 
     def hide(self):
         self._visible = False
         self._preview = False
         self._timer.stop()
-        if self._item and self._item.scene():
-            self._scene.removeItem(self._item)
+        if self._item:
+            self._item.setParentItem(None)
+            if self._item.scene():
+                self._scene.removeItem(self._item)
             self._item = None
+        if self._group.scene():
+            # Remove content children from the scene along with the group
+            # — pintura some junto com o terreno ao excluir.
+            for child in list(self._group.childItems()):
+                if child.scene():
+                    self._scene.removeItem(child)
+            self._scene.removeItem(self._group)
 
     def update_dimensions(self, width: int, height: int):
         self._width = width
@@ -307,61 +403,105 @@ class MapBoundary:
         if self._visible:
             self._rebuild()
 
+    def set_color(self, color: QColor):
+        self._color = color
+        self._update_pen()
+
     def update_shape(self, shape: str):
         self._shape = shape
         if self._visible:
             self._rebuild()
 
+    @property
+    def points(self) -> list[QPointF]:
+        return list(self._points)
+
+    def polygon_vertices_scene(self) -> list[QPointF] | None:
+        pos = self._group.pos()
+        if self._shape == "freehand":
+            if not self._points:
+                return None
+            local = self._points
+        else:
+            local = polygon_vertices_local(self._shape, self._width, self._height)
+            if local is None:
+                return None
+        return [QPointF(p.x() + pos.x(), p.y() + pos.y()) for p in local]
+
+    def set_points(self, points: list[QPointF], curve_controls: dict[int, QPointF] | None = None):
+        self._shape = "freehand"
+        self._points = list(points)
+        self._curve_controls = dict(curve_controls) if curve_controls else {}
+        self._visible = True
+        self._preview = False
+        self._group.setPos(QPointF(0, 0))
+        if not self._group.scene():
+            self._scene.addItem(self._group)
+        self._rebuild()
+        if not self._timer.isActive():
+            self._timer.start()
+
     def _rebuild(self):
-        old_pos = QPointF(0, 0)
-        if self._item and self._item.scene():
-            old_pos = self._item.pos()
-            self._scene.removeItem(self._item)
+        # Remove old border item without touching the group or its children.
+        if self._item:
+            self._item.setParentItem(None)
+            if self._item.scene():
+                self._scene.removeItem(self._item)
 
         path = self._build_path()
         self._item = MovableBoundaryItem(path)
-        self._item.setPos(old_pos)
-        self._item.setZValue(-500)
+        self._item.setZValue(-1)
         self._item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self._item.on_moved = self._on_position_changed
         self._update_pen()
-        self._scene.addItem(self._item)
+        self._item.setParentItem(self._group)
 
     def _build_path(self) -> QPainterPath:
         path = QPainterPath()
+
+        if self._shape == "freehand":
+            if len(self._points) >= 2:
+                path.moveTo(self._points[0])
+                for i, pt in enumerate(self._points[1:]):
+                    control = self._curve_controls.get(i)
+                    if control is not None:
+                        path.quadTo(control, pt)
+                    else:
+                        path.lineTo(pt)
+                path.closeSubpath()
+            elif len(self._points) == 1:
+                # A single point has no area yet — draw it as a tiny dot so
+                # something still reads as "drawing has started".
+                p = self._points[0]
+                path.addEllipse(p, 2, 2)
+            return path
+
         half_w = self._width / 2
         half_h = self._height / 2
+
+        poly = polygon_vertices_local(self._shape, self._width, self._height)
+        if poly is not None:
+            return _path_from_vertices(poly)
 
         if self._shape == "circle":
             radius = min(half_w, half_h)
             path.addEllipse(QRectF(-radius, -radius, radius * 2, radius * 2))
-        elif self._shape == "square":
-            side = min(self._width, self._height)
-            half_s = side / 2
-            path.addRect(QRectF(-half_s, -half_s, side, side))
-        elif self._shape == "hexagon":
-            radius = min(half_w, half_h)
-            path.moveTo(radius, 0)
-            for i in range(1, 6):
-                angle = math.radians(60 * i)
-                path.lineTo(radius * math.cos(angle), radius * math.sin(angle))
-            path.closeSubpath()
-        elif self._shape == "triangle":
-            r = min(half_w, half_h)
-            path.moveTo(0, -r)
-            path.lineTo(r * math.cos(math.radians(210)), r * math.sin(math.radians(210)))
-            path.lineTo(r * math.cos(math.radians(330)), r * math.sin(math.radians(330)))
-            path.closeSubpath()
-        elif self._shape == "pentagon":
-            radius = min(half_w, half_h)
-            path.moveTo(radius * math.cos(math.radians(-90)),
-                        radius * math.sin(math.radians(-90)))
-            for i in range(1, 5):
-                angle = math.radians(-90 + 72 * i)
-                path.lineTo(radius * math.cos(angle), radius * math.sin(angle))
-            path.closeSubpath()
         elif self._shape == "ellipse":
             path.addEllipse(QRectF(-half_w, -half_h, self._width, self._height))
+        elif self._shape == "trefoil":
+            r = min(half_w, half_h)
+            lobe_r = r * 0.55
+            offset = r * 0.5
+            for angle_deg in (-90, 30, 150):
+                angle = math.radians(angle_deg)
+                cx, cy = offset * math.cos(angle), offset * math.sin(angle)
+                path.addEllipse(QRectF(cx - lobe_r, cy - lobe_r, lobe_r * 2, lobe_r * 2))
+            path.addEllipse(QRectF(-offset * 0.9, -offset * 0.9, offset * 1.8, offset * 1.8))
+            # Overlapping lobes as separate subpaths would leave holes under
+            # the default odd-even fill (double-covered regions toggle back
+            # to "outside") — winding fill keeps any positive-covered area
+            # solid, reading as one fused clover shape instead.
+            path.setFillRule(Qt.FillRule.WindingFill)
         else:
             path.addRect(QRectF(-half_w, -half_h, self._width, self._height))
 

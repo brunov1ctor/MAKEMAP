@@ -51,6 +51,9 @@ class ItemInteraction:
         self._drag_items: list = []
         self._drag_start: QPointF | None = None
         self._drag_last: QPointF | None = None
+        # Set by select_and_begin_drag() when the press landed on an item
+        # that was ALREADY part of a multi-item selection — see _end_drag.
+        self._narrow_candidate = None
 
         self._rotate_center: QPointF | None = None
         self._rotate_start_angle = 0.0
@@ -132,19 +135,45 @@ class ItemInteraction:
         if self.transform is None:
             return None
         item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
-        if item and self.selection.is_selectable(item) and (item_filter is None or item_filter(item)):
-            return item
+        # Walk up the parent chain — a non-selectable child (e.g.
+        # AssetEffectsOverlay) sitting on top of a selectable parent stamp
+        # would otherwise swallow the hit and return None.
+        while item is not None:
+            if self.selection.is_selectable(item) and (item_filter is None or item_filter(item)):
+                return item
+            item = item.parentItem()
         return None
+
+    # A plain click landing on an item that's already selected inside a
+    # multi-selection is ambiguous until release — see select_and_begin_drag/
+    # _end_drag. Scene units, matching SelectTool._DRAG_THRESHOLD (the box-
+    # select vs. click-on-empty-space threshold that same tool already uses).
+    _CLICK_DRAG_THRESHOLD = 3.0
 
     def select_and_begin_drag(self, item, scene_pos: QPointF, add: bool = False):
         """Commit a hit_selectable() result: select `item` (unless already
-        selected) and start dragging it from scene_pos."""
+        selected) and start dragging it from scene_pos.
+
+        If `item` was already part of a 2+ item selection, the selection
+        isn't narrowed down to just `item` yet — that would make it
+        impossible to drag the whole group by grabbing one of its members,
+        which is the far more common gesture. Instead the drag starts
+        optimistically with the group exactly as before (so a real drag
+        still moves everything live, with zero added lag), and the item is
+        remembered as a `_narrow_candidate`: if the press turns out to have
+        been a plain click (see _end_drag), the selection collapses down to
+        just that one item — the only way to pick a single object out of a
+        stack of already-selected, overlapping items without first clicking
+        empty space to deselect everything."""
         selected = self.viewport.scene().selectedItems()
+        self._narrow_candidate = None
         if item not in selected:
             if add:
                 self.selection.toggle(item)
             else:
                 self.selection.select(item)
+        elif not add and len(selected) > 1:
+            self._narrow_candidate = item
         self._begin_drag(self.viewport.scene().selectedItems(), scene_pos)
 
     def pos_in_selection_bounds(self, scene_pos: QPointF) -> bool:
@@ -223,9 +252,24 @@ class ItemInteraction:
         self._drag_last = scene_pos
 
     def _end_drag(self, scene_pos: QPointF):
-        if self.history and self._drag_start is not None:
+        total_dx = total_dy = 0.0
+        if self._drag_start is not None:
             total_dx = scene_pos.x() - self._drag_start.x()
             total_dy = scene_pos.y() - self._drag_start.y()
+
+        if self._narrow_candidate is not None and math.hypot(total_dx, total_dy) < self._CLICK_DRAG_THRESHOLD:
+            # Resolved as a plain click, not a drag — undo whatever
+            # sub-threshold jitter _do_drag already applied live to the
+            # WHOLE group (so an imperceptible wobble mid-click doesn't
+            # leave the other, about-to-be-deselected items nudged out of
+            # place), then narrow the selection down to just the clicked
+            # item. select() re-emits selection_changed, which is what
+            # already drives the handle overlay (see CanvasEngine.
+            # _on_selection_changed) — no extra refresh needed here.
+            if total_dx or total_dy:
+                self.transform.move(self._drag_items, -total_dx, -total_dy)
+            self.selection.select(self._narrow_candidate)
+        elif self.history and self._drag_start is not None:
             if abs(total_dx) > 0.1 or abs(total_dy) > 0.1:
                 from src.engines.core.history import MoveItemsCommand
                 cmd = MoveItemsCommand(self._drag_items, total_dx, total_dy)
@@ -239,6 +283,7 @@ class ItemInteraction:
         self._drag_items = []
         self._drag_last = None
         self._drag_start = None
+        self._narrow_candidate = None
 
     # --- Action bar (delete / duplicate) ---
 

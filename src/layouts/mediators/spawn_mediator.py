@@ -66,6 +66,10 @@ class SpawnMediator:
         sub_panel.mob_selected.connect(self.on_mob_selected)
 
         self._l.canvas.engine._spawn_tool.on_stamp_placed(self._on_stamp_placed)
+        self._l.canvas.engine._spawn_tool.set_parent_provider(
+            lambda: self._active_boundary.group if self._active_boundary and self._active_boundary._item else None
+        )
+        self._active_boundary = None
 
         self._sync_timer = QTimer()
         self._sync_timer.setSingleShot(True)
@@ -110,6 +114,12 @@ class SpawnMediator:
         self._l.spawn_mob_sub_panel.hide()
         self._refresh_categories()
         self._refresh_preview()
+
+    def set_active_terrain(self, terrain_id: str):
+        """Chamado por TerrainMediator.on_selected para sincronizar o label e o boundary ativo."""
+        boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
+        self._active_boundary = boundary
+        self._l.spawn_panel.terrain_combo.set_terrain(terrain_id)
 
     def _load_from_db(self):
         """Reloads every persisted mob/npc-spawn stamp for the current

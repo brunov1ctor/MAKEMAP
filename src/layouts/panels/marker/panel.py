@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors
 from src.layouts.panel_manager import paint_glass_panel
+from src.layouts.panels.terrain_combo import TerrainCombo
 from src.layouts.panels.marker.icon_picker import IconPicker
 from src.engines.marker import ICONS
 
@@ -55,6 +56,14 @@ class MarkerToolPanel(QFrame):
             QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
                 color: {Colors.TEXT_SECONDARY}; background: transparent; }}
             QToolButton:hover {{ background: #333; color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         close_btn.clicked.connect(self.close_requested.emit)
         header.addWidget(close_btn)
@@ -67,6 +76,9 @@ class MarkerToolPanel(QFrame):
             background: transparent; border: none;
         """)
         layout.addWidget(hint)
+
+        self.terrain_combo = TerrainCombo()
+        layout.addWidget(self.terrain_combo)
 
         icons_label = QLabel("Ícones")
         icons_label.setStyleSheet(f"""

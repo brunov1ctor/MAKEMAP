@@ -12,7 +12,7 @@ from src.database.repositories.entities import (
     NPCRepository, NPCCategoryRepository, NPCAssetRepository,
     MobRepository, MobCategoryRepository, MobAssetRepository, BossRepository,
     ItemRepository, SkillRepository, SkillTreeRepository, ResourceRepository, QuestRepository,
-    QuestChainRepository, DungeonRepository, BuildingRepository,
+    QuestChainRepository, QuestNPCRepository, DungeonRepository, BuildingRepository,
     BuildingCategoryRepository, DungeonTypeRepository, EventRepository,
     FactionRepository, TagRepository, MapRepository,
     LayerRepository, CanvasItemRepository, AssetRepository,
@@ -50,6 +50,7 @@ class UnitOfWork:
         self.resources = ResourceRepository(self.db)
         self.quests = QuestRepository(self.db)
         self.quest_chains = QuestChainRepository(self.db)
+        self.quest_npcs = QuestNPCRepository(self.db)
         self.dungeons = DungeonRepository(self.db)
         self.buildings = BuildingRepository(self.db)
         self.building_categories = BuildingCategoryRepository(self.db)

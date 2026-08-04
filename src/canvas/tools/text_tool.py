@@ -36,6 +36,7 @@ class TextTool(BaseTool):
         self._on_committed = on_committed
         self._properties_provider = properties_provider
         self._on_edited = on_edited
+        self._parent_provider = None
         self._interaction = ItemInteraction(viewport, selection_engine, transform_engine, history_engine) \
             if selection_engine and transform_engine else None
 
@@ -45,6 +46,10 @@ class TextTool(BaseTool):
         currently configured to (color, shadow, outline...) instead of
         always starting from hardcoded defaults."""
         self._properties_provider = provider
+
+    def set_parent_provider(self, provider):
+        """provider() -> QGraphicsItem | None — boundary group para parenting."""
+        self._parent_provider = provider
 
     def set_on_edited(self, callback):
         """callback() wired onto every new TextItem's persistent on_edited
@@ -66,10 +71,14 @@ class TextTool(BaseTool):
 
         props = self._properties_provider() if self._properties_provider else \
             TextProperties(text="Texto", font_size=20, font_weight=600)
+        parent_item = self._parent_provider() if self._parent_provider else None
         item = TextItem(props)
-        item.setPos(scene_pos)
+        item.setPos(scene_pos if not parent_item else parent_item.mapFromScene(scene_pos))
         item.setZValue(50)
-        self.viewport.scene().addItem(item)
+        if parent_item:
+            item.setParentItem(parent_item)
+        else:
+            self.viewport.scene().addItem(item)
         if self._history:
             self._history.push(PlaceObjectCommand(item))
 

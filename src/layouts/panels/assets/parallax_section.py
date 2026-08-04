@@ -223,6 +223,14 @@ class ParallaxPresetSection(QFrame):
         self._drag_handle.setToolTip("Arraste para reordenar este preset")
         self._drag_handle.setStyleSheet(
             f"color: {Colors.TEXT_MUTED}; font-size: 13px; background: transparent; border: none;"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         self._setup_preset_drag(self._drag_handle)
         h_lay.addWidget(self._drag_handle)
@@ -293,6 +301,14 @@ class ParallaxPresetSection(QFrame):
             f"QToolButton {{ background: rgba(255,255,255,0.05); border: 1px solid {Colors.BORDER_SUBTLE}; "
             f"padding: 2px 6px; color: {Colors.TEXT_SECONDARY}; font-size: 9px; font-weight: bold; border-radius: 4px; }}"
             f"QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; border-color: {Colors.ACCENT}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         json_btn.clicked.connect(self._toggle_json_import)
         h_lay.addWidget(json_btn)
@@ -306,6 +322,14 @@ class ParallaxPresetSection(QFrame):
             f"QToolButton {{ background: transparent; border: none; font-size: 11px; "
             f"color: {Colors.TEXT_MUTED}; padding: 0; }}"
             f"QToolButton:hover {{ color: {Colors.ERROR}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         del_btn.clicked.connect(lambda: self.delete_requested.emit(self.preset_key))
         h_lay.addWidget(del_btn)
@@ -705,7 +729,17 @@ class ParallaxPresetSection(QFrame):
         handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         handle.setCursor(Qt.CursorShape.SizeAllCursor)
         handle.setToolTip("Arraste para reordenar")
-        handle.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 13px; background: transparent; border: none;")
+        handle.setStyleSheet(
+            f"color: {Colors.TEXT_MUTED}; font-size: 13px; background: transparent; border: none;"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
+        )
 
         drag_state = {"start": None, "ghost": None, "hover_row": None}
 
@@ -796,7 +830,17 @@ class ParallaxPresetSection(QFrame):
         alpha_lbl.setFixedWidth(36)
         alpha_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         alpha_color = Colors.SUCCESS if transparent else Colors.WARNING
-        alpha_lbl.setStyleSheet(f"color: {alpha_color}; font-size: 7pt; background: transparent; border: none;")
+        alpha_lbl.setStyleSheet(
+            f"color: {alpha_color}; font-size: 7pt; background: transparent; border: none;"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
+        )
         alpha_lbl.setToolTip(
             "Esta imagem tem canal de transparência" if transparent
             else "Esta imagem não tem transparência — pode cobrir totalmente as camadas atrás dela"
@@ -815,7 +859,17 @@ class ParallaxPresetSection(QFrame):
         name_stack.setStyleSheet("background: transparent; border: none;")
         name_stack.setFixedHeight(16)
         name_label = QLabel()
-        name_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 8pt; background: transparent; border: none;")
+        name_label.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; font-size: 8pt; background: transparent; border: none;"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
+        )
         name_label.setToolTip(display_name)
 
         def _set_elided_name(text: str):
@@ -1067,7 +1121,17 @@ class ParallaxPresetSection(QFrame):
 
         check = QCheckBox(title)
         check.setChecked(enabled)
-        check.setStyleSheet(f"QCheckBox {{ color: {Colors.TEXT_PRIMARY}; font-size: 9pt; background: transparent; spacing: 6px; }}")
+        check.setStyleSheet(
+            f"QCheckBox {{ color: {Colors.TEXT_PRIMARY}; font-size: 9pt; background: transparent; spacing: 6px; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
+        )
         check.toggled.connect(lambda v, i=index, k=enabled_key: self._on_param_changed(i, k, v))
         if tooltip:
             check.setToolTip(tooltip)
@@ -1102,7 +1166,17 @@ class ParallaxPresetSection(QFrame):
 
         check = QCheckBox(title)
         check.setChecked(enabled)
-        check.setStyleSheet(f"QCheckBox {{ color: {Colors.TEXT_PRIMARY}; font-size: 9pt; background: transparent; spacing: 6px; }}")
+        check.setStyleSheet(
+            f"QCheckBox {{ color: {Colors.TEXT_PRIMARY}; font-size: 9pt; background: transparent; spacing: 6px; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
+        )
         check.toggled.connect(lambda v, i=index, k=enabled_key: self._on_param_changed(i, k, v))
         if tooltip:
             check.setToolTip(tooltip)
@@ -1168,6 +1242,14 @@ class ParallaxPresetSection(QFrame):
         row = QFrame()
         row.setStyleSheet(
             f"QFrame {{ background: rgba(255,255,255,0.04); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         lay = QHBoxLayout(row)
         lay.setContentsMargins(6, 4, 6, 4)
@@ -1175,7 +1257,17 @@ class ParallaxPresetSection(QFrame):
 
         check = QCheckBox(_EFFECT_LABELS.get(effect.kind, effect.kind))
         check.setChecked(effect.enabled)
-        check.setStyleSheet(f"QCheckBox {{ color: {Colors.TEXT_PRIMARY}; font-size: 8pt; background: transparent; spacing: 4px; }}")
+        check.setStyleSheet(
+            f"QCheckBox {{ color: {Colors.TEXT_PRIMARY}; font-size: 8pt; background: transparent; spacing: 4px; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
+        )
         check.toggled.connect(lambda v, i=index, ei=effect_index: self._on_effect_param_changed(i, ei, enabled=v))
         tooltip = _EFFECT_TOOLTIPS.get(effect.kind, "")
         if tooltip:
@@ -1224,6 +1316,14 @@ class ParallaxPresetSection(QFrame):
         del_btn.setStyleSheet(
             f"QToolButton {{ border: none; font-size: 9px; color: {Colors.TEXT_MUTED}; background: transparent; }}"
             f"QToolButton:hover {{ color: {Colors.ERROR}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         del_btn.clicked.connect(lambda checked=False, i=index, ei=effect_index: self._on_remove_effect(i, ei))
         lay.addWidget(del_btn)

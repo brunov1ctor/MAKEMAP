@@ -179,6 +179,14 @@ class IconButton(QToolButton):
             QToolButton {{ background: {bg}; border: 1px solid {border};
                 border-radius: 10px; font-size: 30px; }}
             QToolButton:hover {{ border-color: {Colors.ACCENT}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
 
     def _accepted_path(self, mime) -> str | None:

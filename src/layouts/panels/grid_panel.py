@@ -84,6 +84,14 @@ class GridSettingsPanel(QFrame):
                 color: {Colors.TEXT_SECONDARY}; background: transparent;
             }}
             QToolButton:hover {{ background: #333; color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         close_btn.clicked.connect(self.close_requested.emit)
         header.addWidget(close_btn)
@@ -188,16 +196,5 @@ class GridSettingsPanel(QFrame):
         return box
 
     def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), 10, 10)
-        p.fillPath(path, QColor(11, 25, 41, 235))
-        grad = QLinearGradient(0, 0, 0, h * 0.15)
-        grad.setColorAt(0.0, QColor(255, 255, 255, 10))
-        grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-        p.fillPath(path, QBrush(grad))
-        p.setPen(QPen(QColor(255, 255, 255, 25), 1))
-        p.drawPath(path)
-        p.end()
+        from src.layouts.panel_manager import paint_glass_panel
+        paint_glass_panel(self)

@@ -70,6 +70,14 @@ class _CoverThumb(QToolButton):
             f"QToolButton {{ background: {bg}; border: 1px solid {border}; "
             f"border-radius: 8px; font-size: 22px; color: {Colors.TEXT_MUTED}; }}"
             f"QToolButton:hover {{ border-color: {Colors.ACCENT}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
 
     def set_side(self, side: int):
@@ -400,6 +408,14 @@ class ProjectsPanel(QWidget):
             f"QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; "
             f"border: none; font-size: 14px; border-radius: 12px; }}"
             f"QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}"
+            f"QToolTip {{"
+            f"    background-color: {Colors.BG_ELEVATED};"
+            f"    color: {Colors.TEXT_PRIMARY};"
+            f"    border: 1px solid {Colors.BORDER};"
+            f"    border-radius: 8px;"
+            f"    padding: 6px 10px;"
+            f"    font-size: 11px;"
+            f"}}"
         )
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.closed.emit)

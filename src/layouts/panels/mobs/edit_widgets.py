@@ -224,6 +224,14 @@ class _DropTile(QFrame):
         self.setFixedSize(width, total_h)
         self.setStyleSheet(f"""
             QFrame {{ background: rgba(255,255,255,0.04); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(self._MARGIN, self._MARGIN, self._MARGIN, self._MARGIN)
@@ -244,6 +252,14 @@ class _DropTile(QFrame):
             remove_btn.setStyleSheet(f"""
                 QToolButton {{ border: none; background: rgba(0,0,0,0.45); color: {Colors.TEXT_SECONDARY}; font-size: 9px; border-radius: 7px; }}
                 QToolButton:hover {{ background: {Colors.ERROR}; color: white; }}
+                QToolTip {{
+                    background-color: {Colors.BG_ELEVATED};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                }}
             """)
             remove_btn.clicked.connect(lambda: self.remove_requested.emit(self._item_id))
             top_row.addWidget(remove_btn)
@@ -325,6 +341,14 @@ class _AbilityTile(QFrame):
         self.setFixedSize(width, total_h)
         self.setStyleSheet(f"""
             QFrame {{ background: rgba(255,255,255,0.04); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(self._MARGIN, self._MARGIN, self._MARGIN, self._MARGIN)
@@ -340,6 +364,14 @@ class _AbilityTile(QFrame):
         remove_btn.setStyleSheet(f"""
             QToolButton {{ border: none; background: rgba(0,0,0,0.45); color: {Colors.TEXT_SECONDARY}; font-size: 9px; border-radius: 7px; }}
             QToolButton:hover {{ background: {Colors.ERROR}; color: white; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         remove_btn.clicked.connect(lambda: self.remove_requested.emit(self._index))
         top_row.addWidget(remove_btn)
@@ -599,6 +631,14 @@ class _CatalogPickerDialog(QWidget):
         close_btn.setStyleSheet(f"""
             QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 12px; }}
             QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         close_btn.clicked.connect(self._cancel)
         header.addWidget(close_btn)
@@ -738,6 +778,14 @@ class _AssetCard(QFrame):
             QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_SECONDARY}; font-size: 13px; font-weight: bold; }}
             QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
             QToolButton::menu-indicator {{ image: none; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
         """)
         menu = QMenu(menu_btn)
         menu.setStyleSheet(f"""
