@@ -40,7 +40,7 @@ class RegionLayer:
         self._style = "Nenhum"
         self._hovered = False
         self._terrain = TerrainLayer(scene, map_width, map_height, parent_item)
-        self._terrain.item.setZValue(5)  # above terrain (z=1), below stamped objects (z=10+)
+        self._terrain.item.setZValue(8.5)  # above terrain (1), rios (7) and estradas (8); below stamped objects (10+)
         self._terrain.item.setData(0, {"item_type": "zone"})
         # Hovering the região directly on the map now brightens/thickens its
         # own border too (set_hover already existed for the card-hover path
@@ -297,51 +297,14 @@ class RegionLayer:
         on empty space between them. Used by "Localizar" (see
         RegionMediator.on_locate). None if nothing is painted.
 
-        Connected-component search runs on a small downsampled copy of
-        the mask (same reasoning as area_m2's scan) — a per-pixel flood
-        fill over the full-res mask would be far too slow in Python."""
-        mask = self._terrain.mask
-        w, h = mask.width(), mask.height()
-        if w == 0 or h == 0:
+        Connected-component search delegates to TerrainLayer.
+        connected_components_local (same downsampled-scan reasoning as
+        area_m2's scan — a per-pixel flood fill over the full-res mask
+        would be far too slow in Python); this just keeps the largest."""
+        blobs = self._terrain.connected_components_local(_SCAN_SIZE)
+        if not blobs:
             return None
-        small = mask.scaled(_SCAN_SIZE, _SCAN_SIZE, Qt.AspectRatioMode.IgnoreAspectRatio,
-                             Qt.TransformationMode.FastTransformation)
-        sw, sh = small.width(), small.height()
-        opaque = [[small.pixelColor(x, y).alpha() > _ALPHA_THRESHOLD for x in range(sw)] for y in range(sh)]
-        visited = [[False] * sw for _ in range(sh)]
-
-        best_count = 0
-        best_bounds = None  # (min_x, min_y, max_x, max_y) in downsampled coords
-        for sy in range(sh):
-            for sx in range(sw):
-                if visited[sy][sx] or not opaque[sy][sx]:
-                    visited[sy][sx] = True
-                    continue
-                stack = [(sx, sy)]
-                visited[sy][sx] = True
-                min_x = max_x = sx
-                min_y = max_y = sy
-                count = 0
-                while stack:
-                    cx, cy = stack.pop()
-                    count += 1
-                    min_x, max_x = min(min_x, cx), max(max_x, cx)
-                    min_y, max_y = min(min_y, cy), max(max_y, cy)
-                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                        nx, ny = cx + dx, cy + dy
-                        if 0 <= nx < sw and 0 <= ny < sh and not visited[ny][nx] and opaque[ny][nx]:
-                            visited[ny][nx] = True
-                            stack.append((nx, ny))
-                if count > best_count:
-                    best_count = count
-                    best_bounds = (min_x, min_y, max_x, max_y)
-
-        if best_bounds is None:
-            return None
-        min_x, min_y, max_x, max_y = best_bounds
-        sx_scale, sy_scale = w / sw, h / sh
-        local = QPointF((min_x + max_x + 1) / 2 * sx_scale, (min_y + max_y + 1) / 2 * sy_scale)
-        return self._terrain.item.mapToScene(local)
+        return max(blobs, key=lambda b: b.pixel_count).center_scene
 
     # ─── Name/difficulty label (Cities-Skylines-style district label) ────
 
@@ -376,7 +339,7 @@ class RegionLayer:
             if scene is None:
                 return
             self._label_item = QGraphicsPixmapItem()
-            self._label_item.setZValue(6)  # above the fill/border (5), below stamped objects (10+)
+            self._label_item.setZValue(8.7)  # above the fill/border (8.5), below stamped objects (10+)
             self._label_item.setData(0, {"item_type": "zone_label"})
             suppress_selection_decoration(self._label_item)
             scene.addItem(self._label_item)

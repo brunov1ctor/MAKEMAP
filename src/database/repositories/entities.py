@@ -243,6 +243,10 @@ class QuestNPCRepository:
                 )
 
 
+class LoreRepository(BaseRepository):
+    TABLE = "lore_entries"
+
+
 class DungeonRepository(BaseRepository):
     TABLE = "dungeons"
 

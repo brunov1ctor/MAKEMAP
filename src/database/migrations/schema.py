@@ -1174,6 +1174,20 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (37, "Quests panel — aba Fluxo: grafo de nós (Início/Objetivo/Condição/Evento/Fim) com conexões rotuladas", """
         ALTER TABLE quests ADD COLUMN flow_json TEXT DEFAULT '{}';
     """),
+    (38, "Lore panel — tabela lore_entries", """
+        CREATE TABLE IF NOT EXISTS lore_entries (
+            id TEXT PRIMARY KEY,
+            code TEXT DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            category TEXT DEFAULT '',
+            tags_json TEXT DEFAULT '[]',
+            summary TEXT DEFAULT '',
+            content_html TEXT DEFAULT '',
+            author TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+    """),
 ]
 
 

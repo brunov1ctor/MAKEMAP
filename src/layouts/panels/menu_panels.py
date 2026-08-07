@@ -49,12 +49,12 @@ class MenuPanel(QWidget):
         hdr.addWidget(title)
         hdr.addStretch()
 
-        close_btn = QPushButton("✕")
+        close_btn = QPushButton("×")
         close_btn.setFixedSize(28, 28)
         close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; "
-            f"border: none; font-size: 14px; border-radius: 14px; }}"
+            f"border: none; font-size: 14px; border-radius: 14px; padding: 0; }}"
             f"QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}"
             f"QToolTip {{"
             f"    background-color: {Colors.BG_ELEVATED};"
@@ -147,12 +147,6 @@ class MenuPanel(QWidget):
 
 # ─── Specific Menu Panels ────────────────────────────────────────────────────
 
-class LorePanel(MenuPanel):
-    def __init__(self, parent=None):
-        super().__init__("Lore", "📖", parent)
-        self.add_empty_state("Escreva a história e lore do seu universo.")
-
-
 class ConfigPanel(MenuPanel):
     def __init__(self, parent=None):
         super().__init__("Config", "⚙", parent)
@@ -163,12 +157,11 @@ class ConfigPanel(MenuPanel):
         self.content_layout.addWidget(manager)
 
 
-# Registry for easy lookup. "Itens", "Dungeons", "NPCs" and "Quests" are
-# intentionally absent — they're handled directly in
+# Registry for easy lookup. "Itens", "Dungeons", "NPCs", "Quests" and "Lore"
+# are intentionally absent — they're handled directly in
 # MenuViewMediator._show_menu_view by the full ItemsSkillsPanel /
-# DungeonsPanel / NPCsPanel / QuestsPanel (all need the project's
-# UnitOfWork, like Mobs), not by an empty-state placeholder.
+# DungeonsPanel / NPCsPanel / QuestsPanel / LorePanel (all need the
+# project's UnitOfWork, like Mobs), not by an empty-state placeholder.
 MENU_PANELS = {
-    "Lore": LorePanel,
     "Config": ConfigPanel,
 }

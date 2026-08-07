@@ -248,10 +248,8 @@ class BrushTool(BaseTool):
         self._is_terrain_mode = False if self._is_effect_mode else self._check_is_terrain(asset_id)
 
     def _check_is_terrain(self, asset_id: str) -> bool:
-        """Check if asset belongs to 'terrain' OR 'water' category — both
-        paint into a TerrainLayer mask (see _get_or_create_terrain_layer),
-        water is just a terrain material tagged for the shoreline blend
-        (see is_water_asset), not a different paint mechanism."""
+        """Check if asset belongs to 'terrain', 'water' or 'road' category
+        — all three paint into a TerrainLayer mask."""
         if not self._asset_engine or not asset_id:
             return False
         lib = getattr(self._asset_engine, 'library', None)
@@ -260,7 +258,7 @@ class BrushTool(BaseTool):
         row = lib._db.execute(
             "SELECT category FROM assets WHERE id = ?", (asset_id,)
         ).fetchone()
-        return row["category"] in ("terrain", "water") if row else False
+        return row["category"] in ("terrain", "water", "road") if row else False
 
     # ─── Mouse Events ─────────────────────────────────────────────────
 
@@ -530,18 +528,27 @@ class BrushTool(BaseTool):
         # the per-asset opt-out (see AssetEffectsPanel's "🌊 Maresia"
         # toggle, only shown for water-category assets), default True so
         # existing water assets keep looking exactly as before.
-        water_ids = [
-            aid for aid in self._terrain_layers
-            if self.is_water_asset(aid) and self._asset_engine.library.has_shore_foam(aid)
-        ]
+        #
+        # Water assets are walked even when foam is currently disabled
+        # (instead of being filtered out of the loop entirely) so that an
+        # asset whose foam was just turned off — but that already has a
+        # foam overlay sitting in the scene from before the toggle — gets
+        # that stale overlay actively cleared here rather than silently
+        # skipped and left behind forever (nothing else ever revisits an
+        # excluded pair to clean it up).
+        water_ids = [aid for aid in self._terrain_layers if self.is_water_asset(aid)]
         if not water_ids:
             return
         for water_id in water_ids:
             water_layer = self._terrain_layers[water_id]
+            foam_enabled = self._asset_engine.library.has_shore_foam(water_id)
             for land_id, land_layer in self._terrain_layers.items():
                 if land_id == water_id or self.is_water_asset(land_id):
                     continue
-                self._blend_shoreline_pair(water_id, water_layer, land_id, land_layer)
+                if foam_enabled:
+                    self._blend_shoreline_pair(water_id, water_layer, land_id, land_layer)
+                else:
+                    self._clear_shoreline_overlay((water_id, land_id))
 
     def _shared_scene_overlap(self, layer_a: TerrainLayer, layer_b: TerrainLayer,
                                pad: int) -> QRectF | None:
@@ -918,6 +925,13 @@ class BrushTool(BaseTool):
         item = QGraphicsPixmapItem(pixmap, parent_item)
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         item.setTransformOriginPoint(pixmap.width() / 2, pixmap.height() / 2)
+        # Default MaskShape hit-tests against opaque pixels only — a click
+        # anywhere on a sprite's transparent padding (very common: trees,
+        # decorations rarely fill their whole bounding box) missed the item
+        # entirely, while a box-select drag still caught it (looser
+        # intersection test), making single-click selection feel broken.
+        # spawn_tool.py's stamp already does this; asset stamps didn't.
+        item.setShapeMode(QGraphicsPixmapItem.ShapeMode.BoundingRectShape)
 
         if parent_item:
             local_pos = parent_item.mapFromScene(position)
@@ -935,7 +949,7 @@ class BrushTool(BaseTool):
         item.setScale(scale)
         item.setRotation(rotation)
         item.setOpacity(opacity)
-        item.setZValue(10)
+        item.setZValue(0.5)
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
         item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
         item.setData(0, {"item_type": "asset", "asset_id": asset_id})
@@ -1023,9 +1037,6 @@ class RegionTool(BaseTool):
             self._update_preview(scene_pos)
 
     def _update_preview(self, cursor_pos: QPointF = None):
-        if self._preview:
-            self.viewport.scene().removeItem(self._preview)
-
         path = QPainterPath()
         if self._points:
             path.moveTo(self._points[0])
@@ -1035,11 +1046,13 @@ class RegionTool(BaseTool):
                 path.lineTo(cursor_pos)
             path.closeSubpath()
 
-        self._preview = QGraphicsPathItem(path)
-        self._preview.setPen(QPen(self._border_color, 2, Qt.PenStyle.DashLine))
-        self._preview.setBrush(QBrush(self._color))
-        self._preview.setZValue(50)
-        self.viewport.scene().addItem(self._preview)
+        if self._preview is None:
+            self._preview = QGraphicsPathItem()
+            self._preview.setPen(QPen(self._border_color, 2, Qt.PenStyle.DashLine))
+            self._preview.setBrush(QBrush(self._color))
+            self._preview.setZValue(50)
+            self.viewport.scene().addItem(self._preview)
+        self._preview.setPath(path)
 
     def _finalize(self):
         polygon = QPolygonF(self._points)
@@ -1096,9 +1109,6 @@ class RoadTool(BaseTool):
             self._update_preview(scene_pos)
 
     def _update_preview(self, cursor_pos: QPointF = None):
-        if self._preview:
-            self.viewport.scene().removeItem(self._preview)
-
         path = QPainterPath()
         if self._points:
             path.moveTo(self._points[0])
@@ -1107,10 +1117,12 @@ class RoadTool(BaseTool):
             if cursor_pos:
                 path.lineTo(cursor_pos)
 
-        self._preview = QGraphicsPathItem(path)
-        self._preview.setPen(QPen(self._color, self._width, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        self._preview.setZValue(50)
-        self.viewport.scene().addItem(self._preview)
+        if self._preview is None:
+            self._preview = QGraphicsPathItem()
+            self._preview.setPen(QPen(self._color, self._width, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            self._preview.setZValue(50)
+            self.viewport.scene().addItem(self._preview)
+        self._preview.setPath(path)
 
     def _finalize(self):
         path = QPainterPath()
@@ -1197,18 +1209,17 @@ class RiverTool(BaseTool):
         return path
 
     def _update_preview(self, cursor_pos: QPointF = None):
-        if self._preview:
-            self.viewport.scene().removeItem(self._preview)
-
         pts = list(self._points)
         if cursor_pos:
             pts.append(cursor_pos)
 
         path = self._build_smooth_path(pts)
-        self._preview = QGraphicsPathItem(path)
-        self._preview.setPen(QPen(self._color, self._width, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        self._preview.setZValue(50)
-        self.viewport.scene().addItem(self._preview)
+        if self._preview is None:
+            self._preview = QGraphicsPathItem()
+            self._preview.setPen(QPen(self._color, self._width, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            self._preview.setZValue(50)
+            self.viewport.scene().addItem(self._preview)
+        self._preview.setPath(path)
 
     def _finalize(self):
         path = self._build_smooth_path(self._points)

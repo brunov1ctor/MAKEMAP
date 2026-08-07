@@ -210,12 +210,18 @@ class MaterialThumbnail(QToolButton):
         """)
 
     def set_pixmap(self, pixmap: QPixmap):
-        scaled = pixmap.scaled(
+        # KeepAspectRatioByExpanding + crop central = "cover"
+        # Evita faixas finas para assets horizontais (rio, estrada)
+        expanded = pixmap.scaled(
             QSize(self._ICON_SIZE, self._ICON_SIZE),
-            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
             Qt.TransformationMode.SmoothTransformation,
         )
-        self._icon_label.setPixmap(scaled)
+        if expanded.width() > self._ICON_SIZE or expanded.height() > self._ICON_SIZE:
+            x = (expanded.width() - self._ICON_SIZE) // 2
+            y = (expanded.height() - self._ICON_SIZE) // 2
+            expanded = expanded.copy(x, y, self._ICON_SIZE, self._ICON_SIZE)
+        self._icon_label.setPixmap(expanded)
 
 
 def _separator():
@@ -231,6 +237,11 @@ class AssetBrowserPanel(QFrame):
     """Category tabs + search + material grid — picks which asset to paint with."""
 
     PANEL_WIDTH = 260
+
+    # A bit more than the 3px vertical scrollbar itself (see the
+    # QScrollBar:vertical rule in _grid_scroll's stylesheet below) — see
+    # _grid_wrap_width().
+    _SCROLLBAR_RESERVE_PX = 6
 
     asset_selected = Signal(str)
     favorite_toggled = Signal(str)
@@ -253,6 +264,20 @@ class AssetBrowserPanel(QFrame):
         else:
             self.setFixedWidth(self.PANEL_WIDTH)
             self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+            # setFixedWidth() alone only constrains min/max width — it
+            # doesn't give the widget real geometry, since this panel is
+            # positioned by PanelLayoutEngine's absolute setGeometry() calls
+            # rather than a parent QLayout. Without an explicit resize()
+            # here, self.width() (and so _grid_scroll's viewport width)
+            # stays at Qt's tiny pre-layout default until the FIRST
+            # setGeometry() call — but PanelLayoutEngine computes that very
+            # call's height via content_height(), which measures the grid
+            # against the CURRENT viewport width. Forcing real width now
+            # means that first height calculation already sees the true
+            # 260px layout instead of a too-narrow guess (which wrapped the
+            # cards into more rows than the reserved height accounted for,
+            # clipping the last row on the very first open).
+            self.resize(self.PANEL_WIDTH, 400)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
 
@@ -334,8 +359,8 @@ class AssetBrowserPanel(QFrame):
         # a terrain material (paints into a TerrainLayer the same way),
         # just one the Brush tool treats specially for the shoreline
         # foam blend (see BrushTool._check_is_terrain/is_water_asset).
-        self._tab_categories = ["terrain", "water", "trees", "rocks", "mountains", "buildings", "effects", "misc"]
-        self._tab_labels = ["🌍 Terrain", "🌊 Água", "🌲 Trees", "🪨 Rocks", "⛰ Mountains", "🏠 Buildings", "✨ Effects", "📦 Misc", "★"]
+        self._tab_categories = ["terrain", "water", "road", "trees", "rocks", "mountains", "buildings", "effects", "misc"]
+        self._tab_labels = ["🌍 Terreno", "🌊 Água", "🛤 Estrada", "🌲 Trees", "🪨 Rocks", "⛰ Mountains", "🏠 Buildings", "✨ Effects", "📦 Misc", "★"]
         self._tab_buttons: list[QToolButton] = []
 
         for i, label in enumerate(self._tab_labels):
@@ -408,6 +433,19 @@ class AssetBrowserPanel(QFrame):
 
     # ─── Public API ──────────────────────────────────────────────────────
 
+    def _grid_wrap_width(self, vp_w: int) -> int:
+        """Width to actually lay the FlowLayout out at — always a few px
+        narrower than the scroll area's current viewport, regardless of
+        whether the vertical scrollbar happens to be visible right now.
+        viewport().width() is circular (whether the scrollbar shows depends
+        on the grid's height, which depends on THIS width), so a card row
+        sized right up to the live viewport width can end up a hair wider
+        than what's actually visible the instant the scrollbar claims its
+        own space — and with ScrollBarAlwaysOff on the horizontal axis,
+        there's no scrollbar to reveal the clipped remainder. Reserving the
+        space unconditionally breaks that loop."""
+        return max(0, vp_w - self._SCROLLBAR_RESERVE_PX)
+
     def set_assets(self, assets: list[dict]):
         """Populate material grid. Each dict: {id, name, pixmap, favorite}."""
         for btn in self._asset_buttons:
@@ -462,7 +500,8 @@ class AssetBrowserPanel(QFrame):
         self._grid_layout.invalidate()
         vp_w = self._grid_scroll.viewport().width()
         if vp_w > 0:
-            self._grid_container.resize(vp_w, self._grid_container.heightForWidth(vp_w))
+            w = self._grid_wrap_width(vp_w)
+            self._grid_container.resize(w, self._grid_container.heightForWidth(w))
 
     def set_selected_asset(self, asset_id: str):
         """Checks whichever grid button matches `asset_id` (unchecking the
@@ -571,11 +610,29 @@ class AssetBrowserPanel(QFrame):
         # and never positions them. Force a fresh pass now that they're
         # actually visible.
         self._style_tab_flow.invalidate()
+        self._style_tab_flow.activate()
         self._tab_flow.invalidate()
+        self._tab_flow.activate()
         vp_w = self._grid_scroll.viewport().width()
         if vp_w > 0:
-            self._grid_container.resize(vp_w, self._grid_container.heightForWidth(vp_w))
+            w = self._grid_wrap_width(vp_w)
+            self._grid_container.resize(w, self._grid_container.heightForWidth(w))
+        # invalidate() alone only SCHEDULES a re-layout (posts a deferred
+        # LayoutRequest event) — resize() above is also a no-op if the
+        # container's width happens to already match (e.g. it was already
+        # sized correctly while the panel was still hidden, so the cards
+        # were skipped from that pass as invisible — see FlowLayout._do_
+        # layout's `if widget and not widget.isVisible(): continue`).
+        # Without an explicit activate(), the FIRST paint after show()
+        # could render before that deferred pass ever runs, showing cards
+        # frozen at their earlier from-when-hidden (unpositioned/clipped)
+        # geometry — exactly the "primeira abertura corta os cards" bug,
+        # self-correcting only once something else (switching tabs, which
+        # calls set_assets() and so invalidate()+resize() again) happens to
+        # let Qt catch up. activate() forces the real (non-test) layout
+        # pass synchronously, right now, using the NOW-visible children.
         self._grid_layout.invalidate()
+        self._grid_layout.activate()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -583,8 +640,60 @@ class AssetBrowserPanel(QFrame):
         # FlowLayout's self-referential sizeHint() and never correct the grid
         # widget's width afterward. Force it to track the viewport explicitly.
         vp_w = self._grid_scroll.viewport().width()
-        if vp_w > 0 and self._grid_container.width() != vp_w:
-            self._grid_container.resize(vp_w, self._grid_container.heightForWidth(vp_w))
+        if vp_w > 0:
+            w = self._grid_wrap_width(vp_w)
+            if self._grid_container.width() != w:
+                self._grid_container.resize(w, self._grid_container.heightForWidth(w))
+
+    def content_height(self) -> int:
+        """Natural height for this panel's actual content — header/tabs/
+        search rows plus however tall the asset grid really needs to be for
+        the current width, instead of PanelLayoutEngine always stretching
+        this panel to fill whatever space is available below the Brush
+        panel (which used to leave a wall of empty space under just a
+        handful of cards). Same reasoning/pattern as RegionSettingsPanel.
+        content_height() / TerrainSettingsPanel.content_height().
+
+        Only meaningful in standalone (non-embedded) mode — embedded mode
+        is sized by BrushToolPanel's tab stack instead, which never calls
+        this."""
+        root = self.layout()
+        margins = root.contentsMargins()
+        total = margins.top() + margins.bottom()
+        n = root.count()
+        for i in range(n):
+            item = root.itemAt(i)
+            w = item.widget()
+            if w is self._grid_scroll:
+                # QScrollArea's own sizeHint doesn't reflect the FlowLayout
+                # content scrolling inside it — measure the grid container's
+                # real wrapped height for the current viewport width instead
+                # (same heightForWidth() call already used in set_assets()
+                # and above in resizeEvent()). Always derive vp_w from the
+                # fixed PANEL_WIDTH here rather than the live viewport —
+                # PanelLayoutEngine calls this BEFORE ever giving the panel
+                # its real on-screen geometry (see apply()'s first
+                # setGeometry() call), so on the very first open
+                # self._grid_scroll.viewport().width() still reports Qt's
+                # tiny pre-layout default size, not the eventual 260px —
+                # that wrong width baked a wrong (too-short/misaligned)
+                # height into that first setGeometry() call, which only
+                # self-corrected on the NEXT open once the widget's real
+                # geometry had already been set once ("primeira vez que
+                # abro o painel ele fica estranho, depois fica normal").
+                vp_w = self.PANEL_WIDTH - 24
+                grid_h = self._grid_container.heightForWidth(self._grid_wrap_width(vp_w))
+                total += max(grid_h, self._grid_scroll.minimumHeight())
+            elif w is not None:
+                w.adjustSize()
+                total += w.sizeHint().height()
+            else:
+                lay = item.layout()
+                if lay is not None:
+                    total += lay.sizeHint().height()
+        if n > 1:
+            total += root.spacing() * (n - 1)
+        return total
 
     def paintEvent(self, event):
         # Embedded mode: BrushToolPanel (the actual floating window here)

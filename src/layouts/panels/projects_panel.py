@@ -401,7 +401,7 @@ class ProjectsPanel(QWidget):
         btn_new.clicked.connect(self._new_project)
         hdr.addWidget(btn_new)
 
-        close_btn = QPushButton("✕")
+        close_btn = QPushButton("×")
         close_btn.setFixedSize(24, 24)
         close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(

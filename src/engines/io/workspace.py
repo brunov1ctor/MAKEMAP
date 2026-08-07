@@ -1,5 +1,3 @@
-"""FASE 21 — Workspace Manager."""
-
 from __future__ import annotations
 
 import uuid

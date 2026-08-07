@@ -163,6 +163,7 @@ class Viewport(QGraphicsView):
     rotation_changed = Signal(float)  # emits current rotation, degrees [0, 360)
     cursor_moved = Signal(float, float)  # scene X, Y
     view_changed = Signal()  # emitted on any pan or zoom
+    fps_updated = Signal(float)  # emits measured FPS after each frame
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -176,7 +177,7 @@ class Viewport(QGraphicsView):
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.SmoothPixmapTransform
         )
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
         self.setOptimizationFlags(
             QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing
         )
@@ -208,6 +209,31 @@ class Viewport(QGraphicsView):
         # layers never need this, so the common case costs nothing.
         self._parallax_clock = QElapsedTimer()
         self._parallax_timer: QTimer | None = None
+        self._frame_clock = QElapsedTimer()
+        self._frame_clock.start()
+
+        # Reference-counted so mouse-drag pan and keyboard pan (which can
+        # overlap — e.g. space-drag while WASD is still held) don't fight
+        # over turning hints back on while the other is still active.
+        self._pan_quality_count = 0
+
+    def begin_interactive_pan(self):
+        """Drop Antialiasing/SmoothPixmapTransform while actively panning —
+        those hints get recomputed on every repaint, and repainting a
+        large terrain/background pixmap with them at 60fps during a
+        continuous pan (keyboard or mouse-drag) is the main cost behind
+        WASD/mouse panning feeling laggy, even with little else on the
+        map. Restored by end_interactive_pan() once panning stops."""
+        self._pan_quality_count += 1
+        if self._pan_quality_count == 1:
+            self.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+
+    def end_interactive_pan(self):
+        self._pan_quality_count = max(0, self._pan_quality_count - 1)
+        if self._pan_quality_count == 0:
+            self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
     # --- Background ---
 
@@ -348,6 +374,12 @@ class Viewport(QGraphicsView):
                         _blit(QRectF(x0 + dx, y0 + dy, tile_w, tile_h), tile_pixmap)
 
         painter.restore()
+
+    def paintEvent(self, event):
+        elapsed = self._frame_clock.restart()
+        if elapsed > 0:
+            self.fps_updated.emit(1000.0 / elapsed)
+        super().paintEvent(event)
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
         if self._parallax_pixmaps:

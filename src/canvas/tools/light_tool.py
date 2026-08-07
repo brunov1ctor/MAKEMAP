@@ -95,7 +95,7 @@ class LightTool(BaseTool):
             self._history.push(PlaceObjectCommand(item))
 
         if self._selection:
-            self._selection.select(item)
+            self._selection.set([item])
         else:
             self.viewport.scene().clearSelection()
             item.setSelected(True)

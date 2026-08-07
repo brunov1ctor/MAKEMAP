@@ -171,6 +171,21 @@ class TerrainSettingsPanel(QFrame):
         self._card_scroll.setVisible(not self._inf_checked)
         outer.addWidget(scroll, 1)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # _toggle_terrain_panel's very first reposition() runs synchronously
+        # right after show(), measuring content_height() before this
+        # widget's own layout has actually settled — the resulting geometry
+        # is too short, cards get clipped, and it only self-corrects once
+        # something ELSE emits content_changed (any card add/edit already
+        # wires to a QTimer.singleShot(0, ...) deferred reposition — see
+        # TerrainMediator.connect_panel — because by the NEXT event-loop
+        # tick Qt has finished laying the widget out for real). Emitting
+        # content_changed here piggybacks on that same already-correct
+        # deferred path for the first open too, instead of needing its own
+        # separate fix.
+        self.content_changed.emit()
+
     def content_height(self) -> int:
         """Natural height for THIS panel's actual content — header +
         infinite toggle + "+ Novo Terreno" button (outside the scroll

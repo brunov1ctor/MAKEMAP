@@ -14,7 +14,7 @@ from src.layouts.panels.select_panel import SelectToolPanel
 from src.layouts.panels.explorer import ExplorerPanel
 from src.layouts.panels.canvas_area import CanvasArea
 from src.layouts.panels.background_panel import BackgroundPanel
-from src.layouts.panels.inspector import InspectorPanel, QuestPanel, LayersPanel
+from src.layouts.panels.inspector import InspectorPanel, LayersPanel
 from src.layouts.panels.progression import ProgressionBar
 from src.layouts.panels.status_bar import StatusBar
 from src.layouts.panels.info_modal import InfoModal
@@ -26,6 +26,7 @@ from src.engines.integrator import EngineIntegrator
 from src.layouts.mediators import (
     BrushMediator, TerrainMediator, GridMediator, ToolbarMediator, RegionMediator, SpawnMediator,
     TextMediator, MarkerMediator, LightMediator, AssetEffectsMediator, MenuViewMediator,
+    ExplorerSyncMediator,
 )
 from src.layouts.panel_manager import PanelManager
 from src.layouts.panel_layout_engine import PanelLayoutEngine
@@ -172,16 +173,14 @@ class MainLayout(QWidget):
         # Inspector (direita)
         self._right_scroll = self._make_scroll()
         right_container = QWidget()
-        right_container.setAttribute(Qt.WA_TranslucentBackground)
         right_container.setStyleSheet("background: transparent;")
         right_lay = QVBoxLayout(right_container)
         right_lay.setContentsMargins(4, 4, 4, 4)
         right_lay.setSpacing(8)
         self.right_panel = InspectorPanel()
-        self.quest_panel = QuestPanel()
         self.layers_panel = LayersPanel()
+        self.layers_panel.set_scene(self.canvas.engine.viewport.scene())
         right_lay.addWidget(self.right_panel, 1)
-        right_lay.addWidget(self.quest_panel)
         right_lay.addWidget(self.layers_panel)
         self._right_scroll.setWidget(right_container)
         self.right_panel.collapsed_changed.connect(
@@ -204,6 +203,8 @@ class MainLayout(QWidget):
         self.minimap.set_viewport(self.canvas.engine.viewport)
         self.canvas.engine._brush_tool.set_minimap(self.minimap)
         self.canvas.engine._region_brush_tool.set_minimap(self.minimap)
+        self.canvas.engine._river_path_tool.set_minimap(self.minimap)
+        self.canvas.engine._road_path_tool.set_minimap(self.minimap)
 
         # ═══ Floating Coordinator ═══
         # Shared obstacle-avoidance registry for every panel that can move or
@@ -249,6 +250,7 @@ class MainLayout(QWidget):
             # so it grows upward like a map's north, matching the grid ruler.
             lambda x, y: self.status_bar.coords.setText(f"X: {x:.0f}  Y: {-y:.0f}")
         )
+        self.canvas.engine.viewport.fps_updated.connect(self.status_bar.update_fps)
         self.canvas.engine.zoom_changed.connect(self._on_zoom)
         self.canvas.engine.tool_changed.connect(
             lambda t: self.status_bar.tool_label.setText(f"🔧 {t}")
@@ -268,11 +270,15 @@ class MainLayout(QWidget):
         self.engines = EngineIntegrator(self)
         self.engines.connect_ui(self)
 
+        # Explorer panel auto-sync — only reads other mediators' public
+        # state (terrain layers, regiões, spawned/placed items), so it's
+        # constructed last, after everything it reads from already exists.
+        self._explorer_sync_med = ExplorerSyncMediator(self)
+
     def _make_scroll(self) -> QScrollArea:
         s = QScrollArea(self)
         s.setWidgetResizable(True)
         s.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        s.setAttribute(Qt.WA_TranslucentBackground)
         s.setStyleSheet("""
             QScrollArea { background: transparent; border: none; }
             QScrollArea > QWidget > QWidget { background: transparent; }
@@ -365,6 +371,7 @@ class MainLayout(QWidget):
 
         if tool_name == "Brush":
             self._panel_mgr.show("Brush")
+            self._brush_med.reset_panel_mode()
         else:
             self._panel_mgr.hide("Brush")
             self.asset_browser_panel.hide()

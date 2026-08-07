@@ -118,6 +118,14 @@ class TextItem(QGraphicsItem):
         self.update()
         super().hoverLeaveEvent(event)
 
+    def set_explorer_highlight(self, hovered: bool):
+        """Same glow as a real mouse hover, triggered programmatically by
+        ExplorerSyncMediator from a card hover in the Explorer panel —
+        skips the cursor change and super() call, which only make sense
+        for a genuine QGraphicsSceneHoverEvent."""
+        self._hovered = hovered
+        self.update()
+
     # --- Inline editing (double-click to type) ---
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent):

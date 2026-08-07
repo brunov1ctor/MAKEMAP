@@ -1,5 +1,3 @@
-"""FASE 28 — Polimento (Onboarding, Tooltips, Shortcuts, Stress Test)."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field

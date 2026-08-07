@@ -27,7 +27,7 @@ _BG_CATEGORIES = [
     ("mystics", "🔮", "Mystics"),
     ("nature", "🌿", "Nature"),
     ("space", "🌌", "Space"),
-    ("terrain", "🏜", "Terrain"),
+    ("terrain", "🏜", "Terreno"),
 ]
 
 _LIB = Path(__file__).resolve().parents[4] / "library"
@@ -43,8 +43,9 @@ _SUPPORTED_IMG = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".mp4", ".we
 # EffectsConfigSection instead (fixed one-card-per-key, see effect_card.py),
 # built once in _build(), not per style switch.
 _CATEGORIES = [
-    ("terrain", "🌍", "Terrain"),
+    ("terrain", "🌍", "Terreno"),
     ("water", "🌊", "Água"),
+    ("road", "🛤", "Estrada"),
     ("trees", "🌲", "Trees"),
     ("rocks", "🪨", "Rocks"),
     ("mountains", "⛰", "Mountains"),

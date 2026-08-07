@@ -40,6 +40,9 @@ class BaseTool(ABC):
     def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
         pass
 
+    def mouse_double_click(self, event: QMouseEvent, scene_pos: QPointF):
+        pass
+
     def key_press(self, event: QKeyEvent):
         pass
 
@@ -73,6 +76,15 @@ class ToolManager(QObject):
             tool.activate()
             self._active = tool
             self.tool_changed.emit(name)
+            # Selecting a tool (toolbar click) can leave keyboard focus on
+            # whatever panel widget was last interacted with (e.g. the
+            # Assets search box) — the canvas viewport never reclaims it on
+            # its own, so WASD panning (and any other canvas key shortcut)
+            # would silently type into that widget instead until the user
+            # happens to click the canvas directly. Reclaim it here so
+            # switching tools always leaves the canvas ready for keyboard
+            # input immediately.
+            self._viewport.setFocus()
 
     @property
     def active_tool(self) -> BaseTool | None:
@@ -105,6 +117,10 @@ class ToolManager(QObject):
     def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
         if self._active:
             self._active.mouse_release(event, scene_pos)
+
+    def mouse_double_click(self, event: QMouseEvent, scene_pos: QPointF):
+        if self._active:
+            self._active.mouse_double_click(event, scene_pos)
 
     def key_press(self, event: QKeyEvent):
         if self._active:

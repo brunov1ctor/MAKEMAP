@@ -53,9 +53,11 @@ class FlowTab(QFrame):
         outer.addWidget(self._split, 1)
 
     def _build_map_section(self, scene_provider) -> QWidget:
-        section = QWidget()
+        section = QFrame()
+        section.setObjectName("subpanel")
+        section.setStyleSheet(panel_frame_style())
         lay = QVBoxLayout(section)
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setContentsMargins(10, 8, 10, 10)
         lay.setSpacing(6)
 
         self._map = QuestMapPreview(scene_provider=scene_provider)
@@ -89,9 +91,11 @@ class FlowTab(QFrame):
         return section
 
     def _build_flow_section(self) -> QWidget:
-        section = QWidget()
+        section = QFrame()
+        section.setObjectName("subpanel")
+        section.setStyleSheet(panel_frame_style())
         lay = QVBoxLayout(section)
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setContentsMargins(10, 8, 10, 10)
         lay.setSpacing(8)
 
         header_row = QHBoxLayout()
@@ -168,11 +172,6 @@ class FlowTab(QFrame):
     def load(self, record: dict):
         self.setEnabled(True)
         self._canvas.clear()
-        # Cada quest selecionada recomeça o mapa enquadrando tudo — igual a
-        # um minimapa, que sempre parte mostrando o mundo inteiro antes do
-        # usuário dar zoom pra acompanhar a trajetória específica desta
-        # quest (via 📍 num nó ou "Centralizar na Quest").
-        self._map.fit_all()
         data = self._parse(record.get("flow_json"))
         nodes = data.get("nodes") or []
         if not nodes:
@@ -184,6 +183,9 @@ class FlowTab(QFrame):
             start = self._canvas.add_node("inicio", "Início da Quest", x=20, y=80, notify=False)
             end = self._canvas.add_node("fim", "Fim", x=260, y=80, notify=False)
             self._canvas.add_edge(start, end, notify=False)
+            # Nada vinculado ainda — não há o que enquadrar de perto, então
+            # mostra o mundo inteiro (ver ramo abaixo).
+            self._map.fit_all()
             return
 
         by_id = {}
@@ -199,6 +201,16 @@ class FlowTab(QFrame):
             b = by_id.get(e.get("to"))
             if a and b:
                 self._canvas.add_edge(a, b, e.get("label", ""), notify=False)
+
+        # Enquadra de perto só os pontos ligados a esta quest — mostrar o
+        # mapa inteiro por padrão deixava a maior parte da view vazia
+        # (sobra) sempre que o mundo é bem maior que a área onde a quest
+        # realmente acontece. Só cai pro mundo inteiro (fit_all) quando
+        # nenhum vínculo desta quest foi colocado no mapa ainda, já que aí
+        # não há nada específico pra enquadrar.
+        refs = [(n.get("ref_type", ""), n.get("ref_id", "")) for n in nodes if n.get("ref_id")]
+        if not self._map.frame_all(refs):
+            self._map.fit_all()
 
     def collect(self) -> dict:
         nodes = [{

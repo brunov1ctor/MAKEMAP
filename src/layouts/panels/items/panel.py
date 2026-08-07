@@ -162,12 +162,12 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
         export_btn.setMenu(export_menu)
         header.addWidget(export_btn)
 
-        close_btn = QPushButton("✕")
+        close_btn = QPushButton("×")
         close_btn.setFixedSize(28, 28)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
-            QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none; font-size: 14px; border-radius: 14px; }}
+            QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none; font-size: 14px; border-radius: 14px; padding: 0; }}
             QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
             QToolTip {{
                 background-color: {Colors.BG_ELEVATED};

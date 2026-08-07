@@ -213,13 +213,13 @@ class DungeonsPanel(DungeonsImportExportMixin, QWidget):
         gear.setMenu(menu)
         header.addWidget(gear)
 
-        close_btn = QPushButton("✕")
+        close_btn = QPushButton("×")
         close_btn.setFixedSize(28, 28)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none;
-                font-size: 14px; border-radius: 14px; }}
+                font-size: 14px; border-radius: 14px; padding: 0; }}
             QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
             QToolTip {{
                 background-color: {Colors.BG_ELEVATED};
@@ -691,6 +691,12 @@ class DungeonsPanel(DungeonsImportExportMixin, QWidget):
         self._current_dungeon_id = dungeon_id
         self._dungeon_list.select(dungeon_id)
         self._load_dungeon_into_editor(record)
+
+    # ─── Public API — jump straight to a specific dungeon, e.g. from a
+    # Lore "@" mention click (see MenuViewMediator._on_lore_mention_open) ───
+
+    def select_dungeon(self, dungeon_id: str):
+        self._on_dungeon_selected(dungeon_id)
 
     def _on_new_dungeon(self):
         if not self._uow:

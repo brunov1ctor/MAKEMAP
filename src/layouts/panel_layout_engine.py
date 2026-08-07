@@ -87,7 +87,7 @@ class PanelLayoutEngine:
             bp_rect = l.brush_panel.geometry()
             ab_x = bp_rect.right() + 8
             ab_w = min(l.asset_browser_panel.PANEL_WIDTH, max(0, avail.right() - ab_x))
-            ab_h = max(0, avail.bottom() - bp_rect.y())
+            ab_h = min(l.asset_browser_panel.content_height(), max(0, avail.bottom() - bp_rect.y()))
             l.asset_browser_panel.setGeometry(ab_x, bp_rect.y(), ab_w, ab_h)
             l.asset_browser_panel.raise_()
 

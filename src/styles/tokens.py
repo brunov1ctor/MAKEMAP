@@ -107,3 +107,17 @@ def combo_popup_qss(border: str = Colors.BORDER) -> str:
         f"color: {Colors.TEXT_PRIMARY}; border: 1px solid {border}; "
         f"selection-background-color: {Colors.ACCENT_DIM}; }}"
     )
+
+
+def menu_qss() -> str:
+    """Shared QMenu popup style, used by every "..." overflow menu and
+    dropdown menu across cards/panels. Reuse instead of hand-copying — every
+    duplicate has drifted individually before."""
+    return f"""
+        QMenu {{
+            background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
+            border: 1px solid {Colors.BORDER}; padding: 4px;
+        }}
+        QMenu::item {{ padding: 4px 20px 4px 8px; border-radius: 3px; font-size: 10px; }}
+        QMenu::item:selected {{ background: {Colors.ACCENT_DIM}; }}
+    """

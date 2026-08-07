@@ -53,6 +53,12 @@ class CanvasToolbar(QFrame):
         self._orientation = "horizontal"
         self._dragging = False
         self._drag_last_global = None
+        # Actual active tool name (CanvasEngine defaults to Pan at
+        # construction) — distinct from any button's checked state, which
+        # can be True for a whole _member_names family (e.g. Brush shows
+        # checked while Rio/Estrada is active) rather than just this exact
+        # tool. See _on_tool_toggled for why that distinction matters.
+        self._active_tool_name = "Pan"
 
         self._tool_defs = [
             ("⬚", "Selecionar", "V", True),
@@ -166,6 +172,17 @@ class CanvasToolbar(QFrame):
                 btn.clicked.connect(lambda checked, n=name: self._on_tool_toggled(checked, n))
             else:
                 btn.clicked.connect(lambda checked, n=name: self._on_action(n))
+            if name == "Brush":
+                # Picking a water/road asset switches the active tool to
+                # the dedicated "Rio"/"Estrada" path-tracing tool instead
+                # of the plain terrain-painting Brush (see
+                # BrushMediator.on_asset_selected) — but both are still
+                # picked from the SAME brush asset panel, so from the
+                # user's POV they never left the Brush workflow. Without
+                # this, the Brush button unchecked itself the moment a
+                # water/road asset was chosen, making it look like the
+                # tool had silently switched away/broken.
+                btn._member_names = {"Brush", "Rio", "Estrada"}
             self._items.append(btn)
             self._tool_buttons.append((name, btn, is_tool, is_toggle))
 
@@ -235,14 +252,31 @@ class CanvasToolbar(QFrame):
         _paint_glass(self, event, radius=10)
 
     def _on_tool_toggled(self, checked: bool, name: str):
-        self._on_tool(name if checked else "Pan")
+        if checked:
+            self._on_tool(name)
+            return
+        # Unchecking a button only really means "switch to Pan" when the
+        # active tool WAS this button's own name — a button showing checked
+        # because a family member is active (e.g. Brush shown checked while
+        # Rio/Estrada is the real active tool, via _member_names) unchecks
+        # itself on this same click too (Qt's own toggle, we don't control
+        # that), but the user's intent in that case is "switch to Brush
+        # itself", not "turn selection off". Falling through to Pan here
+        # made clicking Pincel while Rio was active a dead click that
+        # silently switched to Pan instead of Brush.
+        if self._active_tool_name == name:
+            self._on_tool("Pan")
+        else:
+            self._on_tool(name)
 
     def _on_tool(self, name: str):
+        self._active_tool_name = name
         for n, btn, is_tool, is_toggle in self._tool_buttons:
             if is_tool:
                 # A button may cover more than one underlying tool name via
-                # `_member_names` (not used today, kept for buttons like
-                # this that consolidate a small family of related tools).
+                # `_member_names` — e.g. Brush also covers Rio/Estrada,
+                # since those are picked from the same asset panel (see
+                # toolbar.py's "Brush" registration).
                 members = getattr(btn, "_member_names", None) or {n}
                 btn.setChecked(name in members)
             elif is_toggle:
@@ -262,12 +296,27 @@ class CanvasToolbar(QFrame):
         """Reflect a tool activated programmatically (not via a button
         click) in the button states, without re-emitting tool_selected —
         e.g. TextTool switching back to Pan once a placed label's first
-        edit commits."""
+        edit commits, or BrushMediator.on_asset_selected switching straight
+        to Rio/Estrada when a water/road asset is picked."""
+        self._active_tool_name = name
         for n, btn, is_tool, is_toggle in self._tool_buttons:
             if is_tool:
                 members = getattr(btn, "_member_names", None) or {n}
                 btn.blockSignals(True)
                 btn.setChecked(name in members)
+                btn.blockSignals(False)
+            elif is_toggle:
+                # _on_tool() (a direct toolbar click) already clears toggle
+                # buttons (Terreno/Região/Iluminação/Plano de Fundo) when a
+                # real tool is picked — this path (a tool re-activated
+                # PROGRAMMATICALLY, e.g. re-selecting "Selecionar" as a side
+                # effect of clicking an item on canvas while a toggle panel
+                # was still open) skipped that entirely, leaving the toggle
+                # button's checked state stuck from whenever it was opened —
+                # two toolbar icons highlighted at once even though only one
+                # tool is actually active.
+                btn.blockSignals(True)
+                btn.setChecked(False)
                 btn.blockSignals(False)
 
     def uncheck_action(self, name: str):

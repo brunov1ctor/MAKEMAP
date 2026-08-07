@@ -25,6 +25,8 @@ LAYER_ITEMS = [
     ("marker", "Marcadores"),
     ("light", "Luz"),
     ("text", "Texto"),
+    ("road_path", "Estrada"),
+    ("river_path", "Rio"),
 ]
 
 

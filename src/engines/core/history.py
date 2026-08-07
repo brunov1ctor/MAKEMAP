@@ -99,18 +99,35 @@ class CreateItemCommand(Command):
 
 
 class DeleteItemCommand(Command):
-    """Remove an item from the scene."""
+    """Remove an item from the scene.
+
+    A brush-stamped object may be parented to a boundary item rather than
+    added directly to the scene (see place_stamp_item) — plain
+    scene.removeItem() on a non-top-level child leaves it half-detached
+    (still enumerable via scene.items(), which is what has things like the
+    Explorer panel keep showing a "deleted" object). Detach first, same fix
+    BrushMediator._load_from_db's own stamp cleanup already uses, and
+    remember the parent (redo() clears it) so undo() can restore it —
+    reattaching to the SAME parent it came from is safe without any extra
+    position bookkeeping, since the item's parent-relative pos never
+    changes in between.
+    """
 
     def __init__(self, scene, item: QGraphicsItem):
         self.scene = scene
         self.item = item
         self.description = "Deletar item"
+        self._parent = item.parentItem()
 
     def redo(self):
+        self.item.setParentItem(None)
         self.scene.removeItem(self.item)
 
     def undo(self):
-        self.scene.addItem(self.item)
+        if self._parent is not None:
+            self.item.setParentItem(self._parent)
+        else:
+            self.scene.addItem(self.item)
 
 
 class PaintStrokeCommand(Command):

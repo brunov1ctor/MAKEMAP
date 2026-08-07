@@ -1,0 +1,358 @@
+"""RecordListColumn — a coluna esquerda com a lista de entradas de Lore.
+
+Cópia de quests/record_list.py (que por sua vez documenta ser cópia de
+dungeons/record_list.py) com a mesma única diferença de sempre: a fonte do
+badge colorido é `category_dot` de lore.constants em vez de `status_dot`.
+"""
+
+from __future__ import annotations
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox,
+    QFrame, QScrollArea, QSizePolicy, QToolButton,
+)
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QPixmap
+
+from src.styles.tokens import Colors
+from src.layouts.panels.lore.constants import (
+    _INPUT_STYLE, _no_wheel, panel_frame_style, sub_header, category_dot,
+)
+
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
+
+
+class _RecordCard(QFrame):
+    """Uma linha da lista. `record` traz id/name/subtitle/icon/image/category.
+
+    Aceita uma imagem arrastada do Explorer/Finder direto sobre o card
+    (mesma ideia do IconButton dos editores) — emite `image_dropped` com o
+    caminho local; quem é dono da lista decide onde persistir."""
+
+    clicked = Signal(str)
+    image_dropped = Signal(str, str)  # record id, caminho local
+    delete_requested = Signal(str)
+
+    # Excluir precisa de um "tem certeza?", mas um QMessageBox nativo abre
+    # como janela fora do app — o botão se arma no próprio lugar em vez
+    # disso: primeiro clique vira um "⚠" vermelho, segundo clique (dentro de
+    # _DELETE_ARM_MS) exclui de verdade. Mesmo padrão de
+    # npcs/category_edit_panel.py._arm_delete.
+    _DELETE_ARM_MS = 4000
+
+    def __init__(self, record: dict, parent=None):
+        super().__init__(parent)
+        self._id = record.get("id", "")
+        self._selected = False
+        self._delete_armed = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setAcceptDrops(True)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 6, 10, 6)
+        row.setSpacing(8)
+
+        self._thumb = QLabel()
+        self._thumb.setFixedSize(38, 38)
+        self._thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._fallback_icon = record.get("icon") or "📖"
+        self._set_thumb_image(record.get("image") or "")
+        row.addWidget(self._thumb)
+
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        name = QLabel(record.get("name") or "—")
+        name.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; font-size: 11px; font-weight: bold; "
+            f"background: transparent; border: none;"
+        )
+        subtitle = QLabel(record.get("subtitle") or "")
+        subtitle.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
+        # Sem isso, um nome/subtítulo comprido teria minimumSizeHint igual
+        # ao texto inteiro (QLabel sem word-wrap não elide) — numa coluna
+        # estreita isso empurra os itens de tamanho fixo à direita (bolinha
+        # de categoria, botão ✕) para fora da área visível do card em vez de
+        # ceder espaço. QSizePolicy.Ignored faz o rótulo abrir mão do
+        # próprio texto na hora de disputar espaço; ele só corta visualmente
+        # (sem "…"), mas os botões fixos nunca mais somem.
+        for lbl in (name, subtitle):
+            lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        col.addWidget(name)
+        col.addWidget(subtitle)
+        row.addLayout(col, 1)
+
+        if record.get("category"):
+            row.addWidget(category_dot(record["category"]))
+
+        self._delete_btn = QToolButton()
+        self._delete_btn.setText("✕")
+        self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._delete_btn.setFixedSize(18, 18)
+        self._delete_btn.setToolTip("Excluir")
+        self._DELETE_BTN_DEFAULT_STYLE = f"""
+            QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 10px; }}
+            QToolButton:hover {{ color: {Colors.ERROR}; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
+        """
+        self._delete_btn.setStyleSheet(self._DELETE_BTN_DEFAULT_STYLE)
+        self._delete_btn.clicked.connect(self._on_delete_clicked)
+        row.addWidget(self._delete_btn)
+
+        self.set_selected(False)
+
+    def _on_delete_clicked(self):
+        if not self._delete_armed:
+            self._arm_delete()
+            return
+        self._disarm_delete()
+        self.delete_requested.emit(self._id)
+
+    def _arm_delete(self):
+        self._delete_armed = True
+        self._delete_btn.setText("⚠ Confirmar")
+        self._delete_btn.setToolTip("Confirmar exclusão")
+        self._delete_btn.setFixedSize(60, 18)
+        self._delete_btn.setStyleSheet(f"""
+            QToolButton {{ background: {Colors.ERROR}; border: none; border-radius: 4px;
+                color: white; font-size: 9px; font-weight: bold; }}
+            QToolButton:hover {{ background: #ff6b6b; }}
+            QToolTip {{
+                background-color: {Colors.BG_ELEVATED};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-size: 11px;
+            }}
+        """)
+        QTimer.singleShot(self._DELETE_ARM_MS, self._disarm_delete_if_stale)
+
+    def _disarm_delete_if_stale(self):
+        # Um segundo clique real já desarma+emite em _on_delete_clicked
+        # antes desse timeout disparar — só reverte se ainda estiver armado.
+        if self._delete_armed:
+            self._disarm_delete()
+
+    def _disarm_delete(self):
+        self._delete_armed = False
+        self._delete_btn.setText("✕")
+        self._delete_btn.setToolTip("Excluir")
+        self._delete_btn.setFixedSize(18, 18)
+        self._delete_btn.setStyleSheet(self._DELETE_BTN_DEFAULT_STYLE)
+
+    def _set_thumb_image(self, path: str):
+        pixmap = QPixmap(path) if path else QPixmap()
+        if pixmap.isNull():
+            self._thumb.setText(self._fallback_icon)
+            self._thumb.setStyleSheet(
+                f"background: rgba(255,255,255,0.05); border: 1px solid {Colors.BORDER_SUBTLE}; "
+                f"border-radius: 8px; font-size: 18px;"
+            )
+        else:
+            self._thumb.setText("")
+            self._thumb.setPixmap(pixmap.scaled(
+                38, 38, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation))
+            self._thumb.setStyleSheet(f"border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px;")
+
+    def record_id(self) -> str:
+        return self._id
+
+    def set_selected(self, selected: bool):
+        self._selected = selected
+        self._refresh_style()
+
+    def _refresh_style(self, drop: bool = False):
+        if drop:
+            border, bg = Colors.ACCENT, "rgba(79,195,247,0.15)"
+        elif self._selected:
+            border, bg = Colors.ACCENT, "rgba(79,195,247,0.12)"
+        else:
+            border, bg = Colors.BORDER_SUBTLE, "rgba(255,255,255,0.03)"
+        self.setStyleSheet(
+            f"QFrame {{ background: {bg}; border: 1px solid {border}; border-radius: 8px; }}"
+            f"QFrame:hover {{ border-color: {Colors.ACCENT}; }}"
+            f"QLabel {{ background: transparent; border: none; }}"
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._id)
+        super().mousePressEvent(event)
+
+    # ── drag & drop ──
+
+    def _accepted_path(self, mime) -> str | None:
+        if not mime.hasUrls():
+            return None
+        for url in mime.urls():
+            path = url.toLocalFile()
+            if path and path.lower().endswith(_IMAGE_EXTS):
+                return path
+        return None
+
+    def dragEnterEvent(self, event):
+        if self._accepted_path(event.mimeData()):
+            self._refresh_style(drop=True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._refresh_style()
+
+    def dropEvent(self, event):
+        path = self._accepted_path(event.mimeData())
+        self._refresh_style()
+        if not path:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self._set_thumb_image(path)
+        self.image_dropped.emit(self._id, path)
+
+
+class RecordListColumn(QFrame):
+    """Lista de cards com busca e filtros — criar um novo registro é feito
+    pelo botão "+ Nova Entrada" no cabeçalho da coluna (ver panel.py), não
+    por um card dentro da lista."""
+
+    selected = Signal(str)
+    image_dropped = Signal(str, str)  # record id, caminho local
+    delete_requested = Signal(str)
+
+    def __init__(
+        self,
+        title: str,
+        search_hint: str,
+        filters: list[tuple[str, list[str], str]] | None = None,
+        parent=None,
+    ):
+        """`filters` é [(placeholder, opções, chave do registro), ...] — os
+        combos ficam abaixo da busca e filtram por igualdade naquela chave.
+        A primeira opção de cada combo é o "todos" e nunca filtra."""
+        super().__init__(parent)
+        self.setObjectName("subpanel")
+        self.setStyleSheet(panel_frame_style() + _INPUT_STYLE)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumWidth(210)
+
+        self._records: list[dict] = []
+        self._cards: list[_RecordCard] = []
+        self._selected_id = ""
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.setSpacing(7)
+        outer.addWidget(sub_header(title))
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText(f"🔍  {search_hint}")
+        self._search.setFixedHeight(26)
+        self._search.textChanged.connect(self._rebuild)
+        outer.addWidget(self._search)
+
+        self._filters: list[tuple[QComboBox, str]] = []
+        if filters:
+            frow = QHBoxLayout()
+            frow.setSpacing(6)
+            for placeholder, options, key in filters:
+                combo = QComboBox()
+                combo.addItem(placeholder)
+                combo.addItems(options)
+                combo.setFixedHeight(26)
+                _no_wheel(combo)
+                combo.currentIndexChanged.connect(self._rebuild)
+                combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                frow.addWidget(combo, 1)
+                self._filters.append((combo, key))
+            outer.addLayout(frow)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+            f"QScrollBar:vertical {{ width: 5px; background: transparent; }}"
+            f"QScrollBar::handle:vertical {{ background: {Colors.TEXT_MUTED}; border-radius: 2px; min-height: 20px; }}"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+        )
+        holder = QWidget()
+        holder.setStyleSheet("background: transparent;")
+        self._list = QVBoxLayout(holder)
+        self._list.setContentsMargins(0, 0, 4, 0)
+        self._list.setSpacing(6)
+        scroll.setWidget(holder)
+        outer.addWidget(scroll, 1)
+
+        self._empty = QLabel("Nenhum registro corresponde à busca.")
+        self._empty.setWordWrap(True)
+        self._empty.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
+
+    # ── API pública ──
+
+    def set_records(self, records: list[dict]):
+        self._records = records
+        self._rebuild()
+
+    def select(self, record_id: str):
+        self._selected_id = record_id or ""
+        for card in self._cards:
+            card.set_selected(card.record_id() == self._selected_id)
+
+    def current_id(self) -> str:
+        return self._selected_id
+
+    # ── interno ──
+
+    def _matches(self, record: dict) -> bool:
+        query = self._search.text().strip().lower()
+        if query:
+            haystack = f"{record.get('name', '')} {record.get('subtitle', '')} {record.get('code', '')}".lower()
+            if query not in haystack:
+                return False
+        for combo, key in self._filters:
+            if combo.currentIndex() > 0 and (record.get(key) or "") != combo.currentText():
+                return False
+        return True
+
+    def _rebuild(self):
+        while self._list.count():
+            item = self._list.takeAt(0)
+            widget = item.widget()
+            if widget is self._empty:
+                # Reaproveitado a cada rebuild — só desanexar, não destruir.
+                widget.setParent(None)
+            elif widget is not None:
+                widget.deleteLater()
+
+        self._cards = []
+        visible = [r for r in self._records if self._matches(r)]
+        for record in visible:
+            card = _RecordCard(record)
+            card.clicked.connect(self._on_card_clicked)
+            card.image_dropped.connect(self.image_dropped.emit)
+            card.delete_requested.connect(self.delete_requested.emit)
+            card.set_selected(card.record_id() == self._selected_id)
+            self._list.addWidget(card)
+            self._cards.append(card)
+
+        if not visible:
+            self._list.addWidget(self._empty)
+            self._empty.show()
+        # Sem o stretch final o QVBoxLayout estica os cards para ocupar a
+        # sobra de altura em vez de deixá-la em branco.
+        self._list.addStretch()
+
+    def _on_card_clicked(self, record_id: str):
+        self.select(record_id)
+        self.selected.emit(record_id)

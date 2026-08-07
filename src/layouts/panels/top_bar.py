@@ -268,12 +268,12 @@ class TopBar(QFrame):
         modules = [
             ("☰", "Projetos", "Projetos", False),
             ("🗺", "Mapa", "Mapa", False),
-            ("📖", "Lore", "Lore", False),
             ("🧙", "NPCs", "NPCs", False),
             ("👹", "Mobs", "Mobs", False),
             ("⚔", "Itens", "Itens e Habilidades", True),
             ("🏰", "Dungeons", "Dungeons e Construções", True),
             ("📜", "Quests", "Quests", False),
+            ("📖", "Lore", "Lore", False),
             ("⚙", "Config", "Config", False),
             ("📋", "Logs", "Logs", False),
         ]

@@ -271,10 +271,7 @@ class StatusBar(QFrame):
         main_layout.addWidget(bar)
 
         # FPS timer
-        self._fps_timer = QTimer(self)
-        self._fps_timer.timeout.connect(self._update_fps)
-        self._fps_timer.start(1000)
-        self._frame_count = 0
+        self._fps_samples: list[float] = []
 
     def _sep(self):
         s = QFrame()
@@ -282,8 +279,19 @@ class StatusBar(QFrame):
         s.setStyleSheet(f"background: {Colors.BORDER_SUBTLE}; border: none;")
         return s
 
+    def update_fps(self, fps: float):
+        self._fps_samples.append(fps)
+        if len(self._fps_samples) > 60:
+            self._fps_samples.pop(0)
+        avg = sum(self._fps_samples) / len(self._fps_samples)
+        color = Colors.SUCCESS if avg >= 50 else Colors.WARNING if avg >= 30 else Colors.ERROR
+        self.fps_label.setStyleSheet(f"""
+            color: {color}; font-size: {Typography.SIZE_XXS}px;
+            font-weight: {Typography.WEIGHT_BOLD}; background: transparent; border: none;
+        """)
+        self.fps_label.setText(f"{avg:.0f} FPS")
+
     def _update_fps(self):
-        # Placeholder — real FPS would come from canvas render loop
         pass
 
     def update_stats(self, **kwargs):

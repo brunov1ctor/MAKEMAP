@@ -1,5 +1,3 @@
-"""FASE 23 — Map Export Engine."""
-
 from __future__ import annotations
 
 import uuid

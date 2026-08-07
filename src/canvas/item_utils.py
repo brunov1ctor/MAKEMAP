@@ -30,16 +30,21 @@ def enable_hover_glow(item: QGraphicsItem, on_hover_changed: Callable[[bool], No
 
     item.hoverEnterEvent = hover_enter
     item.hoverLeaveEvent = hover_leave
+    # Same glow, triggered programmatically instead of by a real mouse
+    # hover — used by ExplorerSyncMediator so hovering a card in the
+    # Explorer panel highlights the item on canvas the same way mousing
+    # over it directly would.
+    item.set_explorer_highlight = on_hover_changed
 
 
 def suppress_selection_decoration(item: QGraphicsItem):
     """Disable Qt's built-in dashed selection rectangle on this item.
 
-    The app has its own selection UI (TransformEngine's resize/rotate handles,
-    SelectionHighlight's mask contour for terrain) — Qt's default "marching
-    ants" rectangle around the item's full bounding box is redundant on top
-    of those and, for terrain layers especially, misleading (their bounding
-    box is the whole raster canvas, not the painted area).
+    The app has its own selection UI (TransformEngine's resize/rotate
+    handles) — Qt's default "marching ants" rectangle around the item's
+    full bounding box is redundant on top of that and, for terrain layers
+    especially, misleading (their bounding box is the whole raster canvas,
+    not the painted area).
     """
     original_paint = item.paint
 

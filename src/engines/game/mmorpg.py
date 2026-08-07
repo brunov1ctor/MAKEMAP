@@ -1,5 +1,3 @@
-"""FASE 20 — MMORPG Engine."""
-
 from __future__ import annotations
 
 import uuid

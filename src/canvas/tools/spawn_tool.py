@@ -165,7 +165,7 @@ class SpawnTool(BaseTool):
         item = QGraphicsPixmapItem(pixmap)
         item.setOffset(-pixmap.width() / 2, -pixmap.height() / 2)
         item.setPos(scene_pos)
-        item.setZValue(10)
+        item.setZValue(0.5)
         # compose_group_portrait draws the front token at only ~60% of the
         # canvas (room for the dimmed fan behind it — see _LAYOUTS), so a
         # big transparent margin surrounds the visible circle. The default

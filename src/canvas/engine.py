@@ -11,8 +11,10 @@ from src.canvas.grid import GridManager
 from src.canvas.snap import SnapManager
 from src.canvas.pan_controller import KeyboardPanController, PAN_KEYS
 from src.canvas.tools.base import ToolManager
-from src.canvas.tools.defaults import SelectTool, PanTool
+from src.canvas.tools.defaults import PanTool
+from src.canvas.tools.select import SelectTool
 from src.canvas.tools.brush_tool import BrushTool, RegionTool, RoadTool, RiverTool, RegionBrushTool
+from src.canvas.tools.path_tool import RiverPathTool, RoadPathTool
 from src.canvas.tools.text_tool import TextTool
 from src.canvas.text_item import TextItem
 from src.canvas.tools.spawn_tool import SpawnTool
@@ -25,8 +27,7 @@ from src.canvas.map_boundary import MovableBoundaryItem
 from src.engines.map.brush import BrushEngine
 from src.canvas.input_manager import InputManager
 from src.engines.core.selection import SelectionEngine
-from src.engines.core.transform import TransformEngine
-from src.canvas.selection_highlight import SelectionHighlight
+from src.engines.core.transform import TransformEngine, HandleType
 from src.engines.core.clipboard import ClipboardEngine
 from src.engines.core.history import HistoryEngine
 from src.engines.procedural import ProceduralEngine, GeneratorParams, GeneratorType
@@ -71,7 +72,6 @@ class CanvasEngine(QWidget):
 
         # Transform Engine
         self.transform = TransformEngine(self.viewport.scene(), self)
-        self.selection_highlight = SelectionHighlight(self.viewport.scene())
         self.selection.selection_changed.connect(self._on_selection_changed)
         # A TextItem finishing its inline edit doesn't change Qt's own
         # selection state (it was already selected the whole time), so
@@ -115,12 +115,22 @@ class CanvasEngine(QWidget):
         self._brush_tool.set_snap_manager(self.snap)
         self.sound_engine.start()
 
+        # Debounce timer for sound context — view_changed fires on every
+        # pan/zoom pixel; scanning all visible items that frequently is
+        # wasteful. 500ms after the last movement is enough for ambient
+        # sound to feel responsive without burning CPU mid-drag.
+        from PySide6.QtCore import QTimer
+        self._sound_update_timer = QTimer(self)
+        self._sound_update_timer.setSingleShot(True)
+        self._sound_update_timer.setInterval(500)
+        self._sound_update_timer.timeout.connect(self._update_sound_context)
+
         # Connect signals
         self.viewport.zoom_changed.connect(lambda z: self.zoom_changed.emit(int(z * 100)))
         self.viewport.zoom_changed.connect(lambda z: self.sound_engine.on_zoom_changed(int(z * 100)))
         self.viewport.cursor_moved.connect(self.cursor_moved.emit)
         self.viewport.view_changed.connect(self._on_view_changed)
-        self.viewport.view_changed.connect(self._update_sound_context)
+        self.viewport.view_changed.connect(self._sound_update_timer.start)
         # Pan (PanTool drag, space/middle-drag, keyboard pan) all move the
         # scrollbars directly instead of going through view_changed — hook
         # the scrollbars themselves so the grid/measurement overlay keeps
@@ -133,6 +143,7 @@ class CanvasEngine(QWidget):
         self.viewport.mousePressEvent = self._on_mouse_press
         self.viewport.mouseMoveEvent = self._on_mouse_move
         self.viewport.mouseReleaseEvent = self._on_mouse_release
+        self.viewport.mouseDoubleClickEvent = self._on_mouse_double_click
         self.viewport.keyPressEvent = self._on_key_press
         self.viewport.keyReleaseEvent = self._on_key_release
 
@@ -147,8 +158,50 @@ class CanvasEngine(QWidget):
         self._pan = KeyboardPanController(self.viewport, self)
         self._pan.panned.connect(self._on_pan_delta)
 
+        # Stop pan when the viewport loses focus (e.g. user clicks a panel)
+        # so WASD keys don't stay "stuck" after focus leaves the canvas.
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import QObject, QEvent
+
+        class _PanKeyGuard(QObject):
+            """App-wide filter: forwards pan keys (WASD/arrows) to the canvas
+            viewport regardless of which widget currently has focus — so
+            clicking a button in any panel never blocks map panning."""
+            def __init__(self, pan_ctrl, vp, engine, parent=None):
+                super().__init__(parent)
+                self._pan = pan_ctrl
+                self._vp = vp
+                self._engine = engine
+            def eventFilter(self, obj, event):
+                from src.canvas.pan_controller import PAN_KEYS
+                is_vp = obj is self._vp or obj is self._vp.viewport()
+                if not is_vp:
+                    if (event.type() == QEvent.Type.KeyPress
+                            and not event.isAutoRepeat()
+                            and event.key() in PAN_KEYS):
+                        self._engine._on_key_press(event)
+                        return True
+                    if (event.type() == QEvent.Type.KeyRelease
+                            and not event.isAutoRepeat()
+                            and event.key() in PAN_KEYS
+                            and self._pan.active):
+                        self._pan.key_released(event.key())
+                return False
+
+        self._pan_key_guard = _PanKeyGuard(self._pan, self.viewport, self, self)
+        QApplication.instance().installEventFilter(self._pan_key_guard)
+
         # ─── Map bounds (None = infinite) ───
         self._map_bounds: dict | None = None  # {width, height, shape}
+
+        # Grid rebuild cache — see _update_grid(). Panning/zooming fires
+        # view_changed (and the scrollbar valueChanged hooks) up to 60x/sec,
+        # and a naive rebuild tears down and recreates every grid line/label
+        # QGraphicsItem each time, which is what made WASD/mouse panning
+        # feel laggy even on an otherwise empty map.
+        self._grid_cache_rect = None  # QRectF, in scene coords, padded beyond the viewport
+        self._grid_cache_zoom: float | None = None
+        self._grid_cache_bounded: bool | None = None
 
     def _register_default_tools(self):
         self.tool_manager.register(
@@ -172,9 +225,16 @@ class CanvasEngine(QWidget):
         self._region_tool.on_region_finalized(self._on_region_finalized)
         self.tool_manager.register(self._region_tool)
 
-        # Map tools
+        # Map tools (legacy click-polygon)
         self.tool_manager.register(RoadTool(self.viewport))
         self.tool_manager.register(RiverTool(self.viewport))
+
+        # Animated path tools — activated automatically when a road/water
+        # asset is selected in the Brush panel (see BrushMediator.on_asset_selected)
+        self._river_path_tool = RiverPathTool(self.viewport, tool_manager=self.tool_manager)
+        self._road_path_tool = RoadPathTool(self.viewport, tool_manager=self.tool_manager)
+        self.tool_manager.register(self._river_path_tool)
+        self.tool_manager.register(self._road_path_tool)
 
         # Região panel's paint brush (distinct from RegionTool's click-polygon,
         # used by the toolbar's Bioma/Estrada/Rio dropdown) — deliberately
@@ -213,6 +273,14 @@ class CanvasEngine(QWidget):
         """Injeta o AssetEngine após o projeto ser carregado."""
         self._asset_engine = asset_engine
         self._brush_tool.set_asset_engine(asset_engine)
+
+    @property
+    def asset_engine(self):
+        """Public read accessor for the AssetEngine injected via
+        set_asset_engine — for callers (e.g. ExplorerSyncMediator) that
+        just need name/thumbnail lookups by asset_id, without reaching
+        into the private `_asset_engine` attribute from outside."""
+        return self._asset_engine
 
     def set_region_preset(self, preset_key: str):
         """Biome preset (see engines/map/presets.py) to populate the next
@@ -253,6 +321,13 @@ class CanvasEngine(QWidget):
         """Effect-layer counterpart to get_or_create_terrain_layer() —
         used by BrushMediator to reload a persisted effect stroke."""
         return self._brush_tool._get_or_create_effect_layer(asset_id)
+
+    def refresh_shoreline_blend(self):
+        """Re-runs the terrain-water/land foam pass immediately — used by
+        AssetEffectsMediator when the "🌊 Maresia" toggle changes, so an
+        already-painted shoreline's foam overlay updates (or clears) right
+        away instead of only on that water asset's next brush stroke."""
+        self._brush_tool._apply_shoreline_blend()
 
     def clear_terrain_layers(self):
         """Removes every brush-painted terrain AND effect layer from the
@@ -362,6 +437,9 @@ class CanvasEngine(QWidget):
             item = QGraphicsPixmapItem(pixmap)
             item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
             item.setTransformOriginPoint(pixmap.width() / 2, pixmap.height() / 2)
+            # See place_stamp_item's own setShapeMode for why — default
+            # MaskShape misses clicks on a sprite's transparent padding.
+            item.setShapeMode(QGraphicsPixmapItem.ShapeMode.BoundingRectShape)
             item.setPos(
                 gen_item.position.x() - pixmap.width() / 2,
                 gen_item.position.y() - pixmap.height() / 2,
@@ -369,7 +447,7 @@ class CanvasEngine(QWidget):
             item.setScale(gen_item.scale)
             item.setRotation(gen_item.rotation)
             item.setOpacity(gen_item.opacity)
-            item.setZValue(10 + gen_item.z_offset)
+            item.setZValue(0.5 + gen_item.z_offset)
             item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
             item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
             item.setData(0, {"item_type": "asset"})
@@ -379,31 +457,28 @@ class CanvasEngine(QWidget):
     def _on_selection_changed(self, ids: list):
         """Show/hide transform handles based on selection.
 
-        Terrain layer items span their entire raster canvas, not just the
-        painted area, so a bounding-box rectangle around one is misleading —
-        those get a mask-contour perimeter highlight instead of move/resize
-        handles. A TextItem mid inline-edit is also excluded — its own
-        dashed edit-highlight is enough while typing, and a resize/rotate
-        handle frame doesn't make sense until editing commits (see
-        text_committed's connection below, which re-runs this once it does).
+        Terrain/effect layer items get the handle box too — its bounds
+        come from selection_bounding_rect() (see _LayerItem in
+        terrain_layer.py and TransformEngine._item_bounds), which is
+        already scoped to just the clicked/box-selected blob, not the
+        item's full raster canvas (which can be 4096x4096 even for a tiny
+        painted patch) — so the box correctly hugs only the selected
+        paint, same as any other object. A TextItem mid inline-edit is
+        still excluded — its own dashed edit-highlight is enough while
+        typing, and a resize/rotate handle frame doesn't make sense until
+        editing commits (see text_committed's connection below, which
+        re-runs this once it does).
         """
         selected = self.viewport.scene().selectedItems()
-        terrain_by_item = {layer.item: layer for layer in self._brush_tool._terrain_layers.values()}
-        terrain_selected = [terrain_by_item[it] for it in selected if it in terrain_by_item]
         other_selected = [
             it for it in selected
-            if it not in terrain_by_item and not (isinstance(it, TextItem) and it.is_editing())
+            if not (isinstance(it, TextItem) and it.is_editing())
         ]
 
         if other_selected:
             self.transform.show_handles(other_selected)
         else:
             self.transform.hide_handles()
-
-        if terrain_selected:
-            self.selection_highlight.show(terrain_selected)
-        else:
-            self.selection_highlight.hide()
 
     def _register_global_shortcuts(self):
         self.input_manager.register_global("G", self._toggle_grid)
@@ -412,16 +487,39 @@ class CanvasEngine(QWidget):
     def _toggle_grid(self):
         self.grid.toggle()
         if self.grid.visible:
-            self._update_grid()
+            # Rebuilds may have been skipped entirely while hidden (view
+            # never updates a grid nobody can see), so the cached lines can
+            # be stale for the current viewport — force a fresh build.
+            self._update_grid(force=True)
         self.grid_toggled.emit(self.grid.visible)
 
     def _on_view_changed(self):
         if self.grid.visible or self.grid.show_measurements:
             self._update_grid()
 
-    def _update_grid(self):
+    def _update_grid(self, force: bool = False):
         full_view_rect = self.viewport.mapToScene(self.viewport.viewport().rect()).boundingRect()
-        view_rect = full_view_rect
+        zoom = self.viewport.zoom_level
+        bounded = self._map_bounds is not None
+
+        # Skip the (expensive) rebuild while the current viewport is still
+        # fully covered by the last padded build — panning within that
+        # margin needs no new lines, only pans that cross it do. Zoom or
+        # bounds toggling always forces a fresh build since line spacing /
+        # clipping depend on them.
+        if (
+            not force
+            and self._grid_cache_rect is not None
+            and self._grid_cache_zoom == zoom
+            and self._grid_cache_bounded == bounded
+            and self._grid_cache_rect.contains(full_view_rect)
+        ):
+            return
+
+        margin_x = full_view_rect.width() * 0.5
+        margin_y = full_view_rect.height() * 0.5
+        padded_rect = full_view_rect.adjusted(-margin_x, -margin_y, margin_x, margin_y)
+        view_rect = padded_rect
         clip_path = None
         # Clip grid to map bounds if set — bounded terrains' grid should
         # conform to their exact boundary shape(s), not just a rectangle.
@@ -454,7 +552,10 @@ class CanvasEngine(QWidget):
                 bounds = QRectF(-hw, -hh, self._map_bounds["width"], self._map_bounds["height"])
             view_rect = view_rect.intersected(bounds)
 
-        self.grid.update(view_rect, self.viewport.zoom_level, clip_path, full_view_rect)
+        self.grid.update(view_rect, zoom, clip_path, full_view_rect)
+        self._grid_cache_rect = padded_rect
+        self._grid_cache_zoom = zoom
+        self._grid_cache_bounded = bounded
 
     # --- Event routing ---
 
@@ -465,6 +566,7 @@ class CanvasEngine(QWidget):
             self.viewport._panning = True
             self.viewport._pan_start = event.position()
             self.viewport.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.viewport.begin_interactive_pan()
             return
 
         # Let boundary items handle their own press
@@ -475,6 +577,29 @@ class CanvasEngine(QWidget):
             from PySide6.QtWidgets import QGraphicsView
             QGraphicsView.mousePressEvent(self.viewport, event)
             return
+
+        # The delete/duplicate action buttons drawn by TransformEngine on a
+        # selected item are only hit-tested by ItemInteraction, which lives
+        # inside SelectTool — so a click on those buttons while some other
+        # tool (e.g. RoadPathTool, still active after finalizing a road so
+        # the user can keep tracing) is active, the click never reaches
+        # them and instead falls through to that tool's own click handling.
+        # Check
+        # globally here first, same as the Delete/Backspace key shortcut
+        # below in _on_key_press, so the buttons work no matter which tool
+        # is active.
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self.transform.handle_at(scene_pos)
+            if handle in (HandleType.DELETE_ACTION, HandleType.DUPLICATE_ACTION):
+                selected = self.viewport.scene().selectedItems()
+                if handle == HandleType.DELETE_ACTION:
+                    from src.canvas.tools.interaction import delete_items
+                    delete_items(self.viewport.scene(), selected, self.transform, self.selection, self.history)
+                else:
+                    from src.canvas.tools.interaction import ItemInteraction
+                    ItemInteraction(self.viewport, self.selection, self.transform, self.history)._duplicate_selected(selected)
+                event.accept()
+                return
 
         self.tool_manager.mouse_press(event, scene_pos)
 
@@ -542,10 +667,16 @@ class CanvasEngine(QWidget):
 
         self.tool_manager.mouse_move(event, scene_pos)
 
+    def _on_mouse_double_click(self, event: QMouseEvent):
+        scene_pos = self.viewport.mapToScene(int(event.position().x()), int(event.position().y()))
+        self.tool_manager.mouse_double_click(event, scene_pos)
+
     def _on_mouse_release(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.MiddleButton or (
             self.viewport._panning and not self.viewport._space_held
         ):
+            if self.viewport._panning:
+                self.viewport.end_interactive_pan()
             self.viewport._panning = False
             self.viewport.setCursor(Qt.CursorShape.ArrowCursor)
             return
@@ -610,6 +741,17 @@ class CanvasEngine(QWidget):
         # Snap toggle (Shift+S, since S alone is pan)
         if event.key() == Qt.Key.Key_S and event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             self.snap.toggle()
+            return
+
+        # Delete/Backspace — same trash action as the selection's own
+        # delete handle, fired globally so it works no matter which tool is
+        # active (fires here, not per-tool, since key events don't route
+        # through a tool's ItemInteraction the way mouse events do).
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            selected = self.viewport.scene().selectedItems()
+            if selected:
+                from src.canvas.tools.interaction import delete_items
+                delete_items(self.viewport.scene(), selected, self.transform, self.selection, self.history)
             return
 
         self.input_manager.handle_key_press(event)

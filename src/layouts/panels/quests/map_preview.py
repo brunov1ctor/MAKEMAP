@@ -52,14 +52,24 @@ class QuestMapPreview(QGraphicsView):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if self._attach_scene():
+        # Only auto-fit when the scene we're pointed at actually changed
+        # (first attach, or a different project's map) — not on every
+        # re-show. FlowTab.load() already framed this quest's own linked
+        # points via frame_all()/fit_all() right after loading; switching
+        # away to another content tab and back (a plain QStackedWidget
+        # show/hide, same scene throughout) used to re-run fit_all() here
+        # and blow that framing back out to the whole world every time.
+        if self._attach_scene(only_if_changed=True):
             self.fit_all()
 
-    def _attach_scene(self) -> bool:
+    def _attach_scene(self, only_if_changed: bool = False) -> bool:
         scene = self._scene_provider()
-        if scene is not self._attached_scene:
+        changed = scene is not self._attached_scene
+        if changed:
             self.setScene(scene)
             self._attached_scene = scene
+        if only_if_changed:
+            return changed and scene is not None
         return scene is not None
 
     @staticmethod

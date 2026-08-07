@@ -1,18 +1,15 @@
-"""FASE 17 — River Engine."""
-
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from statistics import mean
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QRectF
-from PySide6.QtGui import (QColor, QPainter, QPainterPath, QPen, QBrush,
-                            QLinearGradient, QRadialGradient, Qt)
+from PySide6.QtCore import QPointF
+from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, Qt
 
+from src.engines.map.path_engine import PathElement, PathEngine, PathPoint
 
-# ─── Enums ───────────────────────────────────────────────────────────────────
 
 class WaterType(Enum):
     RIVER = auto()
@@ -23,25 +20,20 @@ class WaterType(Enum):
 
 
 class ConnectionType(Enum):
-    SOURCE = auto()       # Nascente
-    MOUTH = auto()        # Foz
-    CONFLUENCE = auto()   # Rios que se juntam
-    DELTA = auto()        # Rio que se divide
+    SOURCE = auto()
+    MOUTH = auto()
+    CONFLUENCE = auto()
+    DELTA = auto()
     LAKE_IN = auto()
     LAKE_OUT = auto()
 
 
-# ─── Data Classes ────────────────────────────────────────────────────────────
-
 @dataclass
-class RiverPoint:
-    position: QPointF
-    control_in: Optional[QPointF] = None
-    control_out: Optional[QPointF] = None
+class RiverPoint(PathPoint):
     width: float = 20.0
-    depth: float = 1.0        # 0-1, affects color darkness
-    foam: float = 0.0         # 0-1, foam intensity at this point
-    flow_speed: float = 1.0   # relative speed
+    depth: float = 1.0   # 0–1
+    foam: float = 0.0    # 0–1
+    flow_speed: float = 1.0
 
 
 @dataclass
@@ -59,83 +51,25 @@ class RiverStyle:
 @dataclass
 class WaterConnection:
     river_id: str
-    point_idx: int  # which point connects
+    point_idx: int
     connection_type: ConnectionType
-    target_id: Optional[str] = None  # connected river/lake id
+    target_id: Optional[str] = None
 
 
 @dataclass
-class River:
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    name: str = ""
+class River(PathElement):
     water_type: WaterType = WaterType.RIVER
-    points: list[RiverPoint] = field(default_factory=list)
     style: RiverStyle = field(default_factory=RiverStyle)
     connections: list[WaterConnection] = field(default_factory=list)
-    closed: bool = False  # True for lakes
-    layer_id: Optional[str] = None
 
-    def bounding_rect(self) -> QRectF:
-        if not self.points:
-            return QRectF()
-        max_w = max(p.width for p in self.points)
-        xs = [p.position.x() for p in self.points]
-        ys = [p.position.y() for p in self.points]
-        return QRectF(min(xs) - max_w, min(ys) - max_w,
-                      max(xs) - min(xs) + max_w * 2,
-                      max(ys) - min(ys) + max_w * 2)
-
-    def to_center_path(self) -> QPainterPath:
-        path = QPainterPath()
-        if len(self.points) < 2:
-            return path
-        path.moveTo(self.points[0].position)
-        for i in range(1, len(self.points)):
-            prev = self.points[i - 1]
-            curr = self.points[i]
-            if prev.control_out and curr.control_in:
-                path.cubicTo(prev.control_out, curr.control_in, curr.position)
-            elif prev.control_out:
-                path.quadTo(prev.control_out, curr.position)
-            elif curr.control_in:
-                path.quadTo(curr.control_in, curr.position)
-            else:
-                path.lineTo(curr.position)
-        if self.closed and len(self.points) > 2:
-            path.lineTo(self.points[0].position)
-            path.closeSubpath()
-        return path
-
-    def hit_test(self, point: QPointF) -> bool:
-        if not self.points:
-            return False
-        path = self.to_center_path()
-        max_w = max(p.width for p in self.points) / 2 + 4
-        if not self.bounding_rect().adjusted(-max_w, -max_w, max_w, max_w).contains(point):
-            return False
-        for t in range(0, 101, 4):
-            pt = path.pointAtPercent(t / 100.0)
-            if (pt - point).manhattanLength() < max_w:
-                return True
-        return False
-
-    def find_point(self, pos: QPointF, tolerance: float = 10.0) -> int:
-        for i, p in enumerate(self.points):
-            if (p.position - pos).manhattanLength() < tolerance:
-                return i
-        return -1
+    def hit_test(self, point: QPointF, tolerance: float = None) -> bool:
+        # rivers sample the path more densely (step 4 vs the base's 5)
+        return super().hit_test(point, tolerance=tolerance, sample_step=4)
 
 
-# ─── River Engine ────────────────────────────────────────────────────────────
-
-class RiverEngine:
+class RiverEngine(PathEngine[River]):
     def __init__(self):
-        self._rivers: dict[str, River] = {}
-        self._active_river: Optional[River] = None
-        self._snap_enabled: bool = True
-        self._snap_threshold: float = 15.0
-
-    # ─── Creation ────────────────────────────────────────────────────────
+        super().__init__(default_snap_threshold=15.0)
 
     def begin_river(self, point: QPointF, width: float = 20.0,
                     water_type: WaterType = WaterType.RIVER,
@@ -145,123 +79,101 @@ class RiverEngine:
             points=[RiverPoint(position=self._snap(point), width=width)],
             style=style or RiverStyle(),
         )
-        self._active_river = river
+        self._active = river
         return river
 
     def add_point(self, point: QPointF, width: float = None,
                   depth: float = 1.0, foam: float = 0.0,
                   control_in: QPointF = None, control_out: QPointF = None):
-        if not self._active_river:
+        if not self._active:
             return
-        prev = self._active_river.points[-1]
+        prev = self._active.points[-1]
         w = width if width is not None else prev.width
-        self._active_river.points.append(RiverPoint(
+        self._active.points.append(RiverPoint(
             position=self._snap(point), width=w, depth=depth,
             foam=foam, control_in=control_in, control_out=control_out,
         ))
 
     def finish_river(self) -> Optional[River]:
-        river = self._active_river
+        river = self._active
         if river and len(river.points) >= 2:
-            self._rivers[river.id] = river
-        self._active_river = None
+            self._add(river)
+        self._active = None
         return river
 
     def cancel_river(self):
-        self._active_river = None
-
-    # ─── CRUD ────────────────────────────────────────────────────────────
+        self._active = None
 
     def add_river(self, river: River):
-        self._rivers[river.id] = river
+        self._add(river)
 
     def remove_river(self, river_id: str) -> Optional[River]:
-        return self._rivers.pop(river_id, None)
+        return self._remove(river_id)
 
     def get_river(self, river_id: str) -> Optional[River]:
-        return self._rivers.get(river_id)
+        return self._get(river_id)
 
     def get_all_rivers(self) -> list[River]:
-        return list(self._rivers.values())
+        return self._get_all()
 
     def find_river_at(self, point: QPointF) -> Optional[River]:
-        for river in reversed(list(self._rivers.values())):
-            if river.hit_test(point):
-                return river
-        return None
+        return self._find_at(point)
 
-    # ─── Point Editing ───────────────────────────────────────────────────
-
-    def move_point(self, river_id: str, idx: int, new_pos: QPointF):
-        river = self._rivers.get(river_id)
-        if river and 0 <= idx < len(river.points):
-            river.points[idx].position = self._snap(new_pos)
+    def set_point_attr(self, river_id: str, idx: int, attr: str, value: float,
+                        lo: float = 0.0, hi: float = 1.0):
+        super().set_point_attr(river_id, idx, attr, value, lo=lo, hi=hi)
 
     def set_point_width(self, river_id: str, idx: int, width: float):
-        river = self._rivers.get(river_id)
-        if river and 0 <= idx < len(river.points):
-            river.points[idx].width = max(2.0, width)
+        self.set_point_attr(river_id, idx, "width", width, lo=2.0, hi=float("inf"))
 
     def set_point_depth(self, river_id: str, idx: int, depth: float):
-        river = self._rivers.get(river_id)
-        if river and 0 <= idx < len(river.points):
-            river.points[idx].depth = max(0.0, min(1.0, depth))
+        self.set_point_attr(river_id, idx, "depth", depth)
 
     def set_point_foam(self, river_id: str, idx: int, foam: float):
-        river = self._rivers.get(river_id)
-        if river and 0 <= idx < len(river.points):
-            river.points[idx].foam = max(0.0, min(1.0, foam))
+        self.set_point_attr(river_id, idx, "foam", foam)
 
     def insert_point(self, river_id: str, after_idx: int, position: QPointF):
-        river = self._rivers.get(river_id)
+        river = self._items.get(river_id)
         if river and 0 <= after_idx < len(river.points):
             prev = river.points[after_idx]
             river.points.insert(after_idx + 1, RiverPoint(
                 position=self._snap(position), width=prev.width, depth=prev.depth))
 
-    def remove_point(self, river_id: str, idx: int):
-        river = self._rivers.get(river_id)
-        if river and len(river.points) > 2 and 0 <= idx < len(river.points):
-            river.points.pop(idx)
-
-    # ─── Connections ─────────────────────────────────────────────────────
-
     def connect_rivers(self, river_id: str, point_idx: int,
                        target_id: str, conn_type: ConnectionType):
-        river = self._rivers.get(river_id)
+        river = self._items.get(river_id)
         if river:
             river.connections.append(WaterConnection(
                 river_id=river_id, point_idx=point_idx,
                 connection_type=conn_type, target_id=target_id,
             ))
 
+    def _find_incoming_connections(self, river_id: str) -> list[WaterConnection]:
+        return [
+            c
+            for other in self._items.values()
+            if other.id != river_id
+            for c in other.connections
+            if c.target_id == river_id
+        ]
+
     def find_connections(self, river_id: str) -> list[WaterConnection]:
-        river = self._rivers.get(river_id)
+        river = self._items.get(river_id)
         if not river:
             return []
-        conns = list(river.connections)
-        # Also find other rivers connecting to this one
-        for other in self._rivers.values():
-            if other.id == river_id:
-                continue
-            for c in other.connections:
-                if c.target_id == river_id:
-                    conns.append(c)
-        return conns
+        return list(river.connections) + self._find_incoming_connections(river_id)
 
-    def create_confluence(self, id_a: str, id_b: str, merge_point: QPointF) -> Optional[River]:
-        """Two rivers merge into one at merge_point."""
-        a = self._rivers.get(id_a)
-        b = self._rivers.get(id_b)
+    def create_confluence(self, id_a: str, id_b: str) -> bool:
+        a = self._items.get(id_a)
+        b = self._items.get(id_b)
         if not a or not b:
-            return None
+            return False
         self.connect_rivers(id_a, len(a.points) - 1, id_b, ConnectionType.CONFLUENCE)
         self.connect_rivers(id_b, len(b.points) - 1, id_a, ConnectionType.CONFLUENCE)
-        return a
+        return True
 
     def create_delta(self, river_id: str, at_idx: int) -> tuple[Optional[River], Optional[River]]:
-        """Split river into two branches at a point."""
-        river = self._rivers.get(river_id)
+        river = self._items.get(river_id)
         if not river or at_idx <= 0 or at_idx >= len(river.points) - 1:
             return (None, None)
         r1 = River(name=f"{river.name}_L", water_type=river.water_type,
@@ -273,12 +185,10 @@ class RiverEngine:
         r1.connections.append(WaterConnection(
             river_id=r1.id, point_idx=at_idx,
             connection_type=ConnectionType.DELTA, target_id=r2.id))
-        self._rivers.pop(river_id)
-        self._rivers[r1.id] = r1
-        self._rivers[r2.id] = r2
+        self._remove(river_id)
+        self._add(r1)
+        self._add(r2)
         return (r1, r2)
-
-    # ─── Rendering ───────────────────────────────────────────────────────
 
     def render_river(self, painter: QPainter, river: River):
         path = river.to_center_path()
@@ -286,40 +196,31 @@ class RiverEngine:
             return
         painter.save()
         painter.setOpacity(river.style.opacity)
-        avg_width = sum(p.width for p in river.points) / len(river.points)
+        avg_width = mean(p.width for p in river.points)
 
-        # Margin
+        # margem
         if river.style.margin_width > 0:
-            pen = QPen(river.style.margin_color, avg_width + river.style.margin_width * 2)
-            pen.setCapStyle(Qt.RoundCap)
-            pen.setJoinStyle(Qt.RoundJoin)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawPath(path)
+            self._stroke_path(painter, path, river.style.margin_color,
+                               avg_width + river.style.margin_width * 2)
 
-        # Main water body — gradient based on depth
-        avg_depth = sum(p.depth for p in river.points) / len(river.points)
+        # corpo d'água com cor baseada na profundidade
+        avg_depth = mean(p.depth for p in river.points)
         color = self._blend_color(river.style.color, river.style.deep_color, avg_depth)
-        pen = QPen(color, avg_width)
-        pen.setCapStyle(Qt.RoundCap)
-        pen.setJoinStyle(Qt.RoundJoin)
-        painter.setPen(pen)
-        painter.drawPath(path)
+        self._stroke_path(painter, path, color, avg_width)
 
-        # Foam at high-foam points
+        # espuma nos pontos com foam > 0.2
         for pt in river.points:
             if pt.foam > 0.2:
                 self._render_foam(painter, pt, river.style)
 
-        # Reflection highlight
+        # reflexo
         if river.style.reflection:
             self._render_reflection(painter, path, avg_width, river.style)
 
         painter.restore()
 
     def render_all(self, painter: QPainter):
-        for river in self._rivers.values():
-            self.render_river(painter, river)
+        super().render_all(painter, self.render_river)
 
     def _render_foam(self, painter: QPainter, pt: RiverPoint, style: RiverStyle):
         foam_color = QColor(style.foam_color)
@@ -340,34 +241,17 @@ class RiverEngine:
     @staticmethod
     def _blend_color(c1: QColor, c2: QColor, t: float) -> QColor:
         t = max(0.0, min(1.0, t))
-        return QColor(
-            int(c1.red() + (c2.red() - c1.red()) * t),
-            int(c1.green() + (c2.green() - c1.green()) * t),
-            int(c1.blue() + (c2.blue() - c1.blue()) * t),
-            int(c1.alpha() + (c2.alpha() - c1.alpha()) * t),
-        )
-
-    # ─── Snap ────────────────────────────────────────────────────────────
-
-    def set_snap(self, enabled: bool, threshold: float = 15.0):
-        self._snap_enabled = enabled
-        self._snap_threshold = threshold
-
-    def _snap(self, point: QPointF) -> QPointF:
-        if not self._snap_enabled or not self._rivers:
-            return point
-        closest = None
-        min_dist = self._snap_threshold
-        for river in self._rivers.values():
-            for p in river.points:
-                dist = (p.position - point).manhattanLength()
-                if dist < min_dist:
-                    min_dist = dist
-                    closest = p.position
-        return QPointF(closest) if closest else point
-
-    # ─── Stats ───────────────────────────────────────────────────────────
+        channels = [
+            int(a + (b - a) * t)
+            for a, b in (
+                (c1.red(), c2.red()),
+                (c1.green(), c2.green()),
+                (c1.blue(), c2.blue()),
+                (c1.alpha(), c2.alpha()),
+            )
+        ]
+        return QColor(*channels)
 
     @property
     def river_count(self) -> int:
-        return len(self._rivers)
+        return self.count

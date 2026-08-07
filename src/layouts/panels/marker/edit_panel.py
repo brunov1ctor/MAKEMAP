@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt, Signal
 
-from src.styles.tokens import Colors, Typography
+from src.styles.tokens import Colors, Typography, menu_qss
 from src.layouts.panel_manager import paint_glass_panel
 from src.layouts.panels.items.editor_base import EditorTabBar
 from src.layouts.panels.marker.icon_picker import IconPicker
@@ -251,12 +251,7 @@ class MarkerEditPanel(QFrame):
             QToolButton::menu-indicator {{ image: none; width: 0; }}
         """)
         self._effects_menu = QMenu(self.effects_btn)
-        self._effects_menu.setStyleSheet(f"""
-            QMenu {{ background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER}; padding: 4px; }}
-            QMenu::item {{ padding: 4px 20px 4px 8px; border-radius: 3px; font-size: 10px; }}
-            QMenu::item:selected {{ background: {Colors.ACCENT_DIM}; }}
-        """)
+        self._effects_menu.setStyleSheet(menu_qss())
         self._effect_actions: dict[str, QAction] = {}
         for key, label in EFFECTS:
             action = QAction(label, self._effects_menu)

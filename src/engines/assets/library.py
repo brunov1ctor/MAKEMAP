@@ -75,6 +75,7 @@ def get_shared_db() -> sqlite3.Connection:
 CATEGORY_FOLDERS = [
     "terrain",
     "water",
+    "road",
     "trees",
     "mountains",
     "rocks",

@@ -230,13 +230,30 @@ class RegionMediator:
         self._open_edit(zone)
 
     def zones_list(self) -> list[tuple[str, str]]:
-        """(zone_id, name) for every painted região — feeds the "Região"
-        dropdown in other modules (e.g. Mobs) that tag entities by zone."""
+        """(zone_id, name) for every região — feeds the "Região" dropdown
+        in other modules (e.g. Mobs) that tag entities by zone. Includes
+        régions that exist but haven't been painted yet (area_m2() == 0),
+        since those still need to appear as a selectable tag target."""
         return [(z.id, z.name) for z in self._zones.values()]
+
+    def zone_area_m2(self, zone_id: str) -> float:
+        """Painted area of `zone_id`, or 0.0 if unknown/never painted —
+        used by ExplorerSyncMediator to hide régions from the tree until
+        they actually have paint on the canvas (an empty, just-created
+        região isn't "in the map" yet)."""
+        zone = self._zones.get(zone_id)
+        return zone.layer.area_m2() if zone else 0.0
 
     def zone_name(self, zone_id: str) -> str:
         zone = self._zones.get(zone_id)
         return zone.name if zone else ""
+
+    def zone_item(self, zone_id: str):
+        """The zone's underlying (selectable) scene item, or None — used by
+        ExplorerSyncMediator to select a região on click, same as it does
+        for terrain/asset/effect items."""
+        zone = self._zones.get(zone_id)
+        return zone.layer.item if zone else None
 
     def zone_thumbnail(self, zone_id: str, size: int = 24) -> QPixmap | None:
         """Small preview image for `zone_id` — user photo if set, else a
@@ -505,9 +522,16 @@ class RegionMediator:
         if zone:
             zone.layer.remove_from_scene()
             if self._uow:
-                self._uow.zones.delete(zone.id)
+                deleted = self._uow.zones.delete(zone.id)
+                if not deleted:
+                    import logging
+                    logging.getLogger("MAKEMAP").warning(
+                        "on_removed: zones.delete(%s) afetou 0 linhas — zona pode não ter sido persistida",
+                        zone.id,
+                    )
             if self._active_id == region_id:
                 self.on_close_edit()
+            self._l._explorer_sync_med.refresh_now()
 
     def on_card_hover_entered(self, region_id: str):
         """Highlights the matching região on the map while its card is

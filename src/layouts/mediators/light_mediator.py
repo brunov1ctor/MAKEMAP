@@ -45,6 +45,10 @@ class LightMediator:
         self._uow = None
         self._pending_type = "point"
         self._items: dict[str, LightItem] = {}  # canvas_items row id -> LightItem
+        # Set by set_active_terrain() once TerrainMediator reports a terrain
+        # selected — stays None until then, e.g. placing a light before ever
+        # touching a terrain in a fresh project.
+        self._active_boundary = None
         # Single global setting, not a placed item — see GLOBAL_TYPES.
         self._sky_props = LightProperties(light_type="sky", color=default_color("sky"))
 

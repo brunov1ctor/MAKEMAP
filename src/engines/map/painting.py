@@ -1,5 +1,3 @@
-"""FASE 15 — Painting Engine."""
-
 from __future__ import annotations
 
 import uuid

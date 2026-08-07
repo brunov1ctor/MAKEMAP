@@ -459,6 +459,15 @@ class TransformEngine(QObject):
             self._handles.append(btn)
 
         self._pulse_timer.start()
+        # A plain click (press+release, no movement in between) never runs
+        # _do_drag/reposition_handles — the only thing that nudges the view
+        # into repainting mid-interaction — so on some setups the border
+        # and handles just added above sit in the scene but don't actually
+        # get painted until something else forces a repaint (e.g. dragging
+        # the object, which explains "click selects it but shows no
+        # handles, click-drag does"). Request one explicitly instead of
+        # relying on it happening on its own.
+        self._scene.update()
 
     def reposition_handles(self, items: list[QGraphicsItem]):
         """Cheap per-move-tick update for an active drag/rotate/resize: moves
@@ -528,6 +537,7 @@ class TransformEngine(QObject):
         self._item_borders.clear()
 
         self._pulse_timer.stop()
+        self._scene.update()
 
     def _on_pulse_tick(self):
         """Animate the selection border/outlines toward the inverse of the

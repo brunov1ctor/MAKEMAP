@@ -330,6 +330,11 @@ class MainWindow(QMainWindow):
         # reloading terrain/stamp textures reads through it.
         self.layout_widget._brush_med.set_uow(self.uow)
 
+        # Explorer panel reflects all of the above \u2014 refresh once everything
+        # else has finished reloading from the DB (see ExplorerSyncMediator.
+        # refresh_now's docstring for why history_changed alone misses this).
+        self.layout_widget._explorer_sync_med.refresh_now()
+
         self.setWindowTitle(f"{APP_NAME} \u2014 {self.project.meta.name}")
         self.layout_widget.top_bar.set_project_name(self.project.meta.name)
         self.layout_widget.top_bar.set_modules_enabled(True)

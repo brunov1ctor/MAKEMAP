@@ -218,7 +218,7 @@ class TerrainMediator:
         overlay can clip across every bounded terrain at once (see
         CanvasEngine._update_grid), not just whichever one is selected."""
         self._l.canvas.engine._brush_tool.set_all_boundaries(list(self._boundaries.values()))
-        self._l.canvas.engine._update_grid()
+        self._l.canvas.engine._update_grid(force=True)
 
     def on_infinite(self, infinite: bool):
         if infinite:
@@ -291,7 +291,7 @@ class TerrainMediator:
             self._l.canvas.engine._brush_tool.set_active_boundary(boundary)
         else:
             self._l.canvas.engine._brush_tool.set_active_boundary(None)
-        self._l.canvas.engine._update_grid()
+        self._l.canvas.engine._update_grid(force=True)
         self._l.brush_panel.set_active_terrain(terrain_id)
         terr = self._terrains.get(terrain_id)
         terrain_name = terr.name if terr else ""
@@ -697,7 +697,7 @@ class TerrainMediator:
                 boundary.update_shape(terr.shape)
             self._l.terrain_edit_panel.set_shape(terr.shape)
         self._reset_freehand_edit_state()
-        self._l.canvas.engine._update_grid()
+        self._l.canvas.engine._update_grid(force=True)
 
     def _reset_freehand_edit_state(self):
         self._edit_base_vertices = None
@@ -879,7 +879,7 @@ class TerrainMediator:
         if boundary:
             boundary.update_shape(shape)
         self._maybe_persist(terr, shape=shape)
-        self._l.canvas.engine._update_grid()
+        self._l.canvas.engine._update_grid(force=True)
 
     def _on_dims_changed(self, width: int, height: int):
         terr = self._current_terrain()
@@ -890,7 +890,7 @@ class TerrainMediator:
         if boundary:
             boundary.update_dimensions(width, height)
         self._maybe_persist(terr, width=width, height=height)
-        self._l.canvas.engine._update_grid()
+        self._l.canvas.engine._update_grid(force=True)
 
     def _on_color_changed(self, color: QColor):
         terr = self._current_terrain()

@@ -47,17 +47,22 @@ class KeyboardPanController(QObject):
         if not self._timer.isActive():
             self._elapsed.start()
             self._timer.start()
+            self._viewport.begin_interactive_pan()
 
     def key_released(self, key: int):
         """Call on key release (non-autorepeat only)."""
         self._keys_held.discard(key)
         if not self._keys_held:
             self._timer.stop()
+            self._viewport.end_interactive_pan()
 
     def stop(self):
         """Force stop (e.g. on focus loss)."""
+        was_active = self._timer.isActive()
         self._keys_held.clear()
         self._timer.stop()
+        if was_active:
+            self._viewport.end_interactive_pan()
 
     # ─── Internal ────────────────────────────────────────────────────
 

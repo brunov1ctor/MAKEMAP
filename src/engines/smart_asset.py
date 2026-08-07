@@ -1,5 +1,3 @@
-"""FASE 19 — Smart Asset Engine."""
-
 from __future__ import annotations
 
 import random

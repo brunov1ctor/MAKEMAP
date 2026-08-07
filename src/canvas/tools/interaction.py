@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPointF, QRectF, Qt
 
 from src.canvas.light_item import LightItem
 from src.engines.core.transform import HandleType, HORIZONTAL_HANDLES, VERTICAL_HANDLES
@@ -25,6 +25,29 @@ RESIZE_HANDLES = {
     HandleType.MIDDLE_LEFT, HandleType.MIDDLE_RIGHT,
     HandleType.BOTTOM_LEFT, HandleType.BOTTOM_CENTER, HandleType.BOTTOM_RIGHT,
 }
+
+
+def delete_items(scene, items: list, transform: TransformEngine | None, selection: SelectionEngine | None, history: HistoryEngine | None = None):
+    """Shared trash action — same code path as the selection's own trash-can
+    handle button (see ItemInteraction._delete_selected), also used directly
+    by the Delete/Backspace key shortcut (CanvasEngine._on_key_press) since
+    that fires globally, not through whichever tool's ItemInteraction
+    happens to be active."""
+    from src.engines.core.history import DeleteItemCommand, CompositeCommand
+
+    if not items:
+        return
+    cmds = [DeleteItemCommand(scene, item) for item in items if item.isVisible()]
+    cmd = cmds[0] if len(cmds) == 1 else CompositeCommand(cmds, f"Deletar {len(cmds)} item(s)")
+    if history:
+        history.push(cmd)
+    else:
+        cmd.redo()
+
+    if transform:
+        transform.hide_handles()
+    if selection:
+        selection.clear()
 
 
 class ItemInteraction:
@@ -126,14 +149,34 @@ class ItemInteraction:
 
         return False
 
+    # Fallback probe radius (screen px) for hit_selectable's rect-based
+    # retry — see its docstring.
+    _HIT_PROBE_SCREEN_PX = 3.0
+
     def hit_selectable(self, scene_pos: QPointF, item_filter=None):
-        """Pure test — the selectable item directly under scene_pos (honoring
-        the layer filter and item_filter), or None. Does not select or start
-        a drag; callers that want to defer the select/drag decision (e.g.
+        """Pure test — the selectable item at/near scene_pos (honoring the
+        layer filter and item_filter), or None. Does not select or start a
+        drag; callers that want to defer the select/drag decision (e.g.
         PanTool, to disambiguate a click from the start of a pan drag) test
-        with this first and commit later via select_and_begin_drag."""
+        with this first and commit later via select_and_begin_drag.
+
+        Tries an exact itemAt() point hit first; if that misses (e.g. the
+        click landed a hair off the item's traced shape/anti-aliased edge,
+        which itemAt()'s precise point test doesn't forgive the way a
+        rect-intersection does), retries with a tiny rect around scene_pos
+        — same IntersectsItemShape test box-select already uses, just sized
+        to a few screen pixels instead of a drag gesture. Without this, a
+        plain click could miss an object that a box-select drag over the
+        exact same spot would still catch, making single-click selection
+        feel unreliable relative to drag-select."""
         if self.transform is None:
             return None
+        item = self._exact_hit(scene_pos, item_filter)
+        if item is not None:
+            return item
+        return self._probe_hit(scene_pos, item_filter)
+
+    def _exact_hit(self, scene_pos: QPointF, item_filter=None):
         item = self.viewport.scene().itemAt(scene_pos, self.viewport.transform())
         # Walk up the parent chain — a non-selectable child (e.g.
         # AssetEffectsOverlay) sitting on top of a selectable parent stamp
@@ -143,6 +186,20 @@ class ItemInteraction:
                 return item
             item = item.parentItem()
         return None
+
+    def _probe_hit(self, scene_pos: QPointF, item_filter=None):
+        zoom = getattr(self.viewport, "zoom_level", 1.0) or 1.0
+        radius = self._HIT_PROBE_SCREEN_PX / zoom
+        rect = QRectF(scene_pos.x() - radius, scene_pos.y() - radius, radius * 2, radius * 2)
+        candidates = [
+            it for it in self.viewport.scene().items(rect, Qt.ItemSelectionMode.IntersectsItemShape)
+            if it.parentItem() is None and self.selection.is_selectable(it)
+            and (item_filter is None or item_filter(it))
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda it: it.zValue(), reverse=True)
+        return candidates[0]
 
     # A plain click landing on an item that's already selected inside a
     # multi-selection is ambiguous until release — see select_and_begin_drag/
@@ -169,11 +226,35 @@ class ItemInteraction:
         self._narrow_candidate = None
         if item not in selected:
             if add:
-                self.selection.toggle(item)
+                self.selection.toggle([item])
             else:
-                self.selection.select(item)
+                self.selection.set([item])
         elif not add and len(selected) > 1:
             self._narrow_candidate = item
+
+        # Remember exactly where this click landed (item-local coords), for
+        # items that scope their own selection box to a sub-region instead
+        # of their whole bounding rect — a terrain layer's _LayerItem, where
+        # two independent puddles painted with the same water asset are two
+        # blobs of the SAME shared item (see TerrainLayer.set_selection_
+        # anchor/selection_bounding_rect). Set AFTER selection.set/toggle
+        # above, since those go through SelectionEngine, which clears any
+        # stale anchor left over from a previous click on every item it
+        # (re)selects — this is the one path that's allowed to set a fresh
+        # one. No-op for item types that don't support it.
+        set_anchor = getattr(item, "set_selection_anchor", None)
+        if set_anchor is not None:
+            set_anchor(item.mapFromScene(scene_pos))
+            # selection.set/toggle above already fired selection_changed —
+            # which CanvasEngine wires to transform.show_handles — but that
+            # ran BEFORE the anchor existed, so it drew the border around
+            # the item's old (whole-layer) bounds. Re-notify now that the
+            # anchor is in place so the border/handles rebuild against the
+            # correct, blob-scoped bounds before anything actually paints
+            # (Qt only paints once the event loop goes idle, not inside
+            # this synchronous handler, so this never shows as a flash).
+            self.selection.notify_changed()
+
         self._begin_drag(self.viewport.scene().selectedItems(), scene_pos)
 
     def pos_in_selection_bounds(self, scene_pos: QPointF) -> bool:
@@ -268,7 +349,14 @@ class ItemInteraction:
             # _on_selection_changed) — no extra refresh needed here.
             if total_dx or total_dy:
                 self.transform.move(self._drag_items, -total_dx, -total_dy)
-            self.selection.select(self._narrow_candidate)
+            self.selection.set([self._narrow_candidate])
+        elif math.hypot(total_dx, total_dy) < self._CLICK_DRAG_THRESHOLD and self._drag_items:
+            # Plain click on an item that was NOT part of a multi-selection
+            # (no _narrow_candidate). The item was already selected before
+            # the press, so select() was never called and selection_changed
+            # was never emitted — the options panel never opened. Force the
+            # emit so the panel reacts to the click.
+            self.selection.notify_changed()
         elif self.history and self._drag_start is not None:
             if abs(total_dx) > 0.1 or abs(total_dy) > 0.1:
                 from src.engines.core.history import MoveItemsCommand
@@ -288,20 +376,7 @@ class ItemInteraction:
     # --- Action bar (delete / duplicate) ---
 
     def _delete_selected(self, items: list):
-        from src.engines.core.history import DeleteItemCommand, CompositeCommand
-
-        if not items:
-            return
-        cmds = [DeleteItemCommand(self.viewport.scene(), item) for item in items]
-        cmd = cmds[0] if len(cmds) == 1 else CompositeCommand(cmds, f"Deletar {len(cmds)} item(s)")
-        if self.history:
-            self.history.push(cmd)
-        else:
-            cmd.redo()
-
-        self.transform.hide_handles()
-        if self.selection:
-            self.selection.clear()
+        delete_items(self.viewport.scene(), items, self.transform, self.selection, self.history)
 
     def _duplicate_selected(self, items: list):
         """Clone each selected TextItem (deep-copying its TextProperties,
@@ -339,7 +414,10 @@ class ItemInteraction:
 
         if self.selection:
             for i, it in enumerate(clones):
-                self.selection.select(it, add=(i > 0))
+                if i == 0:
+                    self.selection.set([it])
+                else:
+                    self.selection.add([it])
         self.transform.show_handles(clones)
 
     # --- Rotate ---

@@ -17,6 +17,7 @@ class GridMediator:
 
     def __init__(self, layout: MainLayout):
         self._l = layout
+        self._rgb = QColor(255, 255, 255)  # base grid line color, before opacity's alpha
 
         panel = GridSettingsPanel(self._l)
         panel.hide()
@@ -31,11 +32,13 @@ class GridMediator:
         panel.subdivisions_slider.set_value(grid.subdivisions)
         panel.snap_check.setChecked(self._l.canvas.engine.snap.enabled)
         panel.measurements_check.setChecked(grid.show_measurements)
+        self._rgb = QColor(grid.color_major.red(), grid.color_major.green(), grid.color_major.blue())
+        panel.color_field.set_color(self._rgb.name())
         self.sync_shape_combo()
 
         for sig in (panel.size_slider.value_changed, panel.subdivisions_slider.value_changed,
                     panel.opacity_slider.value_changed, panel.snap_toggled,
-                    panel.measurements_toggled, panel.shape_changed):
+                    panel.measurements_toggled, panel.shape_changed, panel.color_field.color_changed):
             try:
                 sig.disconnect()
             except (RuntimeError, TypeError, RuntimeWarning):
@@ -43,18 +46,22 @@ class GridMediator:
 
         def _update_size(v):
             grid.cell_size = v  # keep the decimal — the stepper allows half-meter steps now
-            self._l.canvas.engine._update_grid()
+            self._l.canvas.engine._update_grid(force=True)
 
         def _update_sub(v):
             grid.subdivisions = int(v)
-            self._l.canvas.engine._update_grid()
+            self._l.canvas.engine._update_grid(force=True)
 
         def _update_opacity(v):
             alpha_major = int(v * 2.55)
             alpha_minor = int(v * 1.0)
-            grid.color_major = QColor(255, 255, 255, min(255, alpha_major))
-            grid.color_minor = QColor(255, 255, 255, min(255, alpha_minor))
-            self._l.canvas.engine._update_grid()
+            grid.color_major = QColor(self._rgb.red(), self._rgb.green(), self._rgb.blue(), min(255, alpha_major))
+            grid.color_minor = QColor(self._rgb.red(), self._rgb.green(), self._rgb.blue(), min(255, alpha_minor))
+            self._l.canvas.engine._update_grid(force=True)
+
+        def _update_color(hex_color):
+            self._rgb = QColor(hex_color)
+            _update_opacity(panel.opacity_slider.value())
 
         def _update_shape(shape_name):
             grid.visible = shape_name != "Nenhum"
@@ -69,11 +76,11 @@ class GridMediator:
                 panel.snap_check.setChecked(False)
             else:
                 self._l.canvas.engine.snap.enabled = False
-            self._l.canvas.engine._update_grid()
+            self._l.canvas.engine._update_grid(force=True)
 
         def _update_measurements(on):
             grid.show_measurements = on
-            self._l.canvas.engine._update_grid()
+            self._l.canvas.engine._update_grid(force=True)
 
         panel.size_slider.value_changed.connect(_update_size)
         panel.subdivisions_slider.value_changed.connect(_update_sub)
@@ -81,6 +88,7 @@ class GridMediator:
         panel.shape_changed.connect(_update_shape)
         panel.snap_toggled.connect(lambda on: self._l.canvas.engine.snap.toggle())
         panel.measurements_toggled.connect(_update_measurements)
+        panel.color_field.color_changed.connect(_update_color)
 
     def sync_shape_combo(self):
         """Reflect the grid's actual visible/shape state in the dropdown."""

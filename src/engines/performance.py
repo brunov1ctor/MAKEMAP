@@ -1,5 +1,3 @@
-"""FASE 25 — Performance Engine."""
-
 from __future__ import annotations
 
 import time

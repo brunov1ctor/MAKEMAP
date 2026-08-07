@@ -117,7 +117,7 @@ class GridManager:
             return
 
         self._group = _ClippedGroup()
-        self._group.setZValue(-1000)
+        self._group.setZValue(9)  # above terrain (1), rios/estradas (7/8) and region fill/label (8.5/8.7); below stamped objects (10+)
         self._group.set_clip_path(clip_path)
 
         if self.visible:
@@ -142,7 +142,7 @@ class GridManager:
             # a bounded terrain's grid conforms to, so they must keep
             # growing with the pan regardless of `clip_path`.
             self._measure_group = QGraphicsItemGroup()
-            self._measure_group.setZValue(-999)
+            self._measure_group.setZValue(9.1)
             self._draw_cartesian_overlay(full_view_rect if full_view_rect is not None else view_rect, zoom)
             self._scene.addItem(self._measure_group)
 

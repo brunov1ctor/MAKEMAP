@@ -94,12 +94,14 @@ class AssetEffectsMediator:
         """"🌊 Maresia" checkbox — persists straight to the asset's own
         shore_foam column (see AssetLibrary.set_shore_foam), same
         immediate-apply behavior as the ★ favorite toggle elsewhere; no
-        "Salvar" click needed, and no scene refresh required since the
-        shoreline foam is recomputed live from brush_tool.py on the next
-        stroke, not stored per placed instance like the painted cells are."""
+        "Salvar" click needed. Also re-runs the shoreline blend pass right
+        away (see CanvasEngine.refresh_shoreline_blend) so any foam already
+        painted on the map updates immediately instead of only on that
+        water asset's next brush stroke."""
         library = self._library()
         if library:
             library.set_shore_foam(asset_id, enabled)
+        self._l.canvas.engine.refresh_shoreline_blend()
 
     # ─── Cache ───
 

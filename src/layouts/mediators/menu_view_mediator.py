@@ -176,6 +176,15 @@ class MenuViewMediator:
             )
             panel.closed.connect(self._hide_menu_view)
             layout.addWidget(panel)
+        elif menu_name == "Lore":
+            from src.layouts.panels.lore.panel import LorePanel
+            window = l.window()
+            uow = window.uow if window and hasattr(window, 'uow') else None
+            project_dir = window.project.path if window and getattr(window, 'project', None) else None
+            panel = LorePanel(uow, project_dir=project_dir, parent=container)
+            panel.closed.connect(self._hide_menu_view)
+            panel.mention_open_requested.connect(self._on_lore_mention_open)
+            layout.addWidget(panel)
         elif menu_name in MENU_PANELS:
             panel_class = MENU_PANELS[menu_name]
             panel = panel_class(container)
@@ -210,6 +219,34 @@ class MenuViewMediator:
             self._active_panel.select_item(select_item)
         if select_skill and hasattr(self._active_panel, "select_skill"):
             self._active_panel.select_skill(select_skill)
+
+    # (menu name, select_* method) per entity type — used by
+    # _on_lore_mention_open below for the Lore panel's "@" mentions.
+    # Kept separate from _open_catalog_entry (which only ever handles
+    # Itens/Skills, called from 3 existing Mob/NPC tile-click sites) rather
+    # than widening that method's signature, to avoid touching working,
+    # unrelated call sites.
+    _MENTION_TARGETS = {
+        "mob": ("Mobs", "select_mob"),
+        "npc": ("NPCs", "select_npc"),
+        "item": ("Itens", "select_item"),
+        "skill": ("Itens", "select_skill"),
+        "quest": ("Quests", "select_quest"),
+        "dungeon": ("Dungeons", "select_dungeon"),
+    }
+
+    def _on_lore_mention_open(self, entity_type: str, entity_id: str):
+        """A "@" mention was clicked inside the Lore panel's Conteúdo
+        editor — jump to the entity's own panel with it selected, same
+        idea as _open_catalog_entry but covering every mentionable type."""
+        target = self._MENTION_TARGETS.get(entity_type)
+        if not target:
+            return
+        menu_name, select_method = target
+        self._show_menu_view(menu_name)
+        self._l.top_bar.set_active_menu(menu_name)
+        if hasattr(self._active_panel, select_method):
+            getattr(self._active_panel, select_method)(entity_id)
 
     def _flush_active_panel(self):
         """Menu panels switch (or the whole app closes) without the

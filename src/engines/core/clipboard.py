@@ -5,13 +5,9 @@ from __future__ import annotations
 import uuid
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal, QPointF
 from PySide6.QtWidgets import QGraphicsItem
-
-if TYPE_CHECKING:
-    from src.engines.selection import SelectionEngine
 
 
 @dataclass

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -10,9 +11,12 @@ from PySide6.QtGui import QPixmap
 
 from src.canvas.brush_effects_overlay import BrushEffectsOverlay
 from src.canvas.tools.brush_tool import BrushTool
+from src.canvas.path_item import RiverPathItem, RoadPathItem
 from src.engines.map.brush_effects import ANIMATED_EFFECTS
 from src.layouts.panels.brush.panel import BrushToolPanel
 from src.layouts.panels.brush.asset_browser import AssetBrowserPanel
+
+_PATH_ITEM_CLASSES = {"river_path": RiverPathItem, "road_path": RoadPathItem}
 
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
@@ -42,6 +46,7 @@ class BrushMediator:
         self._uow = None
         self._terrain_rows: dict[str, str] = {}  # asset_id -> painted_terrain row id
         self._stamp_items: dict[str, object] = {}  # canvas_items row id -> QGraphicsPixmapItem
+        self._path_items: dict[str, object] = {}  # canvas_items row id -> RiverPathItem/RoadPathItem
 
         panel = BrushToolPanel(self._l)
         panel.hide()
@@ -65,6 +70,15 @@ class BrushMediator:
         self._sync_timer.timeout.connect(self._sync_to_db)
         self._l.canvas.engine.history.history_changed.connect(self._on_history_changed)
 
+        # Rio/Estrada finalize a path directly on the item (see path_tool.py
+        # — no press/release/stroke of the tool's own to hang a history push
+        # off, unlike BrushTool's terrain strokes), so wire it explicitly
+        # here instead. Persistence itself piggybacks on the SAME debounced
+        # _sync_to_db this push triggers via history_changed — no separate
+        # save call needed.
+        self._l.canvas.engine._river_path_tool.on_path_finalized(self._on_path_finalized)
+        self._l.canvas.engine._road_path_tool.on_path_finalized(self._on_path_finalized)
+
         self._effects_overlay = BrushEffectsOverlay()
         self._l.canvas.engine.viewport.scene().addItem(self._effects_overlay)
         self._effects_tick_count = 0
@@ -74,6 +88,17 @@ class BrushMediator:
 
         # Bounded map, no terreno selected — see BrushTool.on_bounds_missing.
         self._l.canvas.engine._brush_tool.on_bounds_missing = self._on_bounds_missing
+
+    def _on_path_finalized(self, item):
+        """A Rio/Estrada trace was just locked in (double-click/Enter/tool
+        switch — see path_tool.py). The item is already on the scene and
+        visible, so push PlaceObjectCommand purely for undo/redo (same
+        visibility-toggle trick brush stamps use — redo() is a harmless
+        no-op here since the item's already visible); the push's
+        history_changed fires _sync_to_db (debounced), which is what
+        actually persists it (see the river_path/road_path loop there)."""
+        from src.engines.core.history import PlaceObjectCommand
+        self._l.canvas.engine.history.push(PlaceObjectCommand(item))
 
     def _on_bounds_missing(self):
         self._l.info_modal.show_message(
@@ -101,6 +126,24 @@ class BrushMediator:
         self._uow = uow
         self._load_from_db()
 
+    @staticmethod
+    def _serialize_path(item) -> str:
+        points, controls_out, controls_in = item.export_points()
+        return json.dumps({
+            "width": item.width,
+            "points": [[p.x(), p.y()] for p in points],
+            "cout": [[c.x(), c.y()] if c else None for c in controls_out],
+            "cin": [[c.x(), c.y()] if c else None for c in controls_in],
+        })
+
+    @staticmethod
+    def _deserialize_path(metadata_json: str):
+        data = json.loads(metadata_json or "{}")
+        points = [QPointF(x, y) for x, y in data.get("points", [])]
+        controls_out = [QPointF(c[0], c[1]) if c else None for c in data.get("cout", [])]
+        controls_in = [QPointF(c[0], c[1]) if c else None for c in data.get("cin", [])]
+        return data.get("width", 20.0), points, controls_out, controls_in
+
     def _load_from_db(self):
         engine = self._l.canvas.engine
         engine.clear_terrain_layers()
@@ -116,6 +159,11 @@ class BrushMediator:
                 scene.removeItem(item)
         self._stamp_items.clear()
         self._terrain_rows.clear()
+        for item in self._path_items.values():
+            scene = item.scene()
+            if scene:
+                scene.removeItem(item)
+        self._path_items.clear()
         if not self._uow:
             return
 
@@ -141,15 +189,26 @@ class BrushMediator:
             logger.exception("Falha ao recalcular halo de espuma terra-água ao carregar o projeto")
 
         for row in self._uow.canvas_items.get_by_map(self.MAP_ID):
-            if row["item_type"] != "asset":
-                continue
-            item = engine.place_stamp_item(
-                row["asset_id"], QPointF(row["position_x"], row["position_y"]),
-                row["rotation"], row["scale_x"], row["opacity"],
-            )
-            if item is None:
-                continue
-            self._stamp_items[row["id"]] = item
+            item_type = row["item_type"]
+            if item_type == "asset":
+                item = engine.place_stamp_item(
+                    row["asset_id"], QPointF(row["position_x"], row["position_y"]),
+                    row["rotation"], row["scale_x"], row["opacity"],
+                )
+                if item is None:
+                    continue
+                self._stamp_items[row["id"]] = item
+            elif item_type in _PATH_ITEM_CLASSES:
+                width, points, controls_out, controls_in = self._deserialize_path(row["metadata"])
+                if len(points) < 2:
+                    continue
+                texture = engine._asset_engine.get_pixmap(row["asset_id"]) if engine._asset_engine and row["asset_id"] else None
+                item = _PATH_ITEM_CLASSES[item_type](width=width, texture=texture)
+                item.setData(0, {"item_type": item_type, "asset_id": row["asset_id"] or ""})
+                item.setOpacity(row["opacity"])
+                engine.viewport.scene().addItem(item)
+                item.load_points(points, controls_out, controls_in)
+                self._path_items[row["id"]] = item
 
     def _on_history_changed(self):
         self._sync_timer.start(_SYNC_DEBOUNCE_MS)
@@ -168,25 +227,48 @@ class BrushMediator:
             return
         engine = self._l.canvas.engine
 
-        for asset_id, layer in engine.terrain_layers().items():
+        for asset_id, layer in list(engine.terrain_layers().items()):
+            # Layer deletado via lixeira — item removido da cena mas layer
+            # ainda no dicionário; drop do DB sem remover do dict (undo
+            # pode readicionar o item à cena, e a próxima sync o persiste).
+            if layer.item.scene() is None:
+                row_id = self._terrain_rows.pop(asset_id, None)
+                if row_id:
+                    self._uow.painted_terrain.delete(row_id)
+                continue
             mask_png, mask_x, mask_y = layer.export_mask_png_base64()
+            row_id = self._terrain_rows.get(asset_id)
+            if not mask_png:
+                if row_id:
+                    self._uow.painted_terrain.delete(row_id)
+                    del self._terrain_rows[asset_id]
+                continue
             fields = dict(
                 asset_id=asset_id, mask_png=mask_png, mask_x=mask_x, mask_y=mask_y,
                 texture_scale=layer.texture_scale, texture_rotation=layer.texture_rotation,
             )
-            row_id = self._terrain_rows.get(asset_id)
             if row_id:
                 self._uow.painted_terrain.update(row_id, **fields)
             else:
                 self._terrain_rows[asset_id] = self._uow.painted_terrain.create(map_id=self.MAP_ID, **fields)
 
-        for asset_id, layer in engine.effect_layers().items():
+        for asset_id, layer in list(engine.effect_layers().items()):
+            if layer.item.scene() is None:
+                row_id = self._terrain_rows.pop(asset_id, None)
+                if row_id:
+                    self._uow.painted_terrain.delete(row_id)
+                continue
             mask_png, mask_x, mask_y = layer.export_mask_png_base64()
+            row_id = self._terrain_rows.get(asset_id)
+            if not mask_png:
+                if row_id:
+                    self._uow.painted_terrain.delete(row_id)
+                    del self._terrain_rows[asset_id]
+                continue
             fields = dict(
                 asset_id=asset_id, mask_png=mask_png, mask_x=mask_x, mask_y=mask_y,
                 effect_key=asset_id[len(BrushTool.EFFECT_ASSET_PREFIX):],
             )
-            row_id = self._terrain_rows.get(asset_id)
             if row_id:
                 self._uow.painted_terrain.update(row_id, **fields)
             else:
@@ -227,6 +309,30 @@ class BrushMediator:
         for stale_id in set(self._stamp_items) - seen_ids:
             self._uow.canvas_items.delete(stale_id)
             del self._stamp_items[stale_id]
+
+        seen_path_ids: set[str] = set()
+        for item in engine.viewport.scene().items():
+            data = item.data(0)
+            item_type = data.get("item_type") if isinstance(data, dict) else None
+            # Still mid-trace (not finalized yet) — nothing to persist until
+            # it locks in, same reasoning a not-yet-released brush stroke
+            # never hits painted_terrain either.
+            if item_type not in _PATH_ITEM_CLASSES or item.is_editing() or not item.isVisible():
+                continue
+            fields = dict(
+                item_type=item_type, asset_id=data.get("asset_id", ""),
+                opacity=item.opacity(), metadata=self._serialize_path(item),
+            )
+            row_id = item.data(1)
+            if not row_id or not self._uow.canvas_items.update(row_id, **fields):
+                row_id = self._uow.canvas_items.create(map_id=self.MAP_ID, **fields)
+                item.setData(1, row_id)
+            self._path_items[row_id] = item
+            seen_path_ids.add(row_id)
+
+        for stale_id in set(self._path_items) - seen_path_ids:
+            self._uow.canvas_items.delete(stale_id)
+            del self._path_items[stale_id]
 
     def connect_panel(self):
         """Connect brush config panel + asset browser panel to BrushEngine."""
@@ -337,7 +443,7 @@ class BrushMediator:
         if not asset_id:
             return  # empty library — nothing to default to
         browser.set_selected_asset(asset_id)
-        self.on_asset_selected(asset_id)
+        self.on_asset_selected(asset_id, switch_tool=False)
 
     def _on_terrain_context_changed(self, *_args):
         options = self._terrain_options()
@@ -382,6 +488,11 @@ class BrushMediator:
                         pixmap = QPixmap.fromImage(img)
                 items.append({"id": f"{BrushTool.EFFECT_ASSET_PREFIX}{key}", "name": key, "pixmap": pixmap})
             self._l.asset_browser_panel.set_assets(items)
+            # Panel height now tracks its content (see AssetBrowserPanel.
+            # content_height / PanelLayoutEngine.apply) instead of always
+            # filling available space, so a repopulated grid needs an
+            # explicit re-layout to actually resize.
+            self._l._reposition()
             return
 
         asset_engine = self._l.canvas.engine._asset_engine
@@ -413,30 +524,43 @@ class BrushMediator:
                 "favorite": library.is_favorite(asset.id),
             })
         self._l.asset_browser_panel.set_assets(items)
+        self._l._reposition()
 
     def on_style_changed(self, style: str):
         self.populate_assets(self._l.asset_browser_panel.current_category())
 
-    def on_asset_selected(self, asset_id: str):
-        engine = self._l.canvas.engine.brush_engine
-        engine.clear_assets()
-        engine.add_asset(asset_id)
-        self._l.canvas.engine._brush_tool.set_active_asset(asset_id)
+    def on_asset_selected(self, asset_id: str, switch_tool: bool = True):
+        """`switch_tool=False` (see _ensure_default_asset) restores the
+        asset/texture state a water/road pick needs without also forcing
+        the active canvas tool to Rio/Estrada and the panel to its
+        Largura/Opacidade-only layout — appropriate for an explicit user
+        click on that asset, not for silently pre-selecting whatever asset
+        was last used when a project/app first opens (which used to make
+        the very first Pincel click of a session land on the Rio panel
+        with no river ever drawn, if the previous session ended on a water
+        asset)."""
+        engine_obj = self._l.canvas.engine
+        engine_obj.brush_engine.clear_assets()
+        engine_obj.brush_engine.add_asset(asset_id)
+        engine_obj._brush_tool.set_active_asset(asset_id)
+
         if asset_id.startswith(BrushTool.EFFECT_ASSET_PREFIX):
-            # Not a real library asset — no pixmap/adjustments to look up,
-            # just show the effect's own name and clear any stale preview.
             self._l.brush_panel.set_material_name(asset_id[len(BrushTool.EFFECT_ASSET_PREFIX):])
             self._l.brush_panel.set_texture_preview(None)
             self._l.asset_browser_panel.hide()
             self._l._reposition()
             return
-        if self._l.canvas.engine._asset_engine:
-            library = getattr(self._l.canvas.engine._asset_engine, 'library', None)
+
+        # Resolve name + pixmap
+        pixmap = None
+        name = ""
+        if engine_obj._asset_engine:
+            library = getattr(engine_obj._asset_engine, 'library', None)
             if library:
                 name = library.get_name_by_id(asset_id)
                 if name:
                     self._l.brush_panel.set_material_name(name)
-            pixmap = self._l.canvas.engine._asset_engine.get_pixmap(asset_id)
+            pixmap = engine_obj._asset_engine.get_pixmap(asset_id)
             window = self._l.window()
             if window and hasattr(window, 'uow') and window.uow:
                 settings = window.uow.asset_settings.get(asset_id)
@@ -445,13 +569,68 @@ class BrushMediator:
                 if (brightness != 0.0 or contrast != 0.0) and pixmap and not pixmap.isNull():
                     pixmap = self._apply_adjustments(pixmap, brightness, contrast)
             self._l.brush_panel.set_texture_preview(pixmap)
+
+        # Water/road assets switch to the dedicated path tool (Rio/Estrada —
+        # click-to-add-points bezier tracing, see path_tool.py) instead of
+        # being brush-painted like plain terrain; any other category falls
+        # back to the standard Brush tool + params panel.
+        category = self._asset_category(asset_id)
+        if category == "water":
+            engine_obj._river_path_tool.set_texture(pixmap, asset_id)
+            if switch_tool:
+                engine_obj.tool_manager.activate("Rio")
+                # Width always comes from the brush's own Size (the same
+                # Tamanho slider under Parâmetros) — Rio/Estrada has no
+                # width slider of its own.
+                self.on_size_changed(engine_obj.brush_engine.config.size)
+                self._l.brush_panel.set_path_material(name, pixmap)
+                self._l.brush_panel.set_panel_mode(BrushToolPanel.MODE_RIVER)
+        elif category == "road":
+            engine_obj._road_path_tool.set_texture(pixmap, asset_id)
+            if switch_tool:
+                engine_obj.tool_manager.activate("Estrada")
+                self.on_size_changed(engine_obj.brush_engine.config.size)
+                self._l.brush_panel.set_path_material(name, pixmap)
+                self._l.brush_panel.set_panel_mode(BrushToolPanel.MODE_ROAD)
+        elif switch_tool:
+            if engine_obj.tool_manager.active_name in ("Estrada", "Rio"):
+                engine_obj.tool_manager.activate("Brush")
+            self._l.brush_panel.set_panel_mode(BrushToolPanel.MODE_BRUSH)
+
         window = self._l.window()
         if window and hasattr(window, "uow") and window.uow:
             window.uow.ui_state.set(self._LAST_ASSET_KEY, asset_id)
-        # Picking a material is the end of the browsing task — close the
-        # sub-panel and hand focus back to the compact brush config.
         self._l.asset_browser_panel.hide()
         self._l._reposition()
+
+    def reset_panel_mode(self):
+        """Force the panel back to the plain parameter-grid layout.
+
+        set_panel_mode(MODE_RIVER/MODE_ROAD) only ever gets called from
+        on_asset_selected, when a water/road asset is picked — leaving the
+        panel itself (a single shared widget, not a fresh one per mode) in
+        whatever mode it was last in otherwise. Clicking away to another
+        tool and back to the Pincel toolbar button doesn't go through
+        on_asset_selected at all (see MainLayout._on_tool_selected, which
+        only shows/hides the panel), so without this the panel kept
+        reopening on the leftover Rio/Estrada layout — right after
+        finalizing a river, or on any later Pincel click that session —
+        instead of the normal Tamanho/Opacidade/... grid."""
+        self._l.brush_panel.set_panel_mode(BrushToolPanel.MODE_BRUSH)
+
+    def _asset_category(self, asset_id: str) -> str:
+        """Returns the library category of an asset, or '' if unknown."""
+        asset_engine = self._l.canvas.engine._asset_engine
+        library = getattr(asset_engine, 'library', None) if asset_engine else None
+        if not library:
+            return ''
+        try:
+            row = library._db.execute(
+                "SELECT category FROM assets WHERE id = ?", (asset_id,)
+            ).fetchone()
+            return row["category"] if row else ''
+        except Exception:
+            return ''
 
     def _apply_adjustments(self, pixmap: QPixmap, brightness: float, contrast: float) -> QPixmap:
         from PySide6.QtGui import QImage
@@ -474,10 +653,22 @@ class BrushMediator:
     def on_size_changed(self, value):
         self._l.canvas.engine.brush_engine.set_size(value)
         self._l.canvas.engine._brush_tool.update_cursor_size()
+        # Keep path tools in sync with the Size slider — Rio/Estrada has no
+        # width slider of its own (see _build_path_params_page), the Size
+        # slider under Parâmetros is the only control for it.
+        self._l.canvas.engine._river_path_tool.set_width(value)
+        self._l.canvas.engine._road_path_tool.set_width(value)
+        self._l.brush_panel.size_slider.set_value(value)
 
     def on_opacity_changed(self, value):
         self._l.canvas.engine.brush_engine.set_opacity(value / 100.0)
         self._l.brush_panel.texture_preview.set_opacity(value / 100.0)
+        # Rio/Estrada has no opacity slider of its own — the Opacidade
+        # slider under Parâmetros drives this too, applied live to
+        # whichever río/estrada trace is mid-edit, if any.
+        for path_tool in (self._l.canvas.engine._river_path_tool, self._l.canvas.engine._road_path_tool):
+            if path_tool.active_item is not None:
+                path_tool.active_item.setOpacity(value / 100.0)
 
     def on_mode_changed(self, mode: str):
         brush_tool = self._l.canvas.engine._brush_tool

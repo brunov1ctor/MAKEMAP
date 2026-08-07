@@ -1,5 +1,3 @@
-"""FASE 22 — View Modes."""
-
 from __future__ import annotations
 
 import uuid

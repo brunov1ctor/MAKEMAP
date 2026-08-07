@@ -28,11 +28,17 @@ class ThumbnailGenerator:
             return {}
 
         thumb_path = self._dir / f"{asset_id}.png"
-        scaled = image.scaled(
+        # KeepAspectRatioByExpanding + crop central = "cover"
+        # Assets de rio/estrada são muito largos; KeepAspectRatio os deixaria
+        # como uma faixa fina no meio do thumbnail. Cover preenche o quadrado.
+        expanded = image.scaled(
             QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE),
-            aspectMode=Qt.AspectRatioMode.KeepAspectRatio,
+            aspectMode=Qt.AspectRatioMode.KeepAspectRatioByExpanding,
             mode=Qt.TransformationMode.SmoothTransformation,
         )
+        x = (expanded.width() - THUMBNAIL_SIZE) // 2
+        y = (expanded.height() - THUMBNAIL_SIZE) // 2
+        scaled = expanded.copy(x, y, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
         scaled.save(str(thumb_path), "PNG")
         return {"medium": thumb_path}
 

@@ -177,13 +177,13 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         export_btn.setMenu(export_menu)
         header.addWidget(export_btn)
 
-        close_btn = QPushButton("✕")
+        close_btn = QPushButton("×")
         close_btn.setFixedSize(28, 28)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none;
-                font-size: 14px; border-radius: 14px; }}
+                font-size: 14px; border-radius: 14px; padding: 0; }}
             QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
             QToolTip {{
                 background-color: {Colors.BG_ELEVATED};
@@ -704,6 +704,12 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
     def _on_close_clicked(self):
         self.flush_pending_saves()
         self.closed.emit()
+
+    # ─── Public API — jump straight to a specific quest, e.g. from a Lore
+    # "@" mention click (see MenuViewMediator._on_lore_mention_open) ───
+
+    def select_quest(self, quest_id: str):
+        self._on_quest_selected(quest_id)
 
     def _on_quest_image_dropped(self, quest_id: str, path: str):
         if not self._uow:

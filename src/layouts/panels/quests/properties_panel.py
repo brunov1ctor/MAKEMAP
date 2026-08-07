@@ -53,10 +53,11 @@ def _toggle_row(label_text: str) -> tuple[QHBoxLayout, QCheckBox]:
 
 def _card(title: str, expanded: bool = True) -> tuple[QFrame, QVBoxLayout, CollapsibleSection]:
     """Cartão colapsável — clicar no cabeçalho recolhe/expande o conteúdo.
-    Os 3 cartões (Propriedades/Configurações/Recompensas) empilhados dentro
-    de uma coluna estreita costumam passar da altura visível; recolher os
-    que não estão em uso agora reduz o quanto precisa rolar, em vez de
-    obrigar sempre os 3 abertos ao mesmo tempo."""
+    Os 3 cartões (Propriedades/Configurações/Recompensas) começam todos
+    abertos; o painel inteiro fica desabilitado (via set_empty()) enquanto
+    nenhuma quest está selecionada, o que também bloqueia o clique no
+    cabeçalho — então um cartão que iniciasse fechado não daria pra reabrir
+    nesse estado."""
     frame = QFrame()
     frame.setObjectName("subpanel")
     frame.setStyleSheet(panel_frame_style())
@@ -274,7 +275,7 @@ class QuestPropertiesPanel(QFrame):
     # ── cartão 2: Configurações ──
 
     def _build_settings_card(self) -> QFrame:
-        frame, lay, _section = _card("Configurações", expanded=False)
+        frame, lay, _section = _card("Configurações")
 
         rep_row, self._repeatable = _toggle_row("Repetível")
         lay.addLayout(rep_row)

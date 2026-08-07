@@ -17,12 +17,13 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QToolButton, QStackedWidget,
-    QLineEdit, QMenu,
+    QLineEdit,
 )
 from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QColor, QPixmap, QPainter, QPainterPath
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, menu_qss
+from src.layouts.panels.card_widgets import overflow_menu_button
 
 _THUMB_W, _THUMB_H = 84, 72
 
@@ -210,38 +211,7 @@ class RegionCard(QFrame):
         self._eye_btn.clicked.connect(self._on_eye_clicked)
         actions_col.addWidget(self._eye_btn)
 
-        self._menu_btn = QToolButton()
-        self._menu_btn.setText("⋯")
-        self._menu_btn.setFixedSize(22, 22)
-        self._menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self._menu_btn.setToolTip("Mais opções")
-        self._menu_btn.setStyleSheet(f"""
-            QToolButton {{
-                border: none; border-radius: 4px; font-size: 14px; font-weight: bold;
-                color: {Colors.TEXT_SECONDARY}; background: transparent;
-            }}
-            QToolButton:hover {{ background: rgba(255,255,255,0.08); color: {Colors.TEXT_PRIMARY}; }}
-            QToolButton::menu-indicator {{ image: none; }}
-            QToolTip {{
-                background-color: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-        """)
-        menu_style = f"""
-            QMenu {{
-                background: {Colors.BG_ELEVATED}; color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER}; padding: 4px;
-            }}
-            QMenu::item {{ padding: 4px 20px 4px 8px; border-radius: 3px; font-size: 10px; }}
-            QMenu::item:selected {{ background: {Colors.ACCENT_DIM}; }}
-        """
-        menu = QMenu(self._menu_btn)
-        menu.setStyleSheet(menu_style)
+        self._menu_btn, menu = overflow_menu_button()
         menu.addAction("Renomear", self._start_rename)
         menu.addAction("Editar", lambda: self.edit_requested.emit(self.region_id))
         menu.addAction("Localizar", lambda: self.locate_requested.emit(self.region_id))
@@ -252,14 +222,13 @@ class RegionCard(QFrame):
         # instead of a banner elsewhere in the panel that's disconnected
         # from which card it's about.
         clear_menu = menu.addMenu("Apagar Pintura")
-        clear_menu.setStyleSheet(menu_style)
+        clear_menu.setStyleSheet(menu_qss())
         clear_menu.addAction(
             "Confirmar — apagar toda a pintura", lambda: self.paint_cleared.emit(self.region_id)
         )
 
         menu.addSeparator()
         menu.addAction("Excluir", lambda: self.deleted.emit(self.region_id))
-        self._menu_btn.setMenu(menu)
         actions_col.addWidget(self._menu_btn)
         actions_col.addStretch()
 

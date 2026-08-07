@@ -153,12 +153,12 @@ class NPCsPanel(
         ], self._on_export_choice)
         header.addWidget(export_btn)
 
-        close_btn = QPushButton("✕")
+        close_btn = QPushButton("×")
         close_btn.setFixedSize(28, 28)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setToolTip("Fechar")
         close_btn.setStyleSheet(f"""
-            QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none; font-size: 14px; border-radius: 14px; }}
+            QPushButton {{ background: transparent; color: {Colors.TEXT_MUTED}; border: none; font-size: 14px; border-radius: 14px; padding: 0; }}
             QPushButton:hover {{ background: {Colors.PANEL_HOVER}; color: {Colors.TEXT_PRIMARY}; }}
             QToolTip {{
                 background-color: {Colors.BG_ELEVATED};
@@ -254,6 +254,12 @@ class NPCsPanel(
             for i in range(len(actual) - 1):
                 cumulative += actual[i]
                 self._auto_splitter_positions[i] = cumulative
+
+    # ─── Public API — jump straight to a specific NPC, e.g. from a Lore
+    # "@" mention click (see MenuViewMediator._on_lore_mention_open) ───
+
+    def select_npc(self, npc_id: str):
+        self._on_card_selected(npc_id)
 
     # ─── Paint ───
 

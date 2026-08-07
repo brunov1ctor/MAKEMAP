@@ -112,8 +112,20 @@ class TexturePreviewWidget(QFrame):
         t = QTransform()
         if self._rotation != 0.0:
             t.rotate(self._rotation)
-        if self._scale != 1.0:
-            t.scale(self._scale, self._scale)
+        # QBrush tiles the pixmap at its native PIXEL size regardless of
+        # this widget's size — a texture larger than this ~60px-tall swatch
+        # (most of them are, e.g. 512px) used to show only a tiny, extreme
+        # close-up corner of it, reading as "stuck at some huge zoom" no
+        # matter what _scale was. Normalize to the widget's own box first
+        # (one full tile spans its height) and apply _scale — the brush's
+        # actual canvas tiling density, 0.1-3.0 — on top of THAT baseline,
+        # so it stays a legible material swatch that also reflects the
+        # relative density the slider will paint at.
+        if self._pixmap.height() > 0:
+            base = self.height() / self._pixmap.height()
+            total_scale = base * self._scale
+            if total_scale != 1.0:
+                t.scale(total_scale, total_scale)
         brush.setTransform(t)
         p.setBrush(brush)
         p.setPen(Qt.PenStyle.NoPen)
@@ -141,6 +153,12 @@ class BrushToolPanel(QFrame):
     close_requested = Signal()
     assets_requested = Signal()
     content_changed = Signal()
+    path_direction_changed = Signal(float)  # +1.0 or -1.0
+
+    # Modos do painel
+    MODE_BRUSH = "brush"
+    MODE_RIVER = "river"
+    MODE_ROAD  = "road"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -152,6 +170,7 @@ class BrushToolPanel(QFrame):
         self._current_section = "params"  # read by _refresh_section_tab_style, built below
         self._terrain_names: dict[str, str] = {}
         self._active_terrain_id: str = ""
+        self._panel_mode = self.MODE_BRUSH  # brush | river | road
 
         # layout raiz do QFrame — tudo dentro dele recebe o fundo glass via paintEvent
         root = QVBoxLayout(self)
@@ -201,6 +220,7 @@ class BrushToolPanel(QFrame):
         self._section_stack = QStackedWidget()
         self._section_stack.addWidget(self._top_scroll)
         self._section_stack.addWidget(self._build_assets_page())
+        self._section_stack.addWidget(self._build_path_params_page())
         root.addWidget(self._section_stack, 1)
 
         self._current_mode = "paint"
@@ -210,16 +230,16 @@ class BrushToolPanel(QFrame):
         header.setContentsMargins(0, 2, 0, 4)
         header.setSpacing(6)
 
-        icon = QLabel("🖌")
-        icon.setStyleSheet("font-size: 14px; background: transparent; border: none;")
-        header.addWidget(icon)
+        self._header_icon = QLabel("🖌")
+        self._header_icon.setStyleSheet("font-size: 14px; background: transparent; border: none;")
+        header.addWidget(self._header_icon)
 
-        title = QLabel("Brush Tool")
-        title.setStyleSheet(f"""
+        self._header_title = QLabel("Brush Tool")
+        self._header_title.setStyleSheet(f"""
             color: {_TEXT}; font-size: 13px; font-weight: bold;
             background: transparent; border: none;
         """)
-        header.addWidget(title)
+        header.addWidget(self._header_title)
         header.addStretch()
 
         close_btn = QToolButton()
@@ -541,6 +561,96 @@ class BrushToolPanel(QFrame):
 
     def set_texture_preview(self, pixmap: QPixmap | None):
         self.texture_preview.set_texture(pixmap)
+
+    def _build_path_params_page(self) -> QWidget:
+        """Página de parâmetros para Rio / Estrada — preview do material +
+        dica de uso. Largura/Opacidade não têm sliders próprios aqui — são
+        os mesmos Tamanho/Opacidade já editáveis na aba Parâmetros normal
+        do pincel (ver BrushMediator.on_size_changed/on_opacity_changed,
+        que já aplicam o valor às ferramentas Rio/Estrada também)."""
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(8)
+
+        # Preview da textura (mesma que o modo Assets)
+        self._path_texture_preview = TexturePreviewWidget()
+        self._path_texture_preview.clicked.connect(self.assets_requested.emit)
+        lay.addWidget(self._path_texture_preview)
+        lay.addWidget(_separator())
+
+        # Nome do material
+        self._path_material_lbl = QLabel("")
+        self._path_material_lbl.setStyleSheet(
+            f"color: {_TEXT}; font-size: 11px; font-weight: bold; "
+            f"background: transparent; border: none;"
+        )
+        lay.addWidget(self._path_material_lbl)
+
+        lay.addWidget(_separator())
+
+        # Dica de uso
+        hint = QLabel(
+            "\U0001f4a1 Clique para adicionar pontos \u2022 Arraste ponto para mover\n"
+            "Arraste al\u00e7a para curvar \u2022 Duplo-clique para finalizar\n"
+            "Clique direito no ponto para remover"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(
+            f"color: {_TEXT_MUTED}; font-size: 9px; "
+            f"background: transparent; border: none; line-height: 1.4;"
+        )
+        lay.addWidget(hint)
+        lay.addStretch()
+
+        self._path_page = page
+        return page
+
+    def set_panel_mode(self, mode: str):
+        """Troca o painel entre modo pincel (brush), rio (river) e estrada (road).
+        Atualiza header, abas e página ativa do stack."""
+        self._panel_mode = mode
+        if mode == self.MODE_RIVER:
+            self._header_icon.setText("🌊")
+            self._header_title.setText("Rio")
+            self._section_stack.setCurrentWidget(self._path_page)
+            self._params_tab_btn.setChecked(False)
+            self._assets_tab_btn.setChecked(False)
+        elif mode == self.MODE_ROAD:
+            self._header_icon.setText("🛤")
+            self._header_title.setText("Estrada")
+            self._section_stack.setCurrentWidget(self._path_page)
+            self._params_tab_btn.setChecked(False)
+            self._assets_tab_btn.setChecked(False)
+        else:
+            self._header_icon.setText("🖌")
+            self._header_title.setText("Brush Tool")
+            # Só reseta para Parâmetros se estava vindo de rio/estrada —
+            # se já estava em modo brush, preserva a aba que o usuário escolheu.
+            if self._panel_mode in (self.MODE_RIVER, self.MODE_ROAD):
+                self._current_section = "params"
+                self._params_tab_btn.setChecked(True)
+                self._assets_tab_btn.setChecked(False)
+                self._section_stack.setCurrentWidget(self._top_scroll)
+            else:
+                self._section_stack.setCurrentWidget(
+                    self._assets_page if self._current_section == "assets" else self._top_scroll
+                )
+                self._params_tab_btn.setChecked(self._current_section == "params")
+                self._assets_tab_btn.setChecked(self._current_section == "assets")
+            self._refresh_section_tab_style()
+        self.content_changed.emit()
+
+    def set_path_material(self, name: str, pixmap: QPixmap | None):
+        """Atualiza nome e preview de textura na página de path."""
+        available = self.PANEL_WIDTH - 20
+        metrics = self._path_material_lbl.fontMetrics()
+        self._path_material_lbl.setText(
+            metrics.elidedText(name or "", Qt.TextElideMode.ElideRight, available)
+        )
+        self._path_material_lbl.setToolTip(name or "")
+        self._path_texture_preview.set_texture(pixmap)
 
     def content_height(self) -> int:
         """Own override — PanelManager's generic _content_height() only

@@ -1,5 +1,3 @@
-"""FASE 26 — Explorer & Inspector Engine."""
-
 from __future__ import annotations
 
 import uuid

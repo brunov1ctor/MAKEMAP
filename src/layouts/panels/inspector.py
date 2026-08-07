@@ -1,8 +1,8 @@
-"""4. Inspector + 4.1 Quest + 4.2 Layers — 3 painéis independentes colapsáveis."""
+"""4. Inspector + 4.2 Layers — painéis independentes colapsáveis."""
 
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QToolButton,
-    QTabWidget, QWidget, QSizePolicy, QSlider, QScrollArea,
+    QTabWidget, QWidget, QSizePolicy, QScrollArea,
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QPixmap
@@ -35,11 +35,6 @@ _LABEL_STYLE = f"""
 """
 
 
-# ─── Read-only info rows (mob data — Inspector is a quick-view, the actual
-# editing surface is the Mobs module's own edit panel) ──────────────────────
-
-# 2 fields per row (label stacked above value, not side-by-side) instead of
-# one full-width row per field — same info in roughly half the height.
 _INFO_GRID_COLS = 2
 
 
@@ -67,12 +62,6 @@ class _InfoRow(QFrame):
 
 
 class _InfoTab(QWidget):
-    """A tab of read-only fields built from a (label, mob_dict_key,
-    formatter) spec, laid out _INFO_GRID_COLS-per-row — every key here must
-    be a real column the Mobs module's edit panel actually reads/writes
-    (see edit_overview_mixin/edit_atributos_mixin/edit_extras_mixin), so
-    nothing shown is a field that doesn't exist."""
-
     def __init__(self, spec: list[tuple[str, str, object]], parent=None):
         super().__init__(parent)
         self._spec = spec
@@ -118,16 +107,6 @@ _MIN_TILE_SIZE = 20
 
 
 def _tile_scroll_grid() -> tuple[QScrollArea, QVBoxLayout]:
-    """A QScrollArea wrapping a QVBoxLayout of rows (see _fill_grid) — every
-    row is its own QHBoxLayout holding up to 5 tiles plus a trailing
-    addStretch(), so leftover width always lands after the last tile in
-    that row, never between tiles. Two earlier attempts at this (plain
-    QGridLayout, then QGridLayout + setColumnStretch, then QGridLayout + a
-    fixed-width container) all still left Qt free to space the tiles out
-    somewhere in the layout — a manual row of fixed-size widgets with one
-    trailing stretch has no such ambiguity: everything before the stretch
-    keeps its own sizeHint width, period. The QScrollArea still guarantees
-    rows beyond the first stay reachable, same as before."""
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -150,13 +129,6 @@ def _tile_scroll_grid() -> tuple[QScrollArea, QVBoxLayout]:
 
 
 def _row_tile_width(scroll: QScrollArea) -> int:
-    """How wide a tile can be and still fit _GRID_COLS per row inside
-    `scroll`'s current viewport — computed from the real rendered width
-    instead of a guessed constant, so tiles actually fill the row (a fixed
-    small size like 28px left a lot of unused width on the right once the
-    "gap between tiles" bug itself was fixed) rather than leaving empty
-    space to be conservative about widths this module can't know ahead of
-    time (splitter drags, different screens, etc.)."""
     avail = scroll.viewport().width() or scroll.width()
     tile_w = (avail - (_GRID_COLS - 1) * _GRID_SPACING) // _GRID_COLS
     return max(_MIN_TILE_SIZE, int(tile_w))
@@ -181,15 +153,6 @@ def _fill_grid(rows: QVBoxLayout, widgets: list[QWidget]):
 
 
 class _GeralTab(QWidget):
-    """GERAL tab body — the flat key/value rows (_InfoTab/_GERAL_SPEC) plus
-    Drops/Habilidades as small square tiles (_DropTile/_CatalogTile — same
-    shape as the Mobs edit panel's own search-grid picker, see
-    edit_widgets.py, just smaller), wrapped/scrolled the same way the
-    Brush panel's asset grid is (see _tile_scroll_grid). Read-only:
-    Inspector only displays — removing a drop/habilidade is done from the
-    Mobs edit panel itself, so _DropTile is built with removable=False
-    (no "✕") and _CatalogTile's `clicked` signal is never connected here."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet("background: transparent;")
@@ -205,9 +168,6 @@ class _GeralTab(QWidget):
         self._drops_empty_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: {Typography.SIZE_XS}px; background: transparent; border: none;")
         layout.addWidget(self._drops_empty_lbl)
         self._drops_scroll, self._drops_grid = _tile_scroll_grid()
-        # Grown from a tight 2-row cap to a real share of the tab's height
-        # (stretch factor below) now that the GERAL fields above take half
-        # the vertical space they used to (see _InfoTab's grid layout).
         self._drops_scroll.setMinimumHeight(70)
         layout.addWidget(self._drops_scroll, 1)
 
@@ -222,44 +182,26 @@ class _GeralTab(QWidget):
     def set_data(self, mob: dict | None, drops: list[tuple[dict, float, int]] | None = None,
                  abilities: list[tuple[dict, bool]] | None = None):
         self._info.set_data(mob)
-
         drops = drops or []
         abilities = abilities or []
         self._drops_empty_lbl.setVisible(not drops)
         self._drops_scroll.setVisible(bool(drops))
         self._abilities_empty_lbl.setVisible(not abilities)
         self._abilities_scroll.setVisible(bool(abilities))
-        # Measuring viewport widths synchronously here — even after forcing
-        # this widget's own layout().activate() — still read stale/too-wide
-        # numbers for Habilidades specifically, because the width that
-        # actually needs to settle first lives further up the ancestor
-        # chain (CollapsiblePanel / the floating Inspector panel itself),
-        # not just in _GeralTab's own layout. QTimer.singleShot(0, …) defers
-        # the actual measuring + tile-building to the next iteration of
-        # Qt's event loop, by which point every pending resize/layout event
-        # anywhere in that chain has genuinely been processed.
         QTimer.singleShot(0, lambda: self._fill_tiles(drops, abilities))
 
     def _fill_tiles(self, drops: list[tuple[dict, float, int]], abilities: list[tuple[dict, bool]]):
-        drop_size = _row_tile_width(self._drops_scroll)  # _DropTile's own width == size
+        drop_size = _row_tile_width(self._drops_scroll)
         _fill_grid(self._drops_grid, [
             _DropTile(item_dict, rate, qty, size=drop_size, removable=False)
             for item_dict, rate, qty in drops
         ])
-
-        # _CatalogTile's own width is size+16 (edit_widgets.py), so back out
-        # the +16 to land on the same per-row tile width as Drops above.
         ability_size = max(_MIN_TILE_SIZE, _row_tile_width(self._abilities_scroll) - 16)
         _fill_grid(self._abilities_grid, [
             _CatalogTile(skill, size=ability_size) for skill, _unlinked in abilities
         ])
 
 
-# Every key below is a real column the Mobs module's edit panel reads/writes
-# (see edit_overview_mixin.py, edit_atributos_mixin.py) — nothing here is a
-# placeholder field with no backing data. Drops/Habilidades aren't flat
-# key -> string values (they're catalog-linked cards, see _GeralTab below),
-# so they're handled outside this spec instead of through _InfoTab.
 _GERAL_SPEC = [
     ("Nível", "level", None),
     ("Tipo", "tipo", None),
@@ -306,24 +248,14 @@ _OUTROS_SPEC = [
 # ─── 4. Inspector Panel ───────────────────────────────────────────────────
 
 class InspectorPanel(CollapsiblePanel):
-    """4. Inspector — header + abas com dados reais do elemento selecionado
-    no mapa (colapsável). Read-only: a edição de verdade acontece no painel
-    de edição do próprio módulo (ex.: Mobs)."""
-
     def __init__(self, parent=None):
         super().__init__(title="Inspector", icon="🔍", parent=parent, radius=14)
-
-        # Título maior
         self._title_label.setStyleSheet(f"""
             font-size: {Typography.SIZE_SM}px; font-weight: {Typography.WEIGHT_BOLD};
             color: {Colors.TEXT_PRIMARY}; background: transparent; border: none;
         """)
-
-        # Header do elemento
         self.header = _ElementHeader()
         self.content_layout.addWidget(self.header)
-
-        # Tabs
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet(f"""
             QTabWidget::pane {{ border: none; background: transparent; }}
@@ -353,11 +285,6 @@ class InspectorPanel(CollapsiblePanel):
     def set_mob(self, mob: dict, pixmap: QPixmap | None = None, region_name: str = "",
                 drops: list[tuple[dict, float, int]] | None = None,
                 abilities: list[tuple[dict, bool]] | None = None):
-        """Populates the header + every tab from a real mob dict (same
-        shape the Mobs module's edit panel reads/writes) — `region_name`,
-        `drops` and `abilities` are passed in already-resolved against the
-        Item/Skill catalogs since Inspector has no DB access of its own
-        (see SpawnMediator._on_selection_changed)."""
         self.header.set_element(
             name=mob.get("name", ""), type_=f"Mob • {mob.get('category', '')}".rstrip(" •"),
             level=str(mob.get("level") or ""), tags=mob.get("subcategory", ""),
@@ -371,11 +298,6 @@ class InspectorPanel(CollapsiblePanel):
         self._outros_tab.set_data(data)
 
     def set_npc(self, npc: dict, pixmap: QPixmap | None = None, region_name: str = ""):
-        """NPC equivalent of set_mob — reuses the same 4 tabs (their specs
-        were written for mob columns, so fields with no npc equivalent, e.g.
-        "Elemento"/"Tipo de IA", just render blank via _InfoTab.set_data's
-        missing-key handling). No drops/abilities — npcs has neither
-        column."""
         self.header.set_element(
             name=npc.get("name", ""), type_=f"NPC • {npc.get('npc_type', '')}".rstrip(" •"),
             level=str(npc.get("level") or ""), tags=npc.get("subcategory", ""),
@@ -397,155 +319,135 @@ class InspectorPanel(CollapsiblePanel):
             tab.set_data(None)
 
 
-# ─── 4.1 Quest Panel ──────────────────────────────────────────────────────
-
-class QuestPanel(CollapsiblePanel):
-    """4.1 Quest Relacionada — painel colapsável."""
-
-    def __init__(self, parent=None):
-        super().__init__(title="Quest Relacionada", icon="📜", parent=parent, radius=10)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-
-        # Status badge no header
-        self.status_badge = QLabel("Ativa")
-        self.status_badge.setStyleSheet(f"""
-            font-size: 8px; color: {Colors.SUCCESS};
-            background: rgba(102, 187, 106, 0.15);
-            border-radius: 6px; padding: 2px 6px; border: none;
-        """)
-        header_layout = self._main_layout.itemAt(0).layout()
-        header_layout.insertWidget(header_layout.count() - 1, self.status_badge)
-
-        # Name
-        self.quest_name = QLabel("Protegendo a Vila")
-        self.quest_name.setStyleSheet(f"""
-            font-size: {Typography.SIZE_SM}px; font-weight: {Typography.WEIGHT_BOLD};
-            color: {Colors.TEXT_PRIMARY}; background: transparent; border: none;
-        """)
-        self.content_layout.addWidget(self.quest_name)
-
-        # Details
-        detail_row = QHBoxLayout()
-        detail_row.setSpacing(12)
-        self.quest_type = QLabel("Quest Principal")
-        self.quest_type.setStyleSheet(f"""
-            font-size: {Typography.SIZE_XXS}px; color: {Colors.TEXT_MUTED};
-            background: transparent; border: none;
-        """)
-        self.quest_level = QLabel("Nível 10")
-        self.quest_level.setStyleSheet(f"""
-            font-size: {Typography.SIZE_XXS}px; color: {Colors.ACCENT};
-            font-weight: {Typography.WEIGHT_BOLD}; background: transparent; border: none;
-        """)
-        detail_row.addWidget(self.quest_type)
-        detail_row.addWidget(self.quest_level)
-        detail_row.addStretch()
-        self.content_layout.addLayout(detail_row)
-
-    def set_quest(self, name="", level="", type_="", status=""):
-        self.quest_name.setText(name or "—")
-        self.quest_level.setText(f"Nível {level}" if level else "")
-        self.quest_type.setText(type_)
-        self.status_badge.setText(status or "Ativa")
-
-
 # ─── 4.2 Layers Panel ─────────────────────────────────────────────────────
 
-class _LayerItem(QFrame):
-    def __init__(self, icon, name, parent=None):
+# (item_types no canvas, label, ícone) — ordem de exibição
+_LAYER_DEFS = [
+    (["terrain"],     "Terreno",    "🎨"),
+    (["zone"],        "Regiões",    "🗺"),
+    (["effect"],      "Efeitos",    "✨"),
+    (["river_path"],  "Rios",       "🌊"),
+    (["road_path"],   "Estradas",   "🛤"),
+    (["asset"],       "Assets",     "🖼"),
+    (["mob_spawn"],   "Mobs",       "👹"),
+    (["npc_spawn"],   "NPCs",       "🧙"),
+    (["text"],        "Textos",     "📝"),
+    (["light"],       "Luzes",      "💡"),
+    (["marker"],      "Marcadores", "📍"),
+]
+
+
+class _LayerRow(QFrame):
+    def __init__(self, icon: str, name: str, parent=None):
         super().__init__(parent)
         self.setFixedHeight(26)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(f"""
-            _LayerItem {{ background: transparent; border: none; border-radius: 4px; }}
-            _LayerItem:hover {{ background: {Colors.PANEL_HOVER}; }}
-        """)
+        self.setStyleSheet("background: transparent; border: none;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 0, 4, 0)
-        layout.setSpacing(3)
+        layout.setSpacing(4)
 
-        drag = QLabel("☰")
-        drag.setFixedWidth(12)
-        drag.setStyleSheet(f"font-size: 8px; color: {Colors.TEXT_DISABLED}; background: transparent; border: none;")
-        drag.setCursor(Qt.CursorShape.SizeAllCursor)
-        layout.addWidget(drag)
-
-        vis = QToolButton()
-        vis.setText("👁")
-        vis.setFixedSize(16, 16)
-        vis.setCheckable(True)
-        vis.setChecked(True)
-        vis.setToolTip("Mostrar/ocultar camada")
-        vis.setStyleSheet(f"""
-            QToolButton {{ border: none; font-size: 9px; color: {Colors.TEXT_MUTED}; background: transparent; }}
-            QToolButton:checked {{ color: {Colors.ACCENT}; }}
+        self._vis_btn = QToolButton()
+        self._vis_btn.setText("👁")
+        self._vis_btn.setFixedSize(18, 18)
+        self._vis_btn.setCheckable(True)
+        self._vis_btn.setChecked(True)
+        self._vis_btn.setStyleSheet(f"""
+            QToolButton {{ border: none; font-size: 10px; color: {Colors.ACCENT}; background: transparent; }}
+            QToolButton:!checked {{ color: {Colors.TEXT_DISABLED}; }}
         """)
-        layout.addWidget(vis)
+        layout.addWidget(self._vis_btn)
 
-        lock = QToolButton()
-        lock.setText("🔓")
-        lock.setFixedSize(16, 16)
-        lock.setCheckable(True)
-        lock.setToolTip("Bloquear/desbloquear camada")
-        lock.setStyleSheet(f"""
-            QToolButton {{ border: none; font-size: 9px; color: {Colors.TEXT_MUTED}; background: transparent; }}
-            QToolButton:checked {{ color: {Colors.WARNING}; }}
-        """)
-        layout.addWidget(lock)
-
-        lbl = QLabel(f"{icon} {name}")
-        lbl.setStyleSheet(f"""
-            font-size: {Typography.SIZE_XXS}px; color: {Colors.TEXT_SECONDARY};
-            background: transparent; border: none;
-        """)
+        lbl = QLabel(f"{icon}  {name}")
+        lbl.setStyleSheet(f"font-size: {Typography.SIZE_XXS}px; color: {Colors.TEXT_SECONDARY}; background: transparent; border: none;")
         layout.addWidget(lbl, 1)
 
-        opacity = QSlider(Qt.Orientation.Horizontal)
-        opacity.setRange(0, 100)
-        opacity.setValue(100)
-        opacity.setFixedWidth(36)
-        opacity.setFixedHeight(10)
-        opacity.setStyleSheet(f"""
-            QSlider::groove:horizontal {{ background: {Colors.BG_TERTIARY}; height: 2px; border-radius: 1px; }}
-            QSlider::handle:horizontal {{ background: {Colors.ACCENT}; width: 6px; height: 6px; margin: -2px 0; border-radius: 3px; }}
-        """)
-        layout.addWidget(opacity)
+    def connect_toggle(self, callback):
+        self._vis_btn.toggled.connect(callback)
+
+    def set_visible_state(self, visible: bool):
+        self._vis_btn.blockSignals(True)
+        self._vis_btn.setChecked(visible)
+        self._vis_btn.blockSignals(False)
 
 
 class LayersPanel(CollapsiblePanel):
-    """4.2 Camadas Ativas — painel colapsável."""
+    """Camadas Ativas — aparece dinamicamente conforme tipos de itens
+    são adicionados ao canvas; o olho controla a visibilidade global
+    de cada categoria."""
 
     def __init__(self, parent=None):
         super().__init__(title="Camadas Ativas", icon="📐", parent=parent, radius=10)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-
-        # Título um pouco maior
         self._title_label.setStyleSheet(f"""
             font-size: {Typography.SIZE_XS}px; font-weight: {Typography.WEIGHT_BOLD};
             color: {Colors.TEXT_PRIMARY}; background: transparent; border: none;
         """)
+        self._rows: dict[str, _LayerRow] = {}  # label -> row
+        self._hidden: set[str] = set()          # labels com olho desligado
+        self._scene = None
+        self.hide()
 
-        # Botão + no header
-        add_btn = QToolButton()
-        add_btn.setText("+")
-        add_btn.setFixedSize(18, 18)
-        add_btn.setToolTip("Adicionar camada")
-        add_btn.setStyleSheet(f"""
-            QToolButton {{ border: none; font-size: 11px; color: {Colors.ACCENT}; background: transparent; border-radius: 4px; }}
-            QToolButton:hover {{ background: {Colors.ACCENT_DIM}; }}
-        """)
-        header_layout = self._main_layout.itemAt(0).layout()
-        header_layout.insertWidget(header_layout.count() - 1, add_btn)
+    def set_scene(self, scene):
+        self._scene = scene
 
-        # Layers
-        layers = [
-            ("🎨", "Terreno"), ("🌿", "Biomas"), ("👹", "Mobs"),
-            ("🧙", "NPCs"), ("📜", "Quests"), ("🏰", "Dungeons"),
-            ("💀", "Bosses"), ("💎", "Recursos"), ("🛤", "Estradas"),
-            ("🏴", "Áreas PvP"),
-        ]
-        for icon, name in layers:
-            self.content_layout.addWidget(_LayerItem(icon, name))
+    def refresh(self):
+        """Reconstrói as linhas com base nos item_types presentes na cena."""
+        if self._scene is None:
+            return
+
+        present: set[str] = set()
+        for item in self._scene.items():
+            data = item.data(0)
+            if not isinstance(data, dict):
+                continue
+            itype = data.get("item_type", "")
+            if itype == "asset" and data.get("effect_key"):
+                itype = "effect"
+            for types, label, _icon in _LAYER_DEFS:
+                if itype in types:
+                    present.add(label)
+                    break
+
+        for types, label, icon in _LAYER_DEFS:
+            if label in present and label not in self._rows:
+                row = _LayerRow(icon, label)
+                row.connect_toggle(lambda checked, lbl=label: self._on_toggle(lbl, checked))
+                self.content_layout.addWidget(row)
+                self._rows[label] = row
+                if label in self._hidden:
+                    row.set_visible_state(False)
+
+        for label in list(self._rows):
+            if label not in present:
+                row = self._rows.pop(label)
+                self.content_layout.removeWidget(row)
+                row.deleteLater()
+                self._hidden.discard(label)
+
+        self.setVisible(bool(self._rows))
+
+    def _on_toggle(self, label: str, checked: bool):
+        if self._scene is None:
+            return
+        if checked:
+            self._hidden.discard(label)
+        else:
+            self._hidden.add(label)
+
+        types_for = {lbl: types for types, lbl, _icon in _LAYER_DEFS}
+        target_types = set(types_for.get(label, []))
+        is_effect = (label == "Efeitos")
+
+        for item in self._scene.items():
+            data = item.data(0)
+            if not isinstance(data, dict):
+                continue
+            itype = data.get("item_type", "")
+            if is_effect:
+                if itype == "asset" and data.get("effect_key"):
+                    item.setVisible(checked)
+            elif itype in target_types and not data.get("effect_key"):
+                item.setVisible(checked)
 
 
 # ─── Element Header (internal) ─────────────────────────────────────────────
@@ -560,7 +462,6 @@ class _ElementHeader(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        # Image
         self.image = QFrame()
         self.image.setFixedSize(68, 68)
         self.image.setStyleSheet(f"""
@@ -581,7 +482,6 @@ class _ElementHeader(QFrame):
         self._portrait.hide()
         layout.addWidget(self.image)
 
-        # Info
         info = QVBoxLayout()
         info.setSpacing(2)
 
@@ -610,9 +510,6 @@ class _ElementHeader(QFrame):
         """)
         badges.addWidget(self.level_label)
 
-        # Same category chip the Mobs grid card/Visão Geral use (see
-        # categories.category_badge_color) — colored per-category from the
-        # live mob_categories lookup, not a hardcoded palette.
         self.category_label = QLabel("boss")
         self.category_label.setStyleSheet(f"""
             font-size: {Typography.SIZE_XXS}px; font-weight: {Typography.WEIGHT_BOLD};
@@ -665,5 +562,3 @@ class _ElementHeader(QFrame):
         else:
             self.category_label.hide()
         self.tags_label.setText(tags)
-
-
