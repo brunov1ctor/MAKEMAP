@@ -65,5 +65,11 @@ class AtributosSectionMixin:
         respawn_row.addLayout(_field_row("Sombrio %", self._shadow_pct_spin))
         outer.addLayout(respawn_row)
 
+        # Same role as Mobs' Altura field (edit_atributos_mixin.py) — scales
+        # how far a stamped npc's shadow reaches (see occluder_rects() in
+        # lighting_compositor.py); 0 (the default) casts none at all.
+        self._height_spin = _dspin(0, 999, 0, " m")
+        outer.addLayout(_field_row("Altura", self._height_spin))
+
         outer.addStretch()
         return w

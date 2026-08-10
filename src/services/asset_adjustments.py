@@ -56,14 +56,6 @@ class AssetAdjustmentsService(QObject):
         img = apply_brightness_contrast(pixmap.toImage(), b, c)
         return QPixmap.fromImage(img)
 
-    def get_adjusted_image(self, asset_path: str) -> QImage:
-        """Carrega e retorna QImage ajustada a partir do path."""
-        img = QImage(asset_path)
-        b, c = self.get(asset_path)
-        if b == 0 and c == 0:
-            return img
-        return apply_brightness_contrast(img, b, c)
-
     def clear(self, asset_path: str):
         """Remove ajustes de um asset."""
         if asset_path in self._adjustments:

@@ -45,6 +45,7 @@ class NPCsPanel(
 
     closed = Signal()
     item_open_requested = Signal(str)  # item_id — bubbled from NPCEditPanel tile click
+    entity_saved = Signal(str)  # npc_id — see NPCCrudMixin._on_save; lets SpawnMediator refresh already-placed stamps
 
     # See MobsPanel's own docstring for the reasoning behind these — the
     # same tuned ratio/floor/ceiling applies here unchanged.

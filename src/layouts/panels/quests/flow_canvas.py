@@ -1,11 +1,10 @@
 """FlowCanvas — o canvas de grafo livre do editor de Fluxo da quest.
 
-Mesma base de components.node_graph.ChainCanvas (arraste-para-conectar, curva
-bezier com brilho neon) com duas diferenças que a versão genérica não tinha
-motivo pra carregar: cada conexão pode ter um rótulo de texto (o "Sim"/"Não"
-saindo de um nó Condição), e clicar com o botão direito no vazio abre um menu
-pra criar qualquer um dos 5 tipos de nó ali mesmo — não existe um botão fixo
-de "+ Novo" único como o de Progressão, já que o Fluxo tem 5 tipos possíveis.
+Arraste-para-conectar, curva bezier com brilho neon, cada conexão pode ter
+um rótulo de texto (o "Sim"/"Não" saindo de um nó Condição), e clicar com o
+botão direito no vazio abre um menu pra criar qualquer um dos 5 tipos de nó
+ali mesmo — não existe um botão fixo de "+ Novo" único como o de Progressão,
+já que o Fluxo tem 5 tipos possíveis.
 """
 
 from __future__ import annotations

@@ -52,6 +52,10 @@ class MenuViewMediator:
             l.text_panel, l.background_panel,
             l._left_container, l._right_scroll, l.progression, l.compass,
             l.compass_hud, l.minimap,
+            l.spawn_panel, l.spawn_mob_sub_panel, l.marker_panel, l.marker_edit_panel,
+            l.light_panel, l.light_edit_panel, l.sky_edit_panel,
+            l.asset_effects_panel, l.color_customize_panel,
+            l.terrain_edit_panel, l.region_edit_panel, l.status_bar,
         ]
 
     def _on_menu_view(self, menu_name: str):
@@ -132,6 +136,7 @@ class MenuViewMediator:
             panel.ability_open_requested.connect(
                 lambda skill_id: self._open_catalog_entry("Itens", select_skill=skill_id)
             )
+            panel.entity_saved.connect(lambda mob_id: l._spawn_med.refresh_stamp_height("mob", mob_id))
             layout.addWidget(panel)
         elif menu_name == "NPCs":
             from src.layouts.panels.npcs.panel import NPCsPanel
@@ -147,6 +152,7 @@ class MenuViewMediator:
             panel.item_open_requested.connect(
                 lambda item_id: self._open_catalog_entry("Itens", select_item=item_id)
             )
+            panel.entity_saved.connect(lambda npc_id: l._spawn_med.refresh_stamp_height("npc", npc_id))
             layout.addWidget(panel)
         elif menu_name == "Itens":
             from src.layouts.panels.items.panel import ItemsSkillsPanel
@@ -204,9 +210,9 @@ class MenuViewMediator:
 
         self._menu_container = container
         self._active_panel = layout.itemAt(0).widget() if layout.count() else None
+        l._reposition()
         container.show()
         container.raise_()
-        l._reposition()
 
     def _open_catalog_entry(self, menu_name: str, select_item: str | None = None, select_skill: str | None = None):
         """Jump straight to a specific item/skill in the Itens e Habilidades
@@ -271,7 +277,11 @@ class MenuViewMediator:
         for w in self._canvas_widgets():
             if w in (l.brush_panel, l.grid_panel,
                      l.terrain_panel, l.region_panel, l.select_panel, l.text_panel,
-                     l.background_panel, l.compass_hud):
+                     l.background_panel, l.compass_hud,
+                     l.spawn_panel, l.spawn_mob_sub_panel, l.marker_panel, l.marker_edit_panel,
+                     l.light_panel, l.light_edit_panel, l.sky_edit_panel,
+                     l.asset_effects_panel, l.color_customize_panel,
+                     l.terrain_edit_panel, l.region_edit_panel):
                 continue
             w.show()
         # Not part of the blanket show() above — its visibility rule is

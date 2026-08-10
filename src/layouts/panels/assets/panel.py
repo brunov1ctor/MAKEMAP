@@ -306,13 +306,17 @@ class AssetSoundManager(QWidget):
                 self._parallax_list_layout.removeWidget(section)
                 self._parallax_list_layout.addWidget(section)
 
-    def _add_parallax_preset(self):
-        """Same inline dashed-row creation pattern as _add_category/_add_style
-        — no native dialog for naming the preset."""
-        if getattr(self, "_new_parallax_row", None):
-            self._new_parallax_row.findChild(QLineEdit).setFocus()
-            return
-
+    def _build_inline_add_row(self, layout, index: int, placeholder: str, on_confirm, on_cancel) -> QFrame:
+        """Shared "type a name, confirm/cancel" inline row — a dashed-
+        bordered QFrame with a QLineEdit + ✓/✕ QToolButtons, inserted into
+        `layout` at `index`. Used in place of a native dialog for naming
+        whatever's being created (category, style, parallax/navigation
+        preset); what genuinely differs between callers (which layout it's
+        inserted into, the placeholder text, and what confirm/cancel do) is
+        passed in instead of duplicated. `on_confirm` receives the typed
+        text (stripped by the caller); `on_cancel` takes no args. Returns
+        the row so the caller can stash it (e.g. self._new_category_row) to
+        refocus it instead of opening a second one on a repeat click."""
         row = QFrame()
         row.setStyleSheet(f"""
             QFrame {{
@@ -325,7 +329,7 @@ class AssetSoundManager(QWidget):
         row_lay.setSpacing(6)
 
         edit = QLineEdit()
-        edit.setPlaceholderText("Nome do preset...")
+        edit.setPlaceholderText(placeholder)
         edit.setStyleSheet(f"""
             QLineEdit {{
                 background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
@@ -376,13 +380,24 @@ class AssetSoundManager(QWidget):
         """)
         row_lay.addWidget(cancel_btn)
 
-        confirm_btn.clicked.connect(lambda: self._confirm_new_parallax_preset(edit.text()))
-        cancel_btn.clicked.connect(self._close_new_parallax_row)
-        edit.returnPressed.connect(lambda: self._confirm_new_parallax_preset(edit.text()))
+        confirm_btn.clicked.connect(lambda: on_confirm(edit.text()))
+        cancel_btn.clicked.connect(on_cancel)
+        edit.returnPressed.connect(lambda: on_confirm(edit.text()))
 
-        self._parallax_list_layout.insertWidget(0, row)
-        self._new_parallax_row = row
+        layout.insertWidget(index, row)
         edit.setFocus()
+        return row
+
+    def _add_parallax_preset(self):
+        """Same inline dashed-row creation pattern as _add_category/_add_style
+        — no native dialog for naming the preset."""
+        if getattr(self, "_new_parallax_row", None):
+            self._new_parallax_row.findChild(QLineEdit).setFocus()
+            return
+        self._new_parallax_row = self._build_inline_add_row(
+            self._parallax_list_layout, 0, "Nome do preset...",
+            self._confirm_new_parallax_preset, self._close_new_parallax_row,
+        )
 
     def _close_new_parallax_row(self):
         if getattr(self, "_new_parallax_row", None):
@@ -451,77 +466,10 @@ class AssetSoundManager(QWidget):
         if getattr(self, "_new_navigation_row", None):
             self._new_navigation_row.findChild(QLineEdit).setFocus()
             return
-
-        row = QFrame()
-        row.setStyleSheet(f"""
-            QFrame {{
-                background: rgba(255,255,255,0.03); border: 1px dashed {Colors.ACCENT};
-                border-radius: 6px;
-            }}
-        """)
-        row_lay = QHBoxLayout(row)
-        row_lay.setContentsMargins(10, 6, 8, 6)
-        row_lay.setSpacing(6)
-
-        edit = QLineEdit()
-        edit.setPlaceholderText("Nome do preset...")
-        edit.setStyleSheet(f"""
-            QLineEdit {{
-                background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 4px; color: {Colors.TEXT_PRIMARY}; font-size: 10pt;
-                padding: 2px 6px;
-            }}
-            QLineEdit:focus {{ border-color: {Colors.ACCENT}; }}
-        """)
-        row_lay.addWidget(edit, 1)
-
-        confirm_btn = QToolButton()
-        confirm_btn.setText("✓")
-        confirm_btn.setFixedSize(22, 22)
-        confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        confirm_btn.setToolTip("Confirmar")
-        confirm_btn.setStyleSheet(f"""
-            QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
-                color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
-            QToolButton:hover {{ background: rgba(79,195,247,0.3); }}
-            QToolTip {{
-                background-color: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-        """)
-        row_lay.addWidget(confirm_btn)
-
-        cancel_btn = QToolButton()
-        cancel_btn.setText("✕")
-        cancel_btn.setFixedSize(22, 22)
-        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel_btn.setToolTip("Cancelar")
-        cancel_btn.setStyleSheet(f"""
-            QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
-                color: {Colors.TEXT_MUTED}; background: transparent; }}
-            QToolButton:hover {{ color: {Colors.ERROR}; background: rgba(239,83,80,0.2); }}
-            QToolTip {{
-                background-color: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-        """)
-        row_lay.addWidget(cancel_btn)
-
-        confirm_btn.clicked.connect(lambda: self._confirm_new_navigation_preset(edit.text()))
-        cancel_btn.clicked.connect(self._close_new_navigation_row)
-        edit.returnPressed.connect(lambda: self._confirm_new_navigation_preset(edit.text()))
-
-        self._navigation_list_layout.insertWidget(0, row)
-        self._new_navigation_row = row
-        edit.setFocus()
+        self._new_navigation_row = self._build_inline_add_row(
+            self._navigation_list_layout, 0, "Nome do preset...",
+            self._confirm_new_navigation_preset, self._close_new_navigation_row,
+        )
 
     def _close_new_navigation_row(self):
         if getattr(self, "_new_navigation_row", None):
@@ -768,77 +716,11 @@ class AssetSoundManager(QWidget):
         if getattr(self, "_new_category_row", None):
             self._new_category_row.findChild(QLineEdit).setFocus()
             return
-
-        row = QFrame()
-        row.setStyleSheet(f"""
-            QFrame {{
-                background: rgba(255,255,255,0.03); border: 1px dashed {Colors.ACCENT};
-                border-radius: 6px;
-            }}
-        """)
-        row_lay = QHBoxLayout(row)
-        row_lay.setContentsMargins(10, 6, 8, 6)
-        row_lay.setSpacing(6)
-
-        edit = QLineEdit()
-        edit.setPlaceholderText("Nome da categoria...")
-        edit.setStyleSheet(f"""
-            QLineEdit {{
-                background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 4px; color: {Colors.TEXT_PRIMARY}; font-size: 10pt;
-                padding: 2px 6px;
-            }}
-            QLineEdit:focus {{ border-color: {Colors.ACCENT}; }}
-        """)
-        row_lay.addWidget(edit, 1)
-
-        confirm_btn = QToolButton()
-        confirm_btn.setText("✓")
-        confirm_btn.setFixedSize(22, 22)
-        confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        confirm_btn.setToolTip("Confirmar")
-        confirm_btn.setStyleSheet(f"""
-            QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
-                color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
-            QToolButton:hover {{ background: rgba(79,195,247,0.3); }}
-            QToolTip {{
-                background-color: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-        """)
-        row_lay.addWidget(confirm_btn)
-
-        cancel_btn = QToolButton()
-        cancel_btn.setText("✕")
-        cancel_btn.setFixedSize(22, 22)
-        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel_btn.setToolTip("Cancelar")
-        cancel_btn.setStyleSheet(f"""
-            QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
-                color: {Colors.TEXT_MUTED}; background: transparent; }}
-            QToolButton:hover {{ color: {Colors.ERROR}; background: rgba(239,83,80,0.2); }}
-            QToolTip {{
-                background-color: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-        """)
-        row_lay.addWidget(cancel_btn)
-
-        confirm_btn.clicked.connect(lambda: self._confirm_new_category(edit.text()))
-        cancel_btn.clicked.connect(self._close_new_category_row)
-        edit.returnPressed.connect(lambda: self._confirm_new_category(edit.text()))
-
-        self._assets_group_layout.insertWidget(1, row)  # right after the style tabs
-        self._new_category_row = row
-        edit.setFocus()
+        # index 1 = right after the style tabs
+        self._new_category_row = self._build_inline_add_row(
+            self._assets_group_layout, 1, "Nome da categoria...",
+            self._confirm_new_category, self._close_new_category_row,
+        )
 
     def _close_new_category_row(self):
         row = getattr(self, "_new_category_row", None)
@@ -913,77 +795,11 @@ class AssetSoundManager(QWidget):
         if getattr(self, "_new_style_row", None):
             self._new_style_row.findChild(QLineEdit).setFocus()
             return
-
-        row = QFrame()
-        row.setStyleSheet(f"""
-            QFrame {{
-                background: rgba(255,255,255,0.03); border: 1px dashed {Colors.ACCENT};
-                border-radius: 6px;
-            }}
-        """)
-        row_lay = QHBoxLayout(row)
-        row_lay.setContentsMargins(10, 6, 8, 6)
-        row_lay.setSpacing(6)
-
-        edit = QLineEdit()
-        edit.setPlaceholderText("Nome do estilo...")
-        edit.setStyleSheet(f"""
-            QLineEdit {{
-                background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 4px; color: {Colors.TEXT_PRIMARY}; font-size: 10pt;
-                padding: 2px 6px;
-            }}
-            QLineEdit:focus {{ border-color: {Colors.ACCENT}; }}
-        """)
-        row_lay.addWidget(edit, 1)
-
-        confirm_btn = QToolButton()
-        confirm_btn.setText("✓")
-        confirm_btn.setFixedSize(22, 22)
-        confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        confirm_btn.setToolTip("Confirmar")
-        confirm_btn.setStyleSheet(f"""
-            QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
-                color: {Colors.ACCENT}; background: {Colors.ACCENT_DIM}; }}
-            QToolButton:hover {{ background: rgba(79,195,247,0.3); }}
-            QToolTip {{
-                background-color: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-        """)
-        row_lay.addWidget(confirm_btn)
-
-        cancel_btn = QToolButton()
-        cancel_btn.setText("✕")
-        cancel_btn.setFixedSize(22, 22)
-        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel_btn.setToolTip("Cancelar")
-        cancel_btn.setStyleSheet(f"""
-            QToolButton {{ border: none; border-radius: 4px; font-size: 11px;
-                color: {Colors.TEXT_MUTED}; background: transparent; }}
-            QToolButton:hover {{ color: {Colors.ERROR}; background: rgba(239,83,80,0.2); }}
-            QToolTip {{
-                background-color: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-        """)
-        row_lay.addWidget(cancel_btn)
-
-        confirm_btn.clicked.connect(lambda: self._confirm_new_style(edit.text()))
-        cancel_btn.clicked.connect(self._close_new_style_row)
-        edit.returnPressed.connect(lambda: self._confirm_new_style(edit.text()))
-
-        self._assets_group_layout.insertWidget(1, row)  # right after the style tabs
-        self._new_style_row = row
-        edit.setFocus()
+        # index 1 = right after the style tabs
+        self._new_style_row = self._build_inline_add_row(
+            self._assets_group_layout, 1, "Nome do estilo...",
+            self._confirm_new_style, self._close_new_style_row,
+        )
 
     def _close_new_style_row(self):
         row = getattr(self, "_new_style_row", None)

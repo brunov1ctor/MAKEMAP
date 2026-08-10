@@ -22,7 +22,9 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QTimer, QPointF
 
 from src.canvas.tools.brush_tool import BrushTool
+from src.canvas.marker_item import MarkerItem
 from src.engines.map.explorer_model import ExplorerNode
+from src.engines.map.explorer_icons import DEFAULT_ICON_BY_KIND
 
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
@@ -42,6 +44,7 @@ _REGION_FULL_THRESHOLD = 0.98
 class ExplorerSyncMediator:
     def __init__(self, layout: "MainLayout"):
         self._l = layout
+        self._uow = None
 
         self._timer = QTimer()
         self._timer.setSingleShot(True)
@@ -50,6 +53,7 @@ class ExplorerSyncMediator:
 
         self._l.left_panel.node_activated.connect(self._on_node_activated)
         self._l.left_panel.node_hovered.connect(self._on_node_hovered)
+        self._l.left_panel.icon_clicked.connect(self._on_icon_edit)
 
         self._select_timer = QTimer()
         self._select_timer.setSingleShot(True)
@@ -71,6 +75,9 @@ class ExplorerSyncMediator:
         self._selected_item_ids: set[int] = set()
         self._rebuild()
         self._l.layers_panel.refresh()
+
+    def set_uow(self, uow):
+        self._uow = uow
 
     def _on_history_changed(self):
         self._timer.start(_SYNC_DEBOUNCE_MS)
@@ -167,7 +174,73 @@ class ExplorerSyncMediator:
         ]
 
         roots = [terrain_cat, region_cat] + orphan_cats
+        self._apply_overrides(roots)
         self._l.left_panel.set_tree([r for r in roots if r.children])
+
+    # ─── Ícone/cor por elemento (popup de clique no ícone) ─────────────────
+
+    def _apply_overrides(self, roots: list[ExplorerNode]):
+        """Computes each leaf node's stable `override_key` and, if the user
+        has customized it via the icon-click popup, overwrites its default
+        icon_glyph/label_color with the saved override. Runs once per
+        rebuild over the whole freshly-built tree, so individual
+        _collect_*_nodes methods never need to know overrides exist."""
+        overrides = self._uow.explorer_overrides.get_all() if self._uow else {}
+
+        def _visit(node: ExplorerNode):
+            for child in node.children:
+                _visit(child)
+            if node.kind == "category":
+                return
+            node.override_key = self._override_key_for(node)
+            node.default_icon = node.icon_glyph  # before any override is applied below
+            if node.override_key is None:
+                return
+            row = overrides.get(node.override_key)
+            if row is None:
+                return
+            if row.get("icon"):
+                node.icon_glyph = row["icon"]
+                # Several kinds (npc/mob/asset/terrain/region/river/road)
+                # carry a sprite/asset thumbnail that ExplorerPanel prefers
+                # over icon_glyph whenever it's set (see
+                # explorer.py._make_item_widget) — without clearing it here,
+                # a custom icon would be saved but never actually show,
+                # since the thumbnail always wins the render.
+                node.thumbnail = None
+            node.label_color = row.get("label_color") or None
+
+        for root in roots:
+            _visit(root)
+
+    @staticmethod
+    def _override_key_for(node: ExplorerNode) -> str | None:
+        region_id = node.payload.get("region_id")
+        if region_id:
+            return f"region:{region_id}"
+        if node.kind == "terrain":
+            return node.id  # already the stable f"terrain:{asset_id}:{blob_idx}"
+        item = node.payload.get("item")
+        if item is not None:
+            row_id = item.data(1)
+            if row_id:
+                return f"item:{row_id}"
+        return None
+
+    def _on_icon_edit(self, node: ExplorerNode):
+        if node.override_key is None or not self._uow:
+            return
+        from src.layouts.panels.explorer_icon_dialog import ExplorerIconDialog
+        dlg = ExplorerIconDialog(
+            node.icon_glyph, node.label_color,
+            default_icon=node.default_icon or node.icon_glyph,
+            parent=self._l.left_panel.window(),
+        )
+        if not dlg.exec():
+            return
+        icon, label_color = dlg.values()
+        self._uow.explorer_overrides.upsert(node.override_key, icon, label_color)
+        self.refresh_now()
 
     @staticmethod
     def _category_node(kind: str, label: str, glyph: str, children: list[ExplorerNode]) -> ExplorerNode:
@@ -215,8 +288,7 @@ class ExplorerSyncMediator:
         for asset_id, layer in engine.terrain_layers().items():
             if layer.item.scene() is None:
                 continue
-            asset = asset_engine.get_asset(asset_id) if asset_engine else None
-            asset_name = asset.name if asset else "Terreno"
+            asset_name = (asset_engine.library.get_name_by_id(asset_id) if asset_engine else None) or "Terreno"
             thumb = asset_engine.get_pixmap(asset_id) if asset_engine else None
             item_selected = id(layer.item) in self._selected_item_ids
             touched_blobs = layer.item.selected_blobs_local() if item_selected else None
@@ -257,7 +329,7 @@ class ExplorerSyncMediator:
                 terrain_node = ExplorerNode(
                     id=f"terrain:{asset_id}:{blob_idx}", kind="terrain",
                     selected=blob_selected, label=asset_name,
-                    thumbnail=thumb, icon_glyph="🟫",
+                    thumbnail=thumb, icon_glyph=DEFAULT_ICON_BY_KIND["terrain"],
                     payload={"scene_pos": blob.center_scene, "item": layer.item},
                     children=plain_children + [n for _rid, n in region_sub_nodes],
                 )
@@ -303,7 +375,7 @@ class ExplorerSyncMediator:
                 )
                 nodes.append(ExplorerNode(
                     id=f"effect:{asset_id}:{blob_idx}", kind="effect",
-                    selected=blob_selected, label=effect_key, icon_glyph="✨",
+                    selected=blob_selected, label=effect_key, icon_glyph=DEFAULT_ICON_BY_KIND["effect"],
                     payload={"scene_pos": blob.center_scene, "item": layer.item},
                 ))
         return nodes
@@ -337,7 +409,7 @@ class ExplorerSyncMediator:
         return ExplorerNode(
             id=node_id or f"region:{region_id}", kind="region",
             selected=selected, label=name,
-            thumbnail=thumb, icon_glyph="🗺", payload={"region_id": region_id},
+            thumbnail=thumb, icon_glyph=DEFAULT_ICON_BY_KIND["region"], payload={"region_id": region_id},
         )
 
     def _build_region_category(self, selected_region_ids: set[str]) -> ExplorerNode:
@@ -386,7 +458,7 @@ class ExplorerSyncMediator:
             nodes.append(ExplorerNode(
                 id=f"asset:{id(item)}", kind="asset",
                 selected=id(item) in self._selected_item_ids,
-                label=name or "Asset", thumbnail=thumb, icon_glyph="🖼",
+                label=name or "Asset", thumbnail=thumb, icon_glyph=DEFAULT_ICON_BY_KIND["asset"],
                 payload={"scene_pos": item.scenePos(), "item": item},
             ))
         return nodes
@@ -412,7 +484,7 @@ class ExplorerSyncMediator:
             nodes.append(ExplorerNode(
                 id=f"river:{id(item)}", kind="asset",
                 selected=id(item) in self._selected_item_ids,
-                label=name or "Rio", thumbnail=thumb, icon_glyph="🌊",
+                label=name or "Rio", thumbnail=thumb, icon_glyph=DEFAULT_ICON_BY_KIND["river"],
                 payload={"scene_pos": item.mapToScene(item.boundingRect().center()), "item": item},
             ))
         return nodes
@@ -438,7 +510,7 @@ class ExplorerSyncMediator:
             nodes.append(ExplorerNode(
                 id=f"road:{id(item)}", kind="asset",
                 selected=id(item) in self._selected_item_ids,
-                label=name or "Estrada", thumbnail=thumb, icon_glyph="🛤",
+                label=name or "Estrada", thumbnail=thumb, icon_glyph=DEFAULT_ICON_BY_KIND["road"],
                 payload={"scene_pos": item.mapToScene(item.boundingRect().center()), "item": item},
             ))
         return nodes
@@ -449,7 +521,7 @@ class ExplorerSyncMediator:
             data = item.data(0)
             nodes.append(ExplorerNode(
                 id=f"npc:{id(item)}", kind="npc", selected=id(item) in self._selected_item_ids,
-                label=data.get("name") or "NPC", thumbnail=item.pixmap(), icon_glyph="🧙",
+                label=data.get("name") or "NPC", thumbnail=item.pixmap(), icon_glyph=DEFAULT_ICON_BY_KIND["npc"],
                 payload={"scene_pos": item.scenePos(), "item": item},
             ))
         return nodes
@@ -460,7 +532,7 @@ class ExplorerSyncMediator:
             data = item.data(0)
             nodes.append(ExplorerNode(
                 id=f"mob:{id(item)}", kind="mob", selected=id(item) in self._selected_item_ids,
-                label=data.get("name") or "Mob", thumbnail=item.pixmap(), icon_glyph="🐗",
+                label=data.get("name") or "Mob", thumbnail=item.pixmap(), icon_glyph=DEFAULT_ICON_BY_KIND["mob"],
                 payload={"scene_pos": item.scenePos(), "item": item},
             ))
         return nodes
@@ -472,7 +544,7 @@ class ExplorerSyncMediator:
             label = (text[:24] + "…") if len(text) > 24 else (text or "Texto")
             nodes.append(ExplorerNode(
                 id=f"text:{id(item)}", kind="text", selected=id(item) in self._selected_item_ids,
-                label=label, icon_glyph="📝",
+                label=label, icon_glyph=DEFAULT_ICON_BY_KIND["text"],
                 payload={"scene_pos": item.scenePos(), "item": item},
             ))
         return nodes
@@ -482,7 +554,7 @@ class ExplorerSyncMediator:
         for item in self._scene_items_by_type("light"):
             nodes.append(ExplorerNode(
                 id=f"light:{id(item)}", kind="light", selected=id(item) in self._selected_item_ids,
-                label="Luz", icon_glyph="💡",
+                label="Luz", icon_glyph=DEFAULT_ICON_BY_KIND["light"],
                 payload={"scene_pos": item.scenePos(), "item": item},
             ))
         return nodes
@@ -490,9 +562,18 @@ class ExplorerSyncMediator:
     def _collect_marker_nodes(self) -> list[ExplorerNode]:
         nodes = []
         for item in self._scene_items_by_type("marker"):
+            # The Progressão panel's map pins (map_overlay.py's
+            # _MapMarkerItem) share this same "marker" item_type tag —
+            # deliberately, so they ride the same "Marcadores" layer-
+            # visibility entry as a real placed one — but they're a plain
+            # decorative QGraphicsObject with no MarkerProperties, so the
+            # Explorer tree (which lists real, placeable markers only)
+            # skips anything that isn't an actual MarkerItem.
+            if not isinstance(item, MarkerItem):
+                continue
             nodes.append(ExplorerNode(
                 id=f"marker:{id(item)}", kind="marker", selected=id(item) in self._selected_item_ids,
-                label=item.props.name or "Marcador", icon_glyph=item.props.icon or "📍",
+                label=item.props.name or "Marcador", icon_glyph=item.props.icon or DEFAULT_ICON_BY_KIND["marker"],
                 payload={"scene_pos": item.scenePos(), "item": item},
             ))
         return nodes

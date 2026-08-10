@@ -56,20 +56,6 @@ def default_intensity(light_type: str) -> float:
     return _DEFAULT_INTENSITY.get(light_type, 0.75)
 
 
-def light_label(key: str) -> str:
-    for t_key, _icon, label in LIGHT_TYPES:
-        if t_key == key:
-            return label
-    return LIGHT_TYPES[0][2]
-
-
-def light_icon(key: str) -> str:
-    for t_key, icon, _label in LIGHT_TYPES:
-        if t_key == key:
-            return icon
-    return LIGHT_TYPES[0][1]
-
-
 @dataclass
 class LightProperties:
     light_type: str = "point"

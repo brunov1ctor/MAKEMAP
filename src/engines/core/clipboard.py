@@ -94,20 +94,6 @@ class ClipboardEngine(QObject):
         self.pasted.emit(new_items)
         return new_items
 
-    def paste_in_place(self) -> list[dict]:
-        """Paste at the exact original position."""
-        if not self._clipboard:
-            return []
-
-        new_items = []
-        for item_data in self._clipboard.items:
-            new_data = item_data.copy()
-            new_data["id"] = str(uuid.uuid4())
-            new_items.append(new_data)
-
-        self.pasted.emit(new_items)
-        return new_items
-
     def duplicate(self, items: list[QGraphicsItem]) -> list[dict]:
         """Copy and immediately paste with offset."""
         self.copy(items)
@@ -122,18 +108,6 @@ class ClipboardEngine(QObject):
     @property
     def has_content(self) -> bool:
         return self._clipboard is not None and len(self._clipboard.items) > 0
-
-    def paste_from_history(self, index: int, target_pos: QPointF | None = None) -> list[dict]:
-        """Paste a specific entry from clipboard history."""
-        if index < 0 or index >= len(self._history):
-            return []
-
-        self._clipboard = self._history[index]
-        self._paste_count = 0
-        return self.paste(target_pos)
-
-    def clear_history(self):
-        self._history.clear()
 
     # --- Serialization ---
 

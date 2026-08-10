@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout
-from PySide6.QtCore import Qt, QPointF, Signal
+import shiboken6
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QApplication, QLineEdit, QTextEdit, QPlainTextEdit,
+    QAbstractSpinBox, QComboBox,
+)
+from PySide6.QtCore import Qt, QPointF, QObject, QEvent, Signal
 from PySide6.QtGui import QMouseEvent, QKeyEvent
 
 from src.canvas.viewport import Viewport
@@ -13,7 +17,7 @@ from src.canvas.pan_controller import KeyboardPanController, PAN_KEYS
 from src.canvas.tools.base import ToolManager
 from src.canvas.tools.defaults import PanTool
 from src.canvas.tools.select import SelectTool
-from src.canvas.tools.brush_tool import BrushTool, RegionTool, RoadTool, RiverTool, RegionBrushTool
+from src.canvas.tools.brush_tool import BrushTool, RegionTool, RegionBrushTool
 from src.canvas.tools.path_tool import RiverPathTool, RoadPathTool
 from src.canvas.tools.text_tool import TextTool
 from src.canvas.text_item import TextItem
@@ -37,6 +41,56 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPainterPath, QBrush, QPen, QColor, QPolygonF
 from src.canvas.item_utils import suppress_selection_decoration
+from src.canvas.z_order import ZOrder
+
+_PAN_KEY_GUARD_TEXT_INPUT_TYPES = (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox)
+
+
+class _PanKeyGuard(QObject):
+    """App-wide filter: forwards pan keys (WASD/arrows) to the canvas
+    viewport regardless of which widget currently has focus — so
+    clicking a button in any panel never blocks map panning. Except
+    when the key is actually headed into a text-entry widget (a
+    QLineEdit/QTextEdit/spin box/combo currently focused somewhere
+    else, e.g. the Progressão card's inline rename field) — there,
+    "wasd" must type letters, not pan the map out from under it."""
+    def __init__(self, pan_ctrl, vp, engine, parent=None):
+        super().__init__(parent)
+        self._pan = pan_ctrl
+        self._vp = vp
+        self._engine = engine
+
+    def eventFilter(self, obj, event):
+        # Installed app-wide (see below), so this can still be asked to
+        # filter one last queued event during interpreter shutdown, after
+        # Qt has already deleted the underlying C++ Viewport — touching
+        # self._vp then raises (see assets/card.py's own isValid() guard
+        # for the same class of teardown-order hazard), so bail out early
+        # instead of crashing on the way out.
+        if not shiboken6.isValid(self._vp):
+            return False
+        is_vp = obj is self._vp or obj is self._vp.viewport()
+        if not is_vp:
+            # Checked two ways: `obj` itself (the event's declared
+            # receiver) AND the application's actual focus widget.
+            # They're normally the same object for a real keypress,
+            # but relying on `obj` alone missed real cases (e.g. a
+            # popup's field that already has genuine Qt focus) —
+            # this is strictly more permissive, never less.
+            if (isinstance(obj, _PAN_KEY_GUARD_TEXT_INPUT_TYPES)
+                    or isinstance(QApplication.focusWidget(), _PAN_KEY_GUARD_TEXT_INPUT_TYPES)):
+                return False
+            if (event.type() == QEvent.Type.KeyPress
+                    and not event.isAutoRepeat()
+                    and event.key() in PAN_KEYS):
+                self._engine._on_key_press(event)
+                return True
+            if (event.type() == QEvent.Type.KeyRelease
+                    and not event.isAutoRepeat()
+                    and event.key() in PAN_KEYS
+                    and self._pan.active):
+                self._pan.key_released(event.key())
+        return False
 
 
 class CanvasEngine(QWidget):
@@ -160,34 +214,7 @@ class CanvasEngine(QWidget):
 
         # Stop pan when the viewport loses focus (e.g. user clicks a panel)
         # so WASD keys don't stay "stuck" after focus leaves the canvas.
-        from PySide6.QtWidgets import QApplication
-        from PySide6.QtCore import QObject, QEvent
-
-        class _PanKeyGuard(QObject):
-            """App-wide filter: forwards pan keys (WASD/arrows) to the canvas
-            viewport regardless of which widget currently has focus — so
-            clicking a button in any panel never blocks map panning."""
-            def __init__(self, pan_ctrl, vp, engine, parent=None):
-                super().__init__(parent)
-                self._pan = pan_ctrl
-                self._vp = vp
-                self._engine = engine
-            def eventFilter(self, obj, event):
-                from src.canvas.pan_controller import PAN_KEYS
-                is_vp = obj is self._vp or obj is self._vp.viewport()
-                if not is_vp:
-                    if (event.type() == QEvent.Type.KeyPress
-                            and not event.isAutoRepeat()
-                            and event.key() in PAN_KEYS):
-                        self._engine._on_key_press(event)
-                        return True
-                    if (event.type() == QEvent.Type.KeyRelease
-                            and not event.isAutoRepeat()
-                            and event.key() in PAN_KEYS
-                            and self._pan.active):
-                        self._pan.key_released(event.key())
-                return False
-
+        # See _PanKeyGuard (module scope, above) for the filter itself.
         self._pan_key_guard = _PanKeyGuard(self._pan, self.viewport, self, self)
         QApplication.instance().installEventFilter(self._pan_key_guard)
 
@@ -224,10 +251,6 @@ class CanvasEngine(QWidget):
         self._region_tool = RegionTool(self.viewport)
         self._region_tool.on_region_finalized(self._on_region_finalized)
         self.tool_manager.register(self._region_tool)
-
-        # Map tools (legacy click-polygon)
-        self.tool_manager.register(RoadTool(self.viewport))
-        self.tool_manager.register(RiverTool(self.viewport))
 
         # Animated path tools — activated automatically when a road/water
         # asset is selected in the Brush panel (see BrushMediator.on_asset_selected)
@@ -281,18 +304,6 @@ class CanvasEngine(QWidget):
         just need name/thumbnail lookups by asset_id, without reaching
         into the private `_asset_engine` attribute from outside."""
         return self._asset_engine
-
-    def set_region_preset(self, preset_key: str):
-        """Biome preset (see engines/map/presets.py) to populate the next
-        Região polygon with — picked via the toolbar's Bioma submenu.
-        Empty string reverts to the plain default generator."""
-        self._region_preset = preset_key or ""
-
-    def set_zone_type(self, zone_key: str):
-        """Zone type (see engines/map/zones.py) to paint the next Região
-        polygon as — armed by the Região panel's "+ Novo" per category.
-        Empty string reverts to the plain default generator (or biome)."""
-        self._zone_type = zone_key or ""
 
     def create_region_layer(self, color: QColor) -> RegionLayer:
         """A blank, paintable Região layer — brush-painted colored area
@@ -370,9 +381,9 @@ class CanvasEngine(QWidget):
         item = QGraphicsPathItem(path)
         item.setBrush(QBrush(color))
         item.setPen(QPen(color.darker(150), 1.5))
-        # Above painted terrain (z=1) but below stamped/generated assets
-        # (z=10+) — a ground-level tint, not an object sitting on top.
-        item.setZValue(5)
+        # Above painted terrain but below stamped/generated assets — a
+        # ground-level tint, not an object sitting on top.
+        item.setZValue(ZOrder.ZONE_FILL)
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
         item.setData(0, {"item_type": "zone", "zone_type": zone_key, "region_id": region_id})
         suppress_selection_decoration(item)
@@ -447,7 +458,14 @@ class CanvasEngine(QWidget):
             item.setScale(gen_item.scale)
             item.setRotation(gen_item.rotation)
             item.setOpacity(gen_item.opacity)
-            item.setZValue(0.5 + gen_item.z_offset)
+            # Was 0.5 + z_offset (below ZOrder.STAMPED_OBJECT) — procedurally
+            # generated assets (forest/mountain/village presets) were never
+            # picked up by terrain_mediator/region_mediator's ">= STAMPED_OBJECT"
+            # object-count heuristic. Bumped to the same tier as manually
+            # placed stamps; z_offset keeps its small jitter as a tiebreaker
+            # within the tier (avoids identical z-fighting between overlapping
+            # generated sprites, e.g. MountainGenerator's random 0-5 offset).
+            item.setZValue(ZOrder.STAMPED_OBJECT + gen_item.z_offset)
             item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
             item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
             item.setData(0, {"item_type": "asset"})
@@ -817,12 +835,6 @@ class CanvasEngine(QWidget):
         self.viewport.zoom_reset()
 
     # --- Sound ---
-
-    def start_sound(self):
-        self.sound_engine.start()
-
-    def stop_sound(self):
-        self.sound_engine.stop()
 
     def _update_sound_context(self):
         """Scan visible items and notify sound engine layers."""

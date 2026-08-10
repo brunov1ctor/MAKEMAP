@@ -155,9 +155,6 @@ class _MentionPopup(QWidget):
         list_h = min(200, row_h * max(1, len(filtered)) + 8)
         self.setFixedSize(272, list_h + self._search.height() + 20)
 
-    def has_entries(self) -> bool:
-        return self._list.count() > 0
-
     def _move_selection(self, delta: int):
         row = self._list.currentRow()
         self._list.setCurrentRow(max(0, min(self._list.count() - 1, row + delta)))
@@ -469,32 +466,6 @@ class RichTextEditor(QWidget):
         if not self._mention_popup:
             return
         self._mention_popup.move(self._body.mapToGlobal(self._body.cursorRect().bottomLeft()))
-
-    def _refresh_mention_popup(self, query: str):
-        if not self._mention_popup:
-            return
-        query = query.lower()
-        filtered = [e for e in self._catalog if query in (e.get("name") or "").lower()][:30]
-        self._mention_popup.set_entries(filtered)
-        if not filtered:
-            self._close_mention_popup()
-
-    def _update_mention_query(self):
-        if self._mention_anchor_pos is None:
-            return
-        cursor_pos = self._body.textCursor().position()
-        if cursor_pos <= self._mention_anchor_pos:
-            # Backspaced past (or moved before) the "@" itself.
-            self._close_mention_popup()
-            return
-        query = self._body.toPlainText()[self._mention_anchor_pos + 1:cursor_pos]
-        if " " in query or "\n" in query:
-            # A space/newline ends the mention search, same as Teams/Slack
-            # — the typed "@query" just stays as plain text.
-            self._close_mention_popup()
-            return
-        self._refresh_mention_popup(query)
-        self._position_mention_popup()
 
     def _handle_mention_popup_key(self, event) -> bool:
         """Called from _MentionTextEdit.keyPressEvent BEFORE the normal Qt

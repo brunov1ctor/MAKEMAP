@@ -49,8 +49,13 @@ class IconPicker(QScrollArea):
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         grid = QGridLayout(container)
-        grid.setContentsMargins(6, 6, 6, 6)
-        grid.setSpacing(6)
+        # Tight enough that 6 columns of button_size-wide buttons actually
+        # fit inside the panel's content width (accounting for the
+        # QScrollArea's own border + the vertical scrollbar it almost
+        # always shows, since the full ICONS palette overflows max_height)
+        # — wider margins/spacing here used to clip the last column.
+        grid.setContentsMargins(4, 6, 4, 6)
+        grid.setSpacing(3)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)

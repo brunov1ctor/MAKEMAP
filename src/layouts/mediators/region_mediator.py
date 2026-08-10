@@ -12,6 +12,7 @@ before the entry even exists.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -19,11 +20,14 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QPointF, QTimer
 from PySide6.QtGui import QColor, QPixmap
 
+from src.canvas.z_order import ZOrder
 from src.engines.map.region_layer import RegionLayer
 from src.engines.map.zones import DEFAULT_ZONE_COLOR
 from src.layouts.panels.region.panel import RegionSettingsPanel
 from src.layouts.panels.region.region_edit_panel import RegionEditPanel
 from src.services.project_assets import import_asset, resolve_asset_path
+
+logger = logging.getLogger("MAKEMAP")
 
 if TYPE_CHECKING:
     from src.layouts.main_layout import MainLayout
@@ -356,12 +360,12 @@ class RegionMediator:
 
     def _count_objects_in(self, zone: _Zone) -> int:
         """Heuristic: stamped/generated assets are documented (paint_zone,
-        brush_tool) to sit at zValue >= 10, above terrain (1) and zones
-        (5) — count scene items at that tier whose position falls inside
-        this zone's painted mask."""
+        brush_tool, procedural generation) to sit at ZOrder.STAMPED_OBJECT
+        or above — count scene items at that tier whose position falls
+        inside this zone's painted mask."""
         count = 0
         for item in self._l.canvas.engine.viewport.scene().items():
-            if item.zValue() < 10:
+            if item.zValue() < ZOrder.STAMPED_OBJECT:
                 continue
             if zone.layer.contains_point(item.scenePos()):
                 count += 1
@@ -524,8 +528,7 @@ class RegionMediator:
             if self._uow:
                 deleted = self._uow.zones.delete(zone.id)
                 if not deleted:
-                    import logging
-                    logging.getLogger("MAKEMAP").warning(
+                    logger.warning(
                         "on_removed: zones.delete(%s) afetou 0 linhas — zona pode não ter sido persistida",
                         zone.id,
                     )

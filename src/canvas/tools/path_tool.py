@@ -21,17 +21,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Callable
 
 from PySide6.QtCore import Qt, QPointF
-from PySide6.QtGui import QMouseEvent, QKeyEvent, QPixmap, QPen, QColor, QBrush
+from PySide6.QtGui import QMouseEvent, QKeyEvent, QPixmap
 from PySide6.QtWidgets import QGraphicsEllipseItem
 
 from src.canvas.tools.base import BaseTool
+from src.canvas.tools.brush_tool import _DashedCursorMixin
 from src.canvas.path_item import RiverPathItem, RoadPathItem
 
 if TYPE_CHECKING:
     from src.canvas.viewport import Viewport
 
 
-class _BasePathTool(BaseTool):
+class _BasePathTool(_DashedCursorMixin, BaseTool):
     """Shared logic for RiverPathTool and RoadPathTool."""
 
     _ITEM_CLASS = None  # set by subclass
@@ -77,49 +78,18 @@ class _BasePathTool(BaseTool):
         live to a mid-edit trace, same as set_width already does above."""
         return self._active_item
 
+    def _cursor_diameter(self) -> float:
+        return self._width
+
     def set_width(self, w: float):
         self._width = max(2.0, w)
         if self._active_item:
             self._active_item.set_width(w)
-        self._update_cursor_size()
-
-    def set_minimap(self, minimap):
-        self._minimap = minimap
+        self.update_cursor_size()
 
     def activate(self):
         super().activate()
         self._show_cursor()
-
-    def deactivate(self):
-        self._hide_cursor()
-        super().deactivate()
-
-    def _show_cursor(self):
-        if self._cursor_item:
-            return
-        r = self._width / 2
-        self._cursor_item = QGraphicsEllipseItem(-r, -r, self._width, self._width)
-        self._cursor_item.setPen(QPen(QColor(255, 255, 255, 150), 1.5, Qt.PenStyle.DashLine))
-        self._cursor_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-        self._cursor_item.setZValue(10000)
-        self.viewport.scene().addItem(self._cursor_item)
-        if self._minimap:
-            self._minimap.register_hidden_item(self._cursor_item)
-
-    def _hide_cursor(self):
-        if self._cursor_item:
-            if self._minimap:
-                self._minimap.unregister_hidden_item(self._cursor_item)
-            self.viewport.scene().removeItem(self._cursor_item)
-            self._cursor_item = None
-
-    def _update_cursor_size(self):
-        if self._cursor_item:
-            rect = self._cursor_item.rect()
-            cx = rect.x() + rect.width() / 2
-            cy = rect.y() + rect.height() / 2
-            r = self._width / 2
-            self._cursor_item.setRect(cx - r, cy - r, self._width, self._width)
 
     def set_texture(self, pixmap: QPixmap | None, asset_id: str = ""):
         self._texture = pixmap
@@ -260,6 +230,7 @@ class _BasePathTool(BaseTool):
                 self._finalize()
             else:
                 self._cancel()
+        self._hide_cursor()
         super().deactivate()
 
     # ─── Internal ────────────────────────────────────────────────────────

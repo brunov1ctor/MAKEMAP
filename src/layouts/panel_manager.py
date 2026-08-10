@@ -115,11 +115,6 @@ class PanelManager:
         else:
             self.show(name)
 
-    def hide_all(self):
-        for entry in self._panels.values():
-            if entry.widget.isVisible():
-                self._do_hide(entry)
-
     def is_visible(self, name: str) -> bool:
         entry = self._panels.get(name)
         return entry.widget.isVisible() if entry else False

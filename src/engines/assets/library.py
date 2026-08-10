@@ -44,6 +44,8 @@ from PySide6.QtGui import QPixmap, QImage
 
 from src.engines.assets.thumbnail import ThumbnailGenerator
 from src.engines.assets.cache import AssetCache
+from src.database.connection import Database
+from src.database.migrations.library_schema import run_library_migrations
 
 logger = logging.getLogger("MAKEMAP")
 
@@ -71,6 +73,14 @@ def get_shared_db() -> sqlite3.Connection:
         _shared_db = sqlite3.connect(str(LIBRARY_DB))
         _shared_db.row_factory = sqlite3.Row
     return _shared_db
+
+
+def close_shared_db():
+    """Close the process-wide connection opened by get_shared_db(), if any."""
+    global _shared_db
+    if _shared_db is not None:
+        _shared_db.close()
+        _shared_db = None
 
 CATEGORY_FOLDERS = [
     "terrain",
@@ -186,45 +196,19 @@ class AssetLibrary(QObject):
     # ─── Database ────────────────────────────────────────────────────────
 
     def _init_db(self) -> sqlite3.Connection:
-        db = sqlite3.connect(str(LIBRARY_DB))
-        db.row_factory = sqlite3.Row
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS assets (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                category TEXT DEFAULT '',
-                source_path TEXT NOT NULL UNIQUE,
-                width INTEGER DEFAULT 0,
-                height INTEGER DEFAULT 0,
-                hash TEXT DEFAULT '',
-                tags TEXT DEFAULT '[]',
-                favorite INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        # Migrations
-        cols = [r[1] for r in db.execute("PRAGMA table_info(assets)").fetchall()]
-        if "favorite" not in cols:
-            db.execute("ALTER TABLE assets ADD COLUMN favorite INTEGER DEFAULT 0")
-        if "sort_order" not in cols:
-            db.execute("ALTER TABLE assets ADD COLUMN sort_order INTEGER DEFAULT 0")
-        if "style" not in cols:
-            db.execute("ALTER TABLE assets ADD COLUMN style TEXT DEFAULT ''")
-        if "shore_foam" not in cols:
-            db.execute("ALTER TABLE assets ADD COLUMN shore_foam INTEGER DEFAULT 1")
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS asset_sounds (
-                id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                asset_id TEXT NOT NULL,
-                prefix   TEXT NOT NULL,
-                path     TEXT NOT NULL,
-                volume   REAL DEFAULT 0.7,
-                display_name TEXT DEFAULT '',
-                UNIQUE(asset_id, prefix)
-            )
-        """)
-        db.commit()
-        return db
+        """Uses the same Database class + versioned-migration approach a
+        project's own database does (see connection.py/migrations/
+        library_schema.py) instead of a separate hand-rolled sqlite3.connect()
+        with ad-hoc "ALTER TABLE if column missing" migrations — this also
+        picks up the same WAL journal mode + foreign_keys pragma connect()
+        already applies for a project DB, which the old raw connect() here
+        never set. self._db stays a plain sqlite3.Connection (Database.conn)
+        since every other method in this class calls .execute()/.commit()
+        on it directly."""
+        self._database = Database(LIBRARY_DB)
+        self._database.connect()
+        run_library_migrations(self._database)
+        return self._database.conn
 
     def _migrate_legacy_layout(self):
         """Move assets registered before the style dimension existed.
@@ -281,6 +265,12 @@ class AssetLibrary(QObject):
         paths = self._watcher.directories()
         if paths:
             self._watcher.removePaths(paths)
+
+    def close(self):
+        """Close this instance's own DB connection and the shared one
+        (see get_shared_db). Call once, on app shutdown, after stop()."""
+        self._database.close()
+        close_shared_db()
 
     # ─── Sync ────────────────────────────────────────────────────────────
 
@@ -566,33 +556,6 @@ class AssetLibrary(QObject):
         self._db.commit()
 
     # ─── Sounds ──────────────────────────────────────────────────────────
-
-    def get_sound(self, asset_id: str, prefix: str) -> dict | None:
-        """Retorna {path, volume, display_name} ou None."""
-        row = self._db.execute(
-            "SELECT path, volume, display_name FROM asset_sounds WHERE asset_id=? AND prefix=?",
-            (asset_id, prefix)
-        ).fetchone()
-        if not row:
-            return None
-        return {"path": row["path"], "volume": row["volume"], "display_name": row["display_name"]}
-
-    def set_sound(self, asset_id: str, prefix: str, path: str, volume: float = 0.7, display_name: str = ""):
-        """Insere ou atualiza o som de um asset."""
-        self._db.execute(
-            """INSERT INTO asset_sounds (asset_id, prefix, path, volume, display_name)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(asset_id, prefix) DO UPDATE SET
-                   path=excluded.path, volume=excluded.volume, display_name=excluded.display_name""",
-            (asset_id, prefix, path, volume, display_name)
-        )
-        self._db.commit()
-
-    def remove_sound(self, asset_id: str, prefix: str):
-        self._db.execute(
-            "DELETE FROM asset_sounds WHERE asset_id=? AND prefix=?", (asset_id, prefix)
-        )
-        self._db.commit()
 
     # ─── Helpers ─────────────────────────────────────────────────────────
 

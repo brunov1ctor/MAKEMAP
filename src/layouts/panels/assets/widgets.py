@@ -439,9 +439,6 @@ class SoundColumn(QWidget):
         else:
             self._on_rename()
 
-    def _on_name_dblclick(self, event):
-        pass  # substituido por _toggle_rename
-
     def _set_shared_style(self, shared: bool, color: QColor | None = None):
         """Borda na cor do grupo quando o som é compartilhado com outro asset
         — cada grupo de arquivo idêntico tem sua própria cor (SoundRegistry)."""
@@ -589,10 +586,6 @@ class SoundColumn(QWidget):
         self._player.setAudioOutput(self._output)
         self._player.setSource(QUrl.fromLocalFile(str(Path(self._sound_path).resolve())))
         self._player.play()
-
-    def get_config(self) -> dict:
-        return {"sound": self._sound_path, "volume": self._vol.value() / 100.0}
-
 
 class DropZone(QFrame):
     """Drop zone para adicionar novos assets."""

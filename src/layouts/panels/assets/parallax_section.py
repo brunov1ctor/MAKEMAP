@@ -1369,6 +1369,3 @@ class ParallaxPresetSection(QFrame):
         self._refresh_layers()
         self._refresh_json_template_if_open()
 
-    def card_count(self) -> int:
-        preset = get_parallax_library().get_preset(self.preset_key)
-        return len(preset.layers) if preset else 0

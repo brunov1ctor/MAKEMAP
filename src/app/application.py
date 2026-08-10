@@ -3,7 +3,6 @@
 import sys
 import logging
 from pathlib import Path
-from datetime import datetime
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog,
@@ -20,7 +19,6 @@ from src.services.autosave import AutosaveService
 from src.services.recents import add_recent, PROJECTS_DIR
 from src.database.unit_of_work import UnitOfWork
 from src.engines.assets.engine import AssetEngine
-from src.layouts.panels.projects_panel import ProjectsPanel
 
 VERSION = "0.1.0"
 APP_NAME = "MAKEMAP"
@@ -65,13 +63,14 @@ class MainWindow(QMainWindow):
         # Inject asset engine into canvas immediately
         self.layout_widget.canvas.engine.set_asset_engine(self.asset_engine)
 
-        # Projects panel (overlay) — legacy, now managed by MainLayout fullscreen views
-        self._projects_panel = ProjectsPanel(parent=self._bg)
-        self._projects_panel.hide()
-        self._projects_panel.closed.connect(self._hide_projects)
-        self._projects_panel.project_opened.connect(self._on_panel_project_opened)
-        self._projects_panel.new_requested.connect(self.new_project)
-        self._projects_panel.delete_requested.connect(self._on_panel_delete)
+        # Mark the project dirty (and flip the status label to "Alterações
+        # pendentes") on every completed edit — same history_changed signal
+        # every mediator's own DB-sync debounce already listens to. Without
+        # this, AutosaveService.notify_change() was never called by
+        # anything, so project.dirty stayed permanently False and
+        # _do_autosave's guard silently skipped every timer tick — autosave
+        # was wired up but never actually fired.
+        self.layout_widget.canvas.engine.history.history_changed.connect(self.autosave.notify_change)
 
         self._setup_shortcuts()
         self._screen_watch_connected = False
@@ -196,27 +195,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Erro", str(e))
 
-    def _toggle_projects(self):
-        if self._projects_panel.isVisible():
-            self._hide_projects()
-        else:
-            self._show_projects()
-
-    def _show_projects(self):
-        p = self._projects_panel
-        p.set_active(str(self.project.path) if self.project else "")
-        pw = 420
-        ph = min(550, self.height() - 100)
-        p.setFixedSize(pw, ph)
-        p.move(20, 76)
-        p.raise_()
-        p.show()
-
-    def _hide_projects(self):
-        self._projects_panel.hide()
-
     def _on_panel_project_opened(self, proj: Project):
-        self._hide_projects()
         self._load_project(proj)
         # Also close fullscreen menu if open
         self.layout_widget._menu_med._hide_menu_view()
@@ -225,46 +204,6 @@ class MainWindow(QMainWindow):
         """Make `proj` the active project without touching any panel visibility."""
         self.project = proj
         self._on_project_loaded()
-
-    def _on_panel_delete(self, path: str):
-        from pathlib import Path as P
-        target = P(path)
-        if self.project and str(self.project.path) == path:
-            self.autosave.stop()
-            if self.uow:
-                self.uow.close()
-                self.uow = None
-        if target.exists():
-            import shutil
-            shutil.rmtree(target)
-        self.project = None
-        self.setWindowTitle(f"{APP_NAME} — v{VERSION}")
-        self.layout_widget.top_bar.set_project_name("")
-        self.layout_widget.top_bar.set_modules_enabled(False)
-        self._projects_panel.set_active("")
-        self._projects_panel.refresh()
-
-    def delete_project(self):
-        if not self.project:
-            return
-        reply = QMessageBox.warning(
-            self, "Deletar Projeto",
-            f"Tem certeza que deseja deletar '{self.project.meta.name}'?\n\n"
-            "Esta ação é irreversível. Todos os dados serão perdidos.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        self.autosave.stop()
-        if self.uow:
-            self.uow.close()
-            self.uow = None
-        self.project.delete()
-        self.project = None
-        self.setWindowTitle(f"{APP_NAME} — v{VERSION}")
-        self.layout_widget.top_bar.set_project_name("")
-        self.layout_widget.top_bar.set_modules_enabled(False)
-        self.layout_widget.status_bar.save_label.setText("")
 
     # --- Helpers ---
 
@@ -292,13 +231,29 @@ class MainWindow(QMainWindow):
         # Close previous DB
         if self.uow:
             self.uow.close()
+        self.uow = None
+        try:
+            self._wire_project_loaded()
+        except Exception:
+            # A failure partway through leaves some mediators wired to the
+            # new (about-to-be-discarded) uow and others still pointing at
+            # the old one — that mixed state can't be trusted, so fail
+            # closed (no project open) instead of pretending either the old
+            # or the new project is still consistently loaded. Re-raised so
+            # every caller's existing except-Exception-and-show-dialog path
+            # (open_project/save_project_as/_do_open) still surfaces this.
+            if self.uow:
+                self.uow.close()
+            self.uow = None
+            self.project = None
+            self.setWindowTitle(f"{APP_NAME} — v{VERSION}")
+            self.layout_widget.top_bar.set_project_name("")
+            self.layout_widget.top_bar.set_modules_enabled(False)
+            raise
 
+    def _wire_project_loaded(self):
         # Initialize project database
         self.uow = UnitOfWork(self.project.db_path)
-
-        # Connect project DB to asset engine
-        self.asset_engine.set_uow(self.uow)
-        self.asset_engine._project_path = self.project.path
 
         # Connect project DB to terrains (map boundaries) first — Região and
         # Brush both resolve a terrain_id against TerrainMediator.boundaries
@@ -324,11 +279,18 @@ class MainWindow(QMainWindow):
         # Connect project DB to the asset effects editor (per-asset painted regions)
         self.layout_widget._asset_effects_med.set_uow(self.uow)
 
+        # Connect project DB to the Progressão do Mundo panel (loads any
+        # saved pipelines, or seeds the two default ones on a fresh project)
+        self.layout_widget._progression_med.set_uow(self.uow)
+
         # Connect project DB to the Brush tool (loads any saved terrain
         # painting + object stamps, clearing whatever the previous project
-        # had painted) — must run after asset_engine.set_uow() above, since
-        # reloading terrain/stamp textures reads through it.
+        # had painted).
         self.layout_widget._brush_med.set_uow(self.uow)
+
+        # Connect project DB to the Explorer panel (loads any saved
+        # per-element icon/label-color overrides)
+        self.layout_widget._explorer_sync_med.set_uow(self.uow)
 
         # Explorer panel reflects all of the above \u2014 refresh once everything
         # else has finished reloading from the DB (see ExplorerSyncMediator.
@@ -339,7 +301,7 @@ class MainWindow(QMainWindow):
         self.layout_widget.top_bar.set_project_name(self.project.meta.name)
         self.layout_widget.top_bar.set_modules_enabled(True)
         self.layout_widget.status_bar.save_label.setText("Salvo")
-        self.layout_widget.engines.update_stats()
+        self.layout_widget.engines.set_uow(self.uow)
         self.autosave.start(self.project)
         add_recent(self.project.meta.name, str(self.project.path))
 
@@ -367,6 +329,7 @@ class MainWindow(QMainWindow):
             return
         self.autosave.stop()
         self.asset_engine.library.stop()
+        self.asset_engine.library.close()
         if self.uow:
             self.uow.close()
         event.accept()

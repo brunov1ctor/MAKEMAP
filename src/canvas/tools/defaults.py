@@ -1,4 +1,4 @@
-"""Default canvas tools — Move, Pan. (Select lives in src/canvas/tools/select/.)"""
+"""Default canvas tools — Pan. (Select lives in src/canvas/tools/select/.)"""
 
 from __future__ import annotations
 
@@ -9,59 +9,6 @@ from PySide6.QtGui import QMouseEvent
 
 from src.canvas.tools.base import BaseTool
 from src.canvas.tools.interaction import ItemInteraction
-
-
-class MoveTool(BaseTool):
-    """Move selected items by dragging, using TransformEngine."""
-
-    name = "Mover"
-    shortcut = "M"
-    cursor = Qt.CursorShape.SizeAllCursor
-
-    def __init__(self, viewport, transform_engine, history_engine=None):
-        super().__init__(viewport)
-        self._transform = transform_engine
-        self._history = history_engine
-        self._moving = False
-        self._last_pos: QPointF | None = None
-        self._start_pos: QPointF | None = None
-
-    def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
-        if event.button() == Qt.MouseButton.LeftButton:
-            selected = self.viewport.scene().selectedItems()
-            if selected:
-                self._moving = True
-                self._last_pos = scene_pos
-                self._start_pos = scene_pos
-                self._transform.begin_transform(selected)
-
-    def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
-        if self._moving and self._last_pos:
-            delta = scene_pos - self._last_pos
-            selected = self.viewport.scene().selectedItems()
-            self._transform.move(selected, delta.x(), delta.y())
-            self._transform.reposition_handles(selected)
-            self._last_pos = scene_pos
-
-    def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
-        if self._moving:
-            # Push to history
-            if self._history and self._start_pos:
-                total_dx = scene_pos.x() - self._start_pos.x()
-                total_dy = scene_pos.y() - self._start_pos.y()
-                if abs(total_dx) > 0.1 or abs(total_dy) > 0.1:
-                    from src.engines.core.history import MoveItemsCommand
-                    selected = self.viewport.scene().selectedItems()
-                    cmd = MoveItemsCommand(selected, total_dx, total_dy)
-                    # Don't redo — already moved visually
-                    self._history._undo_stack.append(cmd)
-                    self._history._redo_stack.clear()
-                    self._history._emit()
-
-            self._transform.end_transform()
-            self._moving = False
-            self._last_pos = None
-            self._start_pos = None
 
 
 class PanTool(BaseTool):

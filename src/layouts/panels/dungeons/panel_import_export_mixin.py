@@ -1,10 +1,19 @@
 """DungeonsImportExportMixin — the Importar (JSON/CSV paste + Excel drop +
 "Imagens (pasta)") / Exportar (read-only JSON/CSV view + direct-to-file
 Excel) tools panel that takes over the whole body of DungeonsPanel while
-active, mirroring items/panel_import_export_mixin.py's
-ItemsImportExportMixin. One set of cards is shared by a Dungeons/
-Construções toggle instead of duplicating everything twice — see
-_set_entity_mode.
+active. One set of cards is shared by a Dungeons/Construções toggle instead
+of duplicating everything twice — see _set_entity_mode.
+
+The card-building/export/import mechanics themselves (which dispatch
+through the `_current_*` protocol below) live in
+src/layouts/panels/shared/import_export_mixin.py's EntityModeImportExportMixin
+— byte-identical to items/panel_import_export_mixin.py's
+ItemsImportExportMixin before this module was split, so it's shared rather
+than duplicated. What's left here is genuinely Dungeons/Construções-
+specific: the `_current_*` dispatch itself, the JSON/CSV template text, the
+image-match preview/apply (Dungeons/Construções' `image` column and
+reload_dungeons/reload_buildings dispatch), and the export/save/xlsx
+methods (their default filenames differ per entity).
 
 Mixed into DungeonsPanel (see panel.py) — operates on self.* attributes
 that panel owns (self._dungeons, self._buildings, self._uow,
@@ -18,29 +27,24 @@ import logging
 import os
 
 from PySide6.QtWidgets import (
-    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QTextEdit,
-    QPushButton, QWidget, QStackedWidget, QScrollArea, QFileDialog,
+    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton,
+    QWidget, QStackedWidget, QScrollArea, QFileDialog,
 )
 from PySide6.QtCore import Qt
 
 from src.styles.tokens import Colors
-from src.layouts.panels.dungeons.constants import parse_json_records
 from src.layouts.panels.dungeons.import_export_constants import (
     _DUNGEON_TEMPLATE_FIELDS, _DUNGEON_TEMPLATE_DOCS, _DUNGEON_DB_COLUMNS, _DUNGEON_JSON_FIELDS,
     _BUILDING_TEMPLATE_FIELDS, _BUILDING_TEMPLATE_DOCS, _BUILDING_DB_COLUMNS, _BUILDING_JSON_FIELDS,
 )
-from src.layouts.panels.shared.import_export_helpers import (
-    DropZone, normalize_name, index_files_by_stem, normalize_blank_cells,
-    read_json, read_csv, read_xlsx, import_button_row,
-)
+from src.layouts.panels.shared.import_export_helpers import build_tools_header, build_export_view_page
+from src.layouts.panels.shared.import_export_mixin import EntityModeImportExportMixin
 from src.services.project_assets import import_asset
-
-_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 
 logger = logging.getLogger("MAKEMAP")
 
 
-class DungeonsImportExportMixin:
+class DungeonsImportExportMixin(EntityModeImportExportMixin):
     """The body's alternate page (see self._body_stack) — a header (title
     + Dungeons/Construções toggle + ✕ close) above a stack of its own:
     page 0 is Importar (JSON/CSV paste, Excel drop, Imagens por pasta),
@@ -92,6 +96,13 @@ class DungeonsImportExportMixin:
     def _current_import_fn(self):
         return self._import_dungeon_records if self._import_entity_mode == "dungeon" else self._import_building_records
 
+    def _image_folder_hint_text(self) -> str:
+        return (
+            "Escolha uma pasta com imagens nomeadas como as dungeons/construções "
+            "(ex.: \"Cripta Gelada.png\") — cada arquivo cujo nome bater com um "
+            "registro existente recebe essa imagem."
+        )
+
     def _set_entity_mode(self, mode: str):
         if mode == self._import_entity_mode:
             return
@@ -106,17 +117,6 @@ class DungeonsImportExportMixin:
         for reset in self._entity_mode_reset_callbacks:
             reset()
 
-    @staticmethod
-    def _entity_toggle_style(active: bool) -> str:
-        bg = Colors.ACCENT if active else "rgba(255,255,255,0.06)"
-        fg = "#08131F" if active else Colors.TEXT_SECONDARY
-        border = Colors.ACCENT if active else Colors.BORDER_SUBTLE
-        return f"""
-            QToolButton {{ background: {bg}; color: {fg}; border: 1px solid {border};
-                border-radius: 6px; padding: 4px 14px; font-size: 10px; font-weight: bold; }}
-            QToolButton:hover {{ border-color: {Colors.ACCENT}; }}
-        """
-
     # ─── tools panel shell ───
 
     def _build_tools_panel(self) -> QWidget:
@@ -129,28 +129,7 @@ class DungeonsImportExportMixin:
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(8)
 
-        head_row = QHBoxLayout()
-        self._tools_title_lbl = QLabel("")
-        self._tools_title_lbl.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 13px; font-weight: bold; background: transparent; border: none;")
-        head_row.addWidget(self._tools_title_lbl, 1)
-        tools_close_btn = QToolButton()
-        tools_close_btn.setText("✕")
-        tools_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        tools_close_btn.setToolTip("Fechar")
-        tools_close_btn.setStyleSheet(f"""
-            QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 14px; padding: 2px 6px; }}
-            QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
-            QToolTip {{
-                background-color: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-        """)
-        tools_close_btn.clicked.connect(self._close_tools_mode)
-        head_row.addWidget(tools_close_btn)
+        head_row, self._tools_title_lbl, _tools_close_btn = build_tools_header(self._close_tools_mode)
         outer.addLayout(head_row)
 
         mode_row = QHBoxLayout()
@@ -194,37 +173,7 @@ class DungeonsImportExportMixin:
         self._tools_stack.addWidget(import_scroll)
 
         # ── Page 1: read-only JSON/CSV export view ──
-        template_page = QWidget()
-        template_lay = QVBoxLayout(template_page)
-        template_lay.setContentsMargins(0, 0, 0, 0)
-        template_lay.setSpacing(6)
-
-        self._template_hint_lbl = QLabel("")
-        self._template_hint_lbl.setWordWrap(True)
-        self._template_hint_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
-        template_lay.addWidget(self._template_hint_lbl)
-
-        self._template_edit = QTextEdit()
-        self._template_edit.setReadOnly(True)
-        self._template_edit.setStyleSheet(f"""
-            QTextEdit {{ color: {Colors.TEXT_PRIMARY}; font-size: 10px; font-family: Consolas, monospace;
-                background: rgba(0,0,0,0.2); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px; padding: 6px; }}
-        """)
-        template_lay.addWidget(self._template_edit, 1)
-
-        template_btn_row = QHBoxLayout()
-        template_btn_row.addStretch()
-        template_save_btn = QPushButton("💾 Salvar Arquivo")
-        template_save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        template_save_btn.setStyleSheet(f"""
-            QPushButton {{ background: {Colors.ACCENT}; color: #08131F; border: none;
-                border-radius: 6px; padding: 6px 14px; font-size: 10px; font-weight: bold; }}
-            QPushButton:hover {{ background: {Colors.ACCENT_HOVER}; }}
-        """)
-        template_save_btn.clicked.connect(self._on_save_export_file)
-        template_btn_row.addWidget(template_save_btn)
-        template_lay.addLayout(template_btn_row)
-
+        template_page, self._template_hint_lbl, self._template_edit = build_export_view_page(self._on_save_export_file)
         self._tools_stack.addWidget(template_page)
         outer.addWidget(self._tools_stack, 1)
         return panel
@@ -262,253 +211,7 @@ class DungeonsImportExportMixin:
         writer.writerow(self._example_row())
         return buf.getvalue()
 
-    def _build_text_import_card(self, title: str, hint: str, fmt: str) -> QFrame:
-        card = QFrame()
-        card.setStyleSheet(f"QFrame {{ background: rgba(0,0,0,0.15); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px; }}")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(5)
-
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 11px; font-weight: bold; background: transparent; border: none;")
-        lay.addWidget(title_lbl)
-        hint_lbl = QLabel(hint)
-        hint_lbl.setWordWrap(True)
-        hint_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
-        lay.addWidget(hint_lbl)
-
-        edit = QTextEdit()
-        edit.setFixedHeight(120)
-        edit.setStyleSheet(f"""
-            QTextEdit {{ color: {Colors.TEXT_PRIMARY}; font-size: 9px; font-family: Consolas, monospace;
-                background: rgba(0,0,0,0.25); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px; padding: 5px; }}
-        """)
-        lay.addWidget(edit)
-
-        error_lbl = QLabel("")
-        error_lbl.setWordWrap(True)
-        error_lbl.setStyleSheet(f"color: {Colors.ERROR}; font-size: 9px; background: transparent; border: none;")
-        error_lbl.hide()
-        lay.addWidget(error_lbl)
-
-        def reset_to_template():
-            edit.setPlainText(self._json_import_template() if fmt == "json" else self._csv_import_template())
-            error_lbl.hide()
-
-        def do_apply():
-            text = edit.toPlainText()
-            try:
-                if fmt == "json":
-                    data = parse_json_records(text, required_keys=self._current_required_keys())
-                else:
-                    import csv
-                    import io
-                    data = [normalize_blank_cells(dict(row)) for row in csv.DictReader(io.StringIO(text))]
-                    required = self._current_required_keys()
-                    data = [d for d in data if all(d.get(k) for k in required)]
-                    if not data:
-                        needed = " e ".join(f'"{k}"' for k in required)
-                        raise ValueError(f"Nenhum registro válido (cada um precisa de {needed}).")
-            except ValueError as exc:
-                error_lbl.setText(str(exc))
-                error_lbl.show()
-                return
-            except Exception:
-                logger.exception("Falha ao interpretar import de %s (%s).", self._current_entity_label(), fmt)
-                error_lbl.setText("Não foi possível interpretar o conteúdo — confira o formato.")
-                error_lbl.show()
-                return
-            self._current_import_fn()(data)
-            logger.info("Criado(s) %d %s via Importar (%s)", len(data), self._current_entity_label(), fmt)
-            reset_to_template()
-            self._close_tools_mode()
-
-        row, _apply_btn = import_button_row(self._close_tools_mode, reset_to_template, do_apply)
-        lay.addLayout(row)
-        reset_to_template()
-        self._entity_mode_reset_callbacks.append(reset_to_template)
-        return card
-
-    def _build_excel_import_card(self) -> QFrame:
-        card = QFrame()
-        card.setStyleSheet(f"QFrame {{ background: rgba(0,0,0,0.15); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px; }}")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(5)
-
-        title_lbl = QLabel("Excel")
-        title_lbl.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 11px; font-weight: bold; background: transparent; border: none;")
-        lay.addWidget(title_lbl)
-
-        drop_zone = DropZone()
-        lay.addWidget(drop_zone)
-
-        staged_lbl = QLabel("Nenhum arquivo selecionado.")
-        staged_lbl.setWordWrap(True)
-        staged_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
-        lay.addWidget(staged_lbl)
-
-        state = {"path": ""}
-
-        def on_file_staged(path: str):
-            state["path"] = path
-            staged_lbl.setText(f"Selecionado: {os.path.basename(path)}")
-            apply_btn.setEnabled(True)
-
-        drop_zone.file_chosen.connect(on_file_staged)
-
-        def clear_staged():
-            state["path"] = ""
-            staged_lbl.setText("Nenhum arquivo selecionado.")
-            apply_btn.setEnabled(False)
-
-        def do_cancel():
-            clear_staged()
-            self._close_tools_mode()
-
-        def do_apply():
-            if not state["path"]:
-                return
-            self._on_file_dropped(state["path"])
-            clear_staged()
-
-        row, apply_btn = import_button_row(do_cancel, self._export_xlsx_blank_template, do_apply)
-        apply_btn.setEnabled(False)
-        lay.addLayout(row)
-        self._entity_mode_reset_callbacks.append(clear_staged)
-        return card
-
-    def _on_file_dropped(self, path: str):
-        if not self._uow:
-            return
-        suffix = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-        reader = {"json": read_json, "csv": read_csv, "xlsx": read_xlsx}.get(suffix)
-        if reader is None:
-            logger.warning("Formato de arquivo não suportado para import: %s", path)
-            return
-        try:
-            data = reader(path)
-        except Exception:
-            logger.exception("Falha ao ler arquivo de importação: %s", path)
-            return
-        self._current_import_fn()(data)
-        logger.info("Importado(s) %s de %s", self._current_entity_label(), path)
-        self._close_tools_mode()
-
     # ─── Imagens (pasta) ───
-
-    def _build_image_folder_import_card(self) -> QFrame:
-        card = QFrame()
-        card.setStyleSheet(f"QFrame {{ background: rgba(0,0,0,0.15); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px; }}")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(5)
-
-        title_lbl = QLabel("Imagens (pasta)")
-        title_lbl.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 11px; font-weight: bold; background: transparent; border: none;")
-        lay.addWidget(title_lbl)
-
-        hint_lbl = QLabel(
-            "Escolha uma pasta com imagens nomeadas como as dungeons/construções "
-            "(ex.: \"Cripta Gelada.png\") — cada arquivo cujo nome bater com um "
-            "registro existente recebe essa imagem."
-        )
-        hint_lbl.setWordWrap(True)
-        hint_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
-        lay.addWidget(hint_lbl)
-
-        pick_btn = QPushButton("📁 Selecionar Pasta")
-        pick_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        pick_btn.setStyleSheet(f"""
-            QPushButton {{ background: rgba(255,255,255,0.06); color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; padding: 5px 10px; font-size: 10px; }}
-            QPushButton:hover {{ background: rgba(255,255,255,0.12); border-color: {Colors.ACCENT}; }}
-        """)
-        lay.addWidget(pick_btn)
-
-        preview_edit = QTextEdit()
-        preview_edit.setReadOnly(True)
-        preview_edit.setFixedHeight(120)
-        preview_edit.setStyleSheet(f"""
-            QTextEdit {{ color: {Colors.TEXT_PRIMARY}; font-size: 9px; font-family: Consolas, monospace;
-                background: rgba(0,0,0,0.2); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px; padding: 6px; }}
-        """)
-        preview_edit.setPlainText("Nenhuma pasta selecionada.")
-        lay.addWidget(preview_edit)
-
-        state = {"matches": []}  # list of (record_dict, source_file_path)
-
-        def refresh_preview():
-            matches, unmatched = self._match_catalog_against_staged_folder()
-            state["matches"] = matches
-            preview_edit.setPlainText(self._format_image_match_preview(matches, unmatched))
-            apply_btn.setEnabled(bool(matches))
-
-        def on_pick_folder():
-            folder = QFileDialog.getExistingDirectory(self, "Selecione a pasta com as imagens")
-            if not folder:
-                return
-            self._staged_image_folder = folder
-            self._staged_image_files = index_files_by_stem(folder, _IMAGE_EXTS)
-            refresh_preview()
-
-        pick_btn.clicked.connect(on_pick_folder)
-
-        def clear_staged():
-            state["matches"] = []
-            preview_edit.setPlainText("Nenhuma pasta selecionada.")
-            apply_btn.setEnabled(False)
-
-        def do_cancel():
-            state["matches"] = []
-            self._close_tools_mode()
-
-        def do_apply():
-            if not state["matches"]:
-                return
-            self._apply_image_matches(state["matches"])
-            clear_staged()
-
-        row = QHBoxLayout()
-        row.addStretch()
-        cancel_btn = QPushButton("Cancelar")
-        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel_btn.setStyleSheet(f"""
-            QPushButton {{ background: rgba(255,255,255,0.06); color: {Colors.TEXT_SECONDARY}; border: none;
-                border-radius: 6px; padding: 5px 10px; font-size: 10px; }}
-            QPushButton:hover {{ background: rgba(255,255,255,0.12); }}
-        """)
-        cancel_btn.clicked.connect(do_cancel)
-        row.addWidget(cancel_btn)
-        apply_btn = QPushButton("Aplicar")
-        apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        apply_btn.setStyleSheet(f"""
-            QPushButton {{ background: {Colors.ACCENT}; color: #08131F; border: none;
-                border-radius: 6px; padding: 5px 12px; font-size: 10px; font-weight: bold; }}
-            QPushButton:hover:enabled {{ background: {Colors.ACCENT_HOVER}; }}
-            QPushButton:disabled {{ background: rgba(255,255,255,0.08); color: {Colors.TEXT_MUTED}; }}
-        """)
-        apply_btn.setEnabled(False)
-        apply_btn.clicked.connect(do_apply)
-        row.addWidget(apply_btn)
-        lay.addLayout(row)
-        self._entity_mode_reset_callbacks.append(clear_staged)
-        return card
-
-    def _match_catalog_against_staged_folder(self) -> tuple[list, list[str]]:
-        files_by_name = self._staged_image_files
-        matches = []
-        matched_keys = set()
-        for rec in self._current_catalog():
-            key = normalize_name(rec.get("name", ""))
-            if key and key in files_by_name:
-                matches.append((rec, files_by_name[key]))
-                matched_keys.add(key)
-        unmatched = [
-            os.path.basename(path) for key, path in files_by_name.items()
-            if key not in matched_keys
-        ]
-        return matches, sorted(unmatched)
 
     @staticmethod
     def _format_image_match_preview(matches: list, unmatched: list[str]) -> str:
@@ -545,41 +248,7 @@ class DungeonsImportExportMixin:
             self._reload_buildings()
         self._close_tools_mode()
 
-    # ─── header buttons / mode toggle ───
-
-    def _toggle_import_mode(self):
-        if self._tools_mode == "import":
-            self._close_tools_mode()
-            return
-        self._tools_title_lbl.setText(f"Importar {self._current_entity_label()}")
-        self._tools_stack.setCurrentIndex(0)
-        self._body_stack.setCurrentIndex(1)
-        self._tools_mode = "import"
-
-    def _on_export_choice(self, fmt: str):
-        if fmt == "xlsx":
-            self._export_xlsx()
-            return
-        mode = f"export_{fmt}"
-        if self._tools_mode == mode:
-            self._close_tools_mode()
-            return
-        self._template_fmt = fmt
-        self._template_edit.setPlainText(self._build_entity_export(fmt))
-        self._template_hint_lbl.setText(
-            f"{len(self._current_catalog())} {self._current_entity_label().lower()} — clique em Salvar Arquivo para exportar, ou copie o texto abaixo."
-        )
-        self._tools_title_lbl.setText(
-            f"Exportar {self._current_entity_label()} como JSON" if fmt == "json"
-            else f"Exportar {self._current_entity_label()} como CSV"
-        )
-        self._tools_stack.setCurrentIndex(1)
-        self._body_stack.setCurrentIndex(1)
-        self._tools_mode = mode
-
-    def _close_tools_mode(self):
-        self._body_stack.setCurrentIndex(0)
-        self._tools_mode = None
+    # ─── export ───
 
     def _export_rows(self, json_native: bool) -> list[dict]:
         """Builds one export row per catalog record. Unlike items/skills'
@@ -609,20 +278,6 @@ class DungeonsImportExportMixin:
                 row[key] = value
             rows.append(row)
         return rows
-
-    def _build_entity_export(self, fmt: str) -> str:
-        rows = self._export_rows(json_native=(fmt == "json"))
-        if fmt == "json":
-            import json
-            return json.dumps(rows, ensure_ascii=False, indent=2)
-        import csv
-        import io
-        fieldnames = list(self._current_fields().keys())
-        buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-        return buf.getvalue()
 
     def _on_save_export_file(self):
         fmt = self._template_fmt

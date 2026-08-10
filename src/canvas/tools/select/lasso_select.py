@@ -8,6 +8,7 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QGraphicsPathItem
 
+from src.canvas.z_order import ZOrder
 from src.engines.core.selection import queries
 
 
@@ -17,7 +18,7 @@ class LassoSelectMixin:
         self._lasso_path = QGraphicsPathItem()
         self._lasso_path.setPen(QPen(QColor(79, 195, 247, 180), 1.5, Qt.PenStyle.DashLine))
         self._lasso_path.setBrush(QColor(79, 195, 247, 20))
-        self._lasso_path.setZValue(9999)
+        self._lasso_path.setZValue(ZOrder.CURSOR_GHOST)
         self.viewport.scene().addItem(self._lasso_path)
 
     def _lasso_update(self, scene_pos: QPointF) -> bool:

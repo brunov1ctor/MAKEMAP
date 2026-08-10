@@ -25,3 +25,6 @@ class ExplorerNode:
     children: list["ExplorerNode"] = field(default_factory=list)
     payload: dict[str, Any] = field(default_factory=dict)  # scene_pos etc. for "Localizar" on click
     selected: bool = False  # True when the corresponding canvas item is currently selected
+    label_color: str | None = None  # user override from the icon-click popup, or None for the default
+    override_key: str | None = None  # stable key into explorer_overrides; None while not yet persistable
+    default_icon: str | None = None  # icon_glyph BEFORE any override — lets the edit popup offer "back to default"

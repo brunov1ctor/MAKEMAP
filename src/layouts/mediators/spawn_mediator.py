@@ -99,11 +99,6 @@ class SpawnMediator:
     def _entities_repo(self):
         return self._uow.mobs if self._active_kind == "mob" else self._uow.npcs
 
-    def _assets_for(self, entity_id: str):
-        if self._active_kind == "mob":
-            return self._uow.mob_assets.get_by_mob(entity_id)
-        return self._uow.npc_assets.get_by_npc(entity_id)
-
     def on_kind_changed(self, kind: str):
         if kind == self._active_kind:
             return
@@ -155,9 +150,7 @@ class SpawnMediator:
             quantity = int(meta.get("quantity", 1))
             size = float(meta.get("size", 64.0))
             face = self._load_face(entity, project_dir, kind)
-            # NPCs have no "altura" (shadow-height) column yet — stamps
-            # simply cast no shadow, same as a mob whose altura is 0.
-            height = float(entity.get("altura", 0) or 0) if kind == "mob" else 0.0
+            height = float(entity.get("altura", 0) or 0)
             item = tool.build_stamp_item(
                 entity_id, row["name"] or entity.get("name", ""), quantity, size, face,
                 QPointF(row["position_x"], row["position_y"]),
@@ -175,6 +168,37 @@ class SpawnMediator:
 
     def _on_history_changed(self):
         self._sync_timer.start(_SYNC_DEBOUNCE_MS)
+
+    def refresh_stamp_height(self, kind: str, entity_id: str):
+        """A placed mob_spawn/npc_spawn stamp's "height" (see build_stamp_
+        item) is only ever read from the entity's Altura at the moment it's
+        stamped — editing Altura on a mob/npc that's already on the map
+        (MobsPanel/NPCsPanel.entity_saved, wired in menu_view_mediator.py)
+        wouldn't otherwise touch stamps placed before the edit, leaving
+        their shadow frozen at the old (often 0, i.e. none) height until
+        the stamp was replaced or the project reloaded. Patches every live
+        stamp of this entity_id in place and forces the lighting overlay to
+        recompute cached shadow geometry, same as a drag/resize would."""
+        if not self._uow:
+            return
+        item_type = "mob_spawn" if kind == "mob" else "npc_spawn"
+        repo = self._uow.mobs if kind == "mob" else self._uow.npcs
+        entity = repo.get(entity_id)
+        if not entity:
+            return
+        height = float(entity.get("altura", 0) or 0)
+        changed = False
+        for item in self._l.canvas.engine.viewport.scene().items():
+            data = item.data(0)
+            if not isinstance(data, dict) or data.get("item_type") != item_type:
+                continue
+            if data.get("mob_id") != entity_id or data.get("height") == height:
+                continue
+            data["height"] = height
+            item.setData(0, data)
+            changed = True
+        if changed:
+            self._l._light_med.notify_occluders_changed()
 
     def _sync_to_db(self):
         """Upserts every currently-placed mob/npc-spawn stamp into the
@@ -339,7 +363,7 @@ class SpawnMediator:
             return
         self._active_mob_name = entity.get("name", "")
         self._active_face = self._load_face(entity, self._project_dir())
-        height = float(entity.get("altura", 0) or 0) if self._active_kind == "mob" else 0.0
+        height = float(entity.get("altura", 0) or 0)
 
         tool = self._l.canvas.engine._spawn_tool
         tool.set_entity(self._active_kind, entity_id, self._active_mob_name, self._active_face, height)

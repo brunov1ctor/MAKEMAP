@@ -124,25 +124,36 @@ def shadow_from_circle(center: QPointF, occluder_radius: float, light_radius: fl
     return disc.united(wedge), near, far
 
 
-# A mob stamp reaches this altura (meters, see MobEditPanel's Altura field)
-# before its shadow gets the same full "to the edge of the light" reach an
-# asset always has — shorter mobs cast proportionally shorter shadows, 0
-# altura casts none at all (see occluder_rects/shadow_quad's length_scale).
+# A mob/npc stamp reaches this altura (meters, see MobEditPanel/NPCEditPanel's
+# Altura field) before its shadow gets the same full "to the edge of the
+# light" reach a large-enough asset can also have — shorter tokens cast
+# proportionally shorter shadows, 0 altura casts none at all (see
+# occluder_rects/shadow_quad's length_scale).
 _MOB_SHADOW_REFERENCE_HEIGHT = 3.0
+
+# An asset stamp (house, rock, tree — anything BrushTool.place_stamp_item
+# tagged item_type == 'asset') reaches this scene-px size (its longest
+# sceneBoundingRect side — matches how the brush's own "Size" slider is
+# already used as a scene-px diameter elsewhere, see BrushTool.size/
+# ObjectStamper.on_stamp) before its shadow gets the same full "to the edge
+# of the light" reach a big prop always had — a pebble stamped small casts
+# a proportionally short shadow instead of the same full-length wedge a
+# house gets, same idea as _MOB_SHADOW_REFERENCE_HEIGHT.
+_ASSET_SHADOW_REFERENCE_SIZE = 256.0
 
 
 def occluder_rects(scene, origin: QPointF, radius: float, exclude=None):
     """Every occluder within `radius` of `origin`, as ("rect"|"circle",
-    geometry, length_scale) — an asset stamp (a house, a prop — anything
-    BrushTool.place_stamp_item tagged item_type == 'asset') yields a scene-
-    space QRectF at length_scale 1.0 (always full-length shadow, shaped by
-    shadow_quad); a mob stamp (item_type == 'mob_spawn') yields a (center,
-    radius) circle instead — mobs are round tokens, not boxes, so their
-    shadow is built by shadow_from_circle to hug the actual silhouette
-    instead of an invisible bounding square's flat corner. A mob's
-    length_scale is derived from its altura (see
-    _MOB_SHADOW_REFERENCE_HEIGHT); altura == 0 (the default) yields
-    nothing, matching how mobs cast no shadow at all before this existed."""
+    geometry, length_scale) — an asset stamp yields a scene-space QRectF
+    (shaped by shadow_quad), a mob or npc stamp (item_type ==
+    'mob_spawn'/'npc_spawn') yields a (center, radius) circle instead —
+    round tokens, not boxes, so their shadow is built by shadow_from_circle
+    to hug the actual silhouette instead of an invisible bounding square's
+    flat corner. An asset's length_scale is derived from its bounding
+    rect's longest side (see _ASSET_SHADOW_REFERENCE_SIZE); a mob/npc's
+    from its altura (see _MOB_SHADOW_REFERENCE_HEIGHT) — altura == 0 (the
+    default) yields nothing, matching how mobs/npcs cast no shadow at all
+    before this existed."""
     if scene is None:
         return
     search = QRectF(origin.x() - radius, origin.y() - radius, radius * 2, radius * 2)
@@ -159,8 +170,10 @@ def occluder_rects(scene, origin: QPointF, radius: float, exclude=None):
         # real placed object — casting a shadow the size of its whole
         # (2048px+) bounding rect would black out every light near it.
         if item_type == "asset" and not data.get("effect_key"):
-            yield "rect", other.sceneBoundingRect(), 1.0
-        elif item_type == "mob_spawn":
+            srect = other.sceneBoundingRect()
+            length_scale = min(1.0, max(srect.width(), srect.height()) / _ASSET_SHADOW_REFERENCE_SIZE)
+            yield "rect", srect, length_scale
+        elif item_type in ("mob_spawn", "npc_spawn"):
             height = data.get("height") or 0
             if height <= 0:
                 continue

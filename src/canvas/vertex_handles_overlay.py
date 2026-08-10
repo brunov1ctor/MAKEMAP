@@ -13,6 +13,7 @@ from __future__ import annotations
 from PySide6.QtGui import QColor, QPen, QBrush
 from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsScene
 
+from src.canvas.z_order import ZOrder
 from src.styles.tokens import Colors
 
 HANDLE_SIZE = 10.0
@@ -30,7 +31,7 @@ class VertexHandlesOverlay:
             pen = QPen(QColor(Colors.ACCENT), 1.5)
             pen.setCosmetic(True)
             handle.setPen(pen)
-            handle.setZValue(60)  # above the neon overlay (50) and the boundary itself (-500)
+            handle.setZValue(ZOrder.PLACED_GIZMO)  # above the neon overlay (ZOrder.TOOL_PREVIEW) and the boundary
             self._scene.addItem(handle)
             self._handles.append(handle)
         while len(self._handles) > len(points):

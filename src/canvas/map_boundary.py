@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QGraphicsSceneMouseEvent, QGraphicsLineItem,
 )
 
+from src.canvas.z_order import ZOrder
+
 # Shapes with a real, discrete corner list — used both to build their path
 # (see MapBoundary._build_path) and, distinctly, by TerrainMediator's
 # "Livre" insert-mode to let a new point splice into an EXISTING preset's
@@ -141,7 +143,7 @@ class AlignmentGuides:
         pen = QPen(self.GUIDE_COLOR, self.GUIDE_WIDTH, Qt.PenStyle.DashLine)
         pen.setCosmetic(True)
         line.setPen(pen)
-        line.setZValue(9999)
+        line.setZValue(ZOrder.CURSOR_GHOST)
         self._scene.addItem(line)
         self._lines.append(line)
 
@@ -150,7 +152,7 @@ class AlignmentGuides:
         pen = QPen(self.GUIDE_COLOR, self.GUIDE_WIDTH, Qt.PenStyle.DashLine)
         pen.setCosmetic(True)
         line.setPen(pen)
-        line.setZValue(9999)
+        line.setZValue(ZOrder.CURSOR_GHOST)
         self._scene.addItem(line)
         self._lines.append(line)
 
@@ -291,7 +293,7 @@ class MapBoundary:
         self._scene = scene
         # Stable container — added to scene only on show(), removed on hide().
         self._group = QGraphicsItemGroup()
-        self._group.setZValue(0)
+        self._group.setZValue(ZOrder.BOUNDARY_GROUP)
         self._group.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self._group.setHandlesChildEvents(False)
         # NOT added to scene here — only when show()/set_points() is called.
@@ -370,16 +372,6 @@ class MapBoundary:
         self._rebuild()
         self._timer.start()
 
-    def show_preview(self, width: int, height: int, shape: str = "rectangle"):
-        self._width = width
-        self._height = height
-        self._shape = shape
-        self._visible = True
-        self._preview = True
-        if not self._group.scene():
-            self._scene.addItem(self._group)
-        self._rebuild()
-
     def hide(self):
         self._visible = False
         self._preview = False
@@ -450,7 +442,7 @@ class MapBoundary:
 
         path = self._build_path()
         self._item = MovableBoundaryItem(path)
-        self._item.setZValue(-1)
+        self._item.setZValue(ZOrder.BOUNDARY_OUTLINE)
         self._item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self._item.on_moved = self._on_position_changed
         self._update_pen()

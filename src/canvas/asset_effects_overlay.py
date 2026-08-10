@@ -13,10 +13,11 @@ import math
 import time
 
 from PySide6.QtCore import Qt, QRectF, QPointF
-from PySide6.QtGui import QColor, QBrush, QPen, QRadialGradient, QPainter
+from PySide6.QtGui import QColor, QBrush, QPainterPath, QPen, QRadialGradient, QPainter
 from PySide6.QtWidgets import QGraphicsItem
 
 from src.engines.asset_effects import ASSET_EFFECT_TYPES, EFFECT_GRID_SIZE, PARAM_DEFAULT, normalize_layers
+from src.canvas.item_utils import make_non_interactive
 
 _BLEND_COMPOSITION_MODES = {
     "normal": QPainter.CompositionMode.CompositionMode_SourceOver,
@@ -33,10 +34,16 @@ class AssetEffectsOverlay(QGraphicsItem):
         super().__init__(parent_item)
         self.layers = normalize_layers(layers)
         # Purely decorative — must never steal a click meant for the
-        # underlying stamp (selecting/dragging it). Without this, being a
-        # child (children hit-test before their parent) would silently
-        # break clicking the asset it's attached to.
-        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        # underlying stamp (selecting/dragging it) or whatever's under it
+        # (a Marker being placed, etc). make_non_interactive() alone only
+        # stops THIS item from receiving a dispatched mouse event — it does
+        # NOT exclude it from QGraphicsScene.itemAt()'s hit-testing (used
+        # by engine.py's own click routing), which uses shape(), not
+        # acceptedMouseButtons. Being a child (children hit-test before
+        # their parent) meant itemAt() over any effect-bearing asset
+        # returned THIS overlay instead of the asset/whatever's underneath
+        # — see shape() override below, which is the actual fix.
+        make_non_interactive(self)
         parent_item._effects_overlay = self
 
     def set_cells(self, layers: dict[str, dict]):
@@ -47,6 +54,13 @@ class AssetEffectsOverlay(QGraphicsItem):
     def boundingRect(self) -> QRectF:
         parent = self.parentItem()
         return parent.boundingRect() if parent is not None else QRectF()
+
+    def shape(self) -> QPainterPath:
+        # Empty shape = invisible to itemAt()/collidingItems() hit-testing,
+        # while boundingRect() (used for the actual repaint region) stays
+        # untouched, so painting is unaffected — this is what makes clicks
+        # pass straight through to the asset stamp underneath.
+        return QPainterPath()
 
     def paint(self, painter, option, widget=None):
         parent = self.parentItem()

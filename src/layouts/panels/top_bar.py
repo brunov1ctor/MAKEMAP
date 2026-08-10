@@ -1,7 +1,7 @@
 """1. Barra Superior — glassmorphism, 72px, navegação com QButtonGroup."""
 
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QToolButton,
+    QFrame, QHBoxLayout, QLabel, QToolButton,
     QSizePolicy, QWidget, QVBoxLayout, QButtonGroup,
 )
 from PySide6.QtCore import Qt, Signal, QRectF, QSize
@@ -193,7 +193,6 @@ class TopBar(QFrame):
     """Barra superior 72px — glassmorphism, logo, navegação, busca, badge."""
 
     module_changed = Signal(str)
-    search_requested = Signal(str)
     arquivo_clicked = Signal()
     logs_clicked = Signal()
     menu_clicked = Signal(str)  # emits menu name for exclusive panel management
@@ -268,9 +267,9 @@ class TopBar(QFrame):
         modules = [
             ("☰", "Projetos", "Projetos", False),
             ("🗺", "Mapa", "Mapa", False),
-            ("🧙", "NPCs", "NPCs", False),
-            ("👹", "Mobs", "Mobs", False),
             ("⚔", "Itens", "Itens e Habilidades", True),
+            ("👹", "Mobs", "Mobs", False),
+            ("🧙", "NPCs", "NPCs", False),
             ("🏰", "Dungeons", "Dungeons e Construções", True),
             ("📜", "Quests", "Quests", False),
             ("📖", "Lore", "Lore", False),
@@ -292,32 +291,6 @@ class TopBar(QFrame):
         self._nav_buttons[1].setChecked(True)
         self._active_menu_btn = self._nav_buttons[1]
         layout.addWidget(nav_frame)
-
-        layout.addStretch()
-
-        # ── Busca Global ──
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("🔍  Buscar... (Ctrl+K)")
-        self.search.setMinimumWidth(160)
-        self.search.setMaximumWidth(280)
-        self.search.setFixedHeight(32)
-        self.search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.search.setStyleSheet(f"""
-            QLineEdit {{
-                background: {Colors.GLASS_BG};
-                border: 1px solid {Colors.GLASS_BORDER};
-                border-radius: 16px;
-                padding: 0 14px;
-                font-size: 11px;
-                color: {Colors.TEXT_PRIMARY};
-            }}
-            QLineEdit:focus {{
-                border-color: {Colors.ACCENT};
-                background: {Colors.GLASS_BG_STRONG};
-            }}
-        """)
-        self.search.returnPressed.connect(lambda: self.search_requested.emit(self.search.text()))
-        layout.addWidget(self.search)
 
         layout.addStretch()
 

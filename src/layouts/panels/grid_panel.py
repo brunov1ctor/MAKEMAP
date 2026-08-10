@@ -4,10 +4,10 @@ from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QSizePolicy,
     QCheckBox, QComboBox, QToolButton, QScrollArea, QWidget,
 )
-from PySide6.QtCore import Qt, Signal, QRectF
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 
-from src.styles.tokens import Colors, Typography, combo_popup_qss
+from src.styles.tokens import Colors, combo_popup_qss
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.stepper import NumberStepper
 from src.layouts.panels.terrain.color_picker import HueBar, SatValSquare, ColorSlider

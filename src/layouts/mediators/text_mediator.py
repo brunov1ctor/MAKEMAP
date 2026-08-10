@@ -17,7 +17,9 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QPointF, QTimer
 
 from src.canvas.text_item import TextItem
+from src.canvas.z_order import ZOrder
 from src.engines.typography import TextProperties, text_properties_to_dict, text_properties_from_dict
+from src.layouts.mediators.canvas_item_sync import CanvasItemSyncMixin, TerrainAwareMediator
 from src.layouts.panels.text_panel import TextToolPanel, radius_from_percent
 from src.layouts.panels.color_customize_panel import ColorCustomizePanel
 
@@ -46,12 +48,15 @@ class _PendingText:
         pass
 
 
-class TextMediator:
+class TextMediator(CanvasItemSyncMixin, TerrainAwareMediator):
     """Saves/reloads every TextItem placed on the map, and wires
     TextToolPanel/ColorCustomizePanel to whichever TextItem (or draft) is
     currently being edited."""
 
     MAP_ID = "default"  # matches BrushMediator/RegionMediator/SpawnMediator
+    _SYNC_ITEM_TYPE = "text"
+    _SYNC_ITEM_CLASS = TextItem
+    _TERRAIN_PANEL_ATTR = "text_panel"
 
     def __init__(self, layout: MainLayout):
         self._l = layout
@@ -154,12 +159,6 @@ class TextMediator:
             return
         self._pending_text = _PendingText(TextProperties(text="Texto", font_size=20, font_weight=600))
         self._l.text_panel.set_values(self._pending_text.props)
-
-    def set_active_terrain(self, terrain_id: str):
-        """Chamado por TerrainMediator.on_selected para sincronizar o label e o boundary ativo."""
-        boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
-        self._active_boundary = boundary
-        self._l.text_panel.terrain_combo.set_terrain(terrain_id)
 
     # ─── Targets: real selection, or the not-yet-placed draft ───
 
@@ -424,61 +423,34 @@ class TextMediator:
         self._uow = uow
         self._load_from_db()
 
-    def _load_from_db(self):
-        scene = self._l.canvas.engine.viewport.scene()
-        for item in self._items.values():
-            if item.scene() is not None:
-                item.scene().removeItem(item)
-        self._items.clear()
-        if not self._uow:
-            return
-
-        for row in self._uow.canvas_items.get_by_map(self.MAP_ID):
-            if row["item_type"] != "text":
-                continue
-            try:
-                meta = json.loads(row["metadata"] or "{}")
-            except (TypeError, ValueError):
-                meta = {}
-            item = TextItem(text_properties_from_dict(meta))
-            item.setPos(QPointF(row["position_x"], row["position_y"]))
-            item.setRotation(row["rotation"] or 0.0)
-            item.setZValue(50)
-            item.on_edited = self._on_history_changed
-            item.setData(1, row["id"])
-            scene.addItem(item)
-            self._items[row["id"]] = item
+    def _make_sync_item(self, row) -> TextItem:
+        try:
+            meta = json.loads(row["metadata"] or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+        item = TextItem(text_properties_from_dict(meta))
+        item.setPos(QPointF(row["position_x"], row["position_y"]))
+        item.setRotation(row["rotation"] or 0.0)
+        item.setZValue(ZOrder.TOOL_PREVIEW)
+        item.on_edited = self._on_history_changed
+        return item
 
     def _on_history_changed(self):
         self._sync_timer.start(_SYNC_DEBOUNCE_MS)
 
-    def _sync_to_db(self):
-        """Upserts every currently-placed text item into the project DB,
-        and drops rows for ones no longer present (deleted/undone) — same
-        shape as BrushMediator/SpawnMediator's own _sync_to_db."""
-        if not self._uow:
-            return
-        seen_ids: set[str] = set()
-        for item in self._l.canvas.engine.viewport.scene().items():
-            if not isinstance(item, TextItem) or not item.isVisible():
-                continue
-            fields = dict(
-                item_type="text", name=item.props.text[:80],
-                position_x=item.pos().x(), position_y=item.pos().y(),
-                rotation=item.rotation(),
-                metadata=json.dumps(text_properties_to_dict(item.props)),
-            )
-            row_id = item.data(1)
-            # A cached id can go stale (undo hid the item, its row got
-            # swept below, then redo brought it back still carrying that
-            # dead id) — fall back to creating a fresh row, same as Brush/Spawn.
-            if not row_id or not self._uow.canvas_items.update(row_id, **fields):
-                row_id = self._uow.canvas_items.create(map_id=self.MAP_ID, **fields)
-                item.setData(1, row_id)
-            item.on_edited = self._on_history_changed
-            self._items[row_id] = item
-            seen_ids.add(row_id)
+    def _sync_fields(self, item: TextItem) -> dict:
+        return dict(
+            item_type="text", name=item.props.text[:80],
+            position_x=item.pos().x(), position_y=item.pos().y(),
+            rotation=item.rotation(),
+            metadata=json.dumps(text_properties_to_dict(item.props)),
+        )
 
-        for stale_id in set(self._items) - seen_ids:
-            self._uow.canvas_items.delete(stale_id)
-            del self._items[stale_id]
+    def _after_sync_item(self, item: TextItem, row_id):
+        # A cached id can go stale (undo hid the item, its row got swept
+        # below, then redo brought it back still carrying that dead id) —
+        # _sync_to_db falls back to creating a fresh row rather than
+        # silently no-op'ing an update that matches nothing, same as
+        # Brush/Spawn. on_edited is rebound unconditionally either way, same
+        # as the pre-extraction code did on every pass.
+        item.on_edited = self._on_history_changed

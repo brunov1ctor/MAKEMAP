@@ -33,23 +33,22 @@ class AssetSettingsRepository:
 
     def set(self, asset_id: str, **fields):
         """Upsert settings for an asset."""
-        existing = self.db.fetchone(
-            f"SELECT asset_id FROM {self.TABLE} WHERE asset_id = ?", (asset_id,)
-        )
-        if existing:
-            sets = ", ".join(f"{k} = ?" for k in fields)
-            params = tuple(fields.values()) + (asset_id,)
-            with self.db.transaction():
-                self.db.execute(f"UPDATE {self.TABLE} SET {sets} WHERE asset_id = ?", params)
+        all_fields = {**DEFAULT_SETTINGS, **fields, "asset_id": asset_id}
+        cols = ", ".join(all_fields.keys())
+        placeholders = ", ".join("?" for _ in all_fields)
+        # On conflict, only overwrite the fields the caller actually passed
+        # — columns not in `fields` keep their existing value instead of
+        # being reset to DEFAULT_SETTINGS.
+        if fields:
+            sets = ", ".join(f"{k} = excluded.{k}" for k in fields)
+            conflict = f"ON CONFLICT(asset_id) DO UPDATE SET {sets}"
         else:
-            all_fields = {**DEFAULT_SETTINGS, **fields, "asset_id": asset_id}
-            cols = ", ".join(all_fields.keys())
-            placeholders = ", ".join("?" for _ in all_fields)
-            with self.db.transaction():
-                self.db.execute(
-                    f"INSERT INTO {self.TABLE} ({cols}) VALUES ({placeholders})",
-                    tuple(all_fields.values()),
-                )
+            conflict = "ON CONFLICT(asset_id) DO NOTHING"
+        with self.db.transaction():
+            self.db.execute(
+                f"INSERT INTO {self.TABLE} ({cols}) VALUES ({placeholders}) {conflict}",
+                tuple(all_fields.values()),
+            )
 
     def get_all(self) -> list[dict]:
         """Get all asset settings in this project."""

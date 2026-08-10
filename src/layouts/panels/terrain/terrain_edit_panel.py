@@ -57,7 +57,11 @@ class _ShapeIconButton(QToolButton):
             return
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = QColor(Colors.ACCENT if self.isChecked() else Colors.TEXT_SECONDARY)
+        # Colors.TEXT_SECONDARY is a CSS "rgba(...)" string — QColor's
+        # string constructor doesn't parse that functional syntax (only
+        # names and #hex), so it silently became an invalid (black) color
+        # here, making the unchecked icon's outline paint solid black.
+        color = QColor(Colors.ACCENT) if self.isChecked() else QColor(255, 255, 255, 178)
         p.setPen(QPen(color, 1.6))
         cx, cy = self.width() / 2, self.height() / 2
         if self._shape_id == "rectangle":

@@ -9,6 +9,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPen
 from PySide6.QtWidgets import QGraphicsRectItem
 
+from src.canvas.z_order import ZOrder
 from src.engines.core.selection import queries
 
 
@@ -31,7 +32,7 @@ class BoxSelectMixin:
             self._box_item = QGraphicsRectItem()
             self._box_item.setPen(QPen(QColor(79, 195, 247, 180), 1.5, Qt.PenStyle.DashLine))
             self._box_item.setBrush(QColor(79, 195, 247, 20))
-            self._box_item.setZValue(9999)
+            self._box_item.setZValue(ZOrder.CURSOR_GHOST)
             self.viewport.scene().addItem(self._box_item)
         self._box_item.setRect(QRectF(self._start, scene_pos).normalized())
         return True

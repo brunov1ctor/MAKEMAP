@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QGraphicsScene, QGraphicsPixmapItem
 from src.engines.map.terrain_layer import TerrainLayer, TerrainBrushParams
 from src.engines.map.region_styles import apply_style
 from src.canvas.item_utils import suppress_selection_decoration, enable_hover_glow
+from src.canvas.z_order import ZOrder
 
 # Downsample size used for the cheap area/thumbnail-bounds scan — full-res
 # per-pixel counting over a 4096x4096 mask would be far too slow in Python;
@@ -40,7 +41,7 @@ class RegionLayer:
         self._style = "Nenhum"
         self._hovered = False
         self._terrain = TerrainLayer(scene, map_width, map_height, parent_item)
-        self._terrain.item.setZValue(8.5)  # above terrain (1), rios (7) and estradas (8); below stamped objects (10+)
+        self._terrain.item.setZValue(ZOrder.REGION_FILL)
         self._terrain.item.setData(0, {"item_type": "zone"})
         # Hovering the região directly on the map now brightens/thickens its
         # own border too (set_hover already existed for the card-hover path
@@ -339,7 +340,7 @@ class RegionLayer:
             if scene is None:
                 return
             self._label_item = QGraphicsPixmapItem()
-            self._label_item.setZValue(8.7)  # above the fill/border (8.5), below stamped objects (10+)
+            self._label_item.setZValue(ZOrder.REGION_LABEL)
             self._label_item.setData(0, {"item_type": "zone_label"})
             suppress_selection_decoration(self._label_item)
             scene.addItem(self._label_item)

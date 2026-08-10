@@ -62,6 +62,7 @@ class MobCrudMixin:
         self._selected_id = mob_id
         self._reload()
         self._on_card_selected(mob_id)
+        self.entity_saved.emit(mob_id)
         logger.info("Mob salvo: id=%s (%d campos, novo=%s)", mob_id, len(values), is_new)
 
     def _on_rename(self, mob_id: str, new_name: str):

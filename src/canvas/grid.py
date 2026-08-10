@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QRectF, QLineF, QPointF
 from PySide6.QtGui import QPen, QColor, QPainterPath, QFont, QPolygonF
 
 from src.canvas.overlays.scale_bar import format_distance
+from src.canvas.z_order import ZOrder
 
 
 class GridShape:
@@ -117,7 +118,7 @@ class GridManager:
             return
 
         self._group = _ClippedGroup()
-        self._group.setZValue(9)  # above terrain (1), rios/estradas (7/8) and region fill/label (8.5/8.7); below stamped objects (10+)
+        self._group.setZValue(ZOrder.GRID_LINES)
         self._group.set_clip_path(clip_path)
 
         if self.visible:
@@ -142,7 +143,7 @@ class GridManager:
             # a bounded terrain's grid conforms to, so they must keep
             # growing with the pan regardless of `clip_path`.
             self._measure_group = QGraphicsItemGroup()
-            self._measure_group.setZValue(9.1)
+            self._measure_group.setZValue(ZOrder.GRID_MEASURE)
             self._draw_cartesian_overlay(full_view_rect if full_view_rect is not None else view_rect, zoom)
             self._scene.addItem(self._measure_group)
 

@@ -4,9 +4,7 @@ from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton,
     QWidget, QSizePolicy,
 )
-from PySide6.QtCore import (
-    Qt, QRectF, QPropertyAnimation, QEasingCurve, Property, Signal,
-)
+from PySide6.QtCore import Qt, QRectF, Signal
 from PySide6.QtGui import (
     QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush,
 )

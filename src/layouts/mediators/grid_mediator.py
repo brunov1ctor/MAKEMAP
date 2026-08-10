@@ -86,7 +86,7 @@ class GridMediator:
         panel.subdivisions_slider.value_changed.connect(_update_sub)
         panel.opacity_slider.value_changed.connect(_update_opacity)
         panel.shape_changed.connect(_update_shape)
-        panel.snap_toggled.connect(lambda on: self._l.canvas.engine.snap.toggle())
+        panel.snap_toggled.connect(lambda on: setattr(self._l.canvas.engine.snap, "enabled", on))
         panel.measurements_toggled.connect(_update_measurements)
         panel.color_field.color_changed.connect(_update_color)
 

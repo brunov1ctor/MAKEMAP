@@ -447,7 +447,7 @@ class BrushToolPanel(QFrame):
         mat_row.addWidget(self._paint_btn)
 
         self._mask_btn = QToolButton()
-        self._mask_btn.setText("◑ Mask")
+        self._mask_btn.setText("🎭 Mask")
         self._mask_btn.setStyleSheet(mode_style)
         self._mask_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._mask_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)

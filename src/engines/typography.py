@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
 
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import (
@@ -27,15 +26,6 @@ class TextAlign(Enum):
     CENTER = auto()
     RIGHT = auto()
     JUSTIFY = auto()
-
-
-class TextStyle(Enum):
-    NORMAL = auto()
-    OUTLINE = auto()
-    SHADOW = auto()
-    GLOW = auto()
-    CURVED = auto()
-    RIBBON = auto()
 
 
 # ─── Data Models ────────────────────────────────────────────────────────────
@@ -536,92 +526,3 @@ class TypographyRenderer:
 
         return rect.adjusted(-expand, -expand, expand, expand)
 
-
-# ─── Typography Engine ─────────────────────────────────────────────────────
-
-class TypographyEngine:
-    """Engine principal — gerencia textos no canvas."""
-
-    def __init__(self):
-        self._texts: dict[str, TextProperties] = {}
-        self._renderer = TypographyRenderer()
-
-    @property
-    def renderer(self) -> TypographyRenderer:
-        return self._renderer
-
-    def create_text(self, text_id: str, text: str = "", **kwargs) -> TextProperties:
-        props = TextProperties(text=text, **kwargs)
-        self._texts[text_id] = props
-        return props
-
-    def get_text(self, text_id: str) -> Optional[TextProperties]:
-        return self._texts.get(text_id)
-
-    def update_text(self, text_id: str, **kwargs):
-        props = self._texts.get(text_id)
-        if not props:
-            return
-        for key, value in kwargs.items():
-            if hasattr(props, key):
-                setattr(props, key, value)
-
-    def remove_text(self, text_id: str):
-        self._texts.pop(text_id, None)
-
-    def render_text(self, painter: QPainter, text_id: str, pos: QPointF):
-        props = self._texts.get(text_id)
-        if props:
-            self._renderer.render(painter, pos, props)
-
-    @property
-    def count(self) -> int:
-        return len(self._texts)
-
-    # ── Presets ──
-
-    @staticmethod
-    def preset_city_label() -> TextProperties:
-        return TextProperties(
-            font_family="Segoe UI",
-            font_size=16,
-            font_weight=700,
-            color="#FFFFFF",
-            outline=TextOutline(enabled=True, color="#000000", width=2.5),
-            shadow=TextShadow(enabled=True, offset_x=1, offset_y=2, blur=3),
-        )
-
-    @staticmethod
-    def preset_region_title() -> TextProperties:
-        return TextProperties(
-            font_family="Segoe UI",
-            font_size=24,
-            font_weight=600,
-            color="#E8D5A3",
-            spacing=TextSpacing(letter_spacing=3.0),
-            outline=TextOutline(enabled=True, color="#2C1810", width=3),
-            shadow=TextShadow(enabled=True, offset_x=2, offset_y=3, blur=6, opacity=0.7),
-        )
-
-    @staticmethod
-    def preset_ocean_label() -> TextProperties:
-        return TextProperties(
-            font_family="Segoe UI",
-            font_size=20,
-            font_weight=400,
-            italic=True,
-            color="#87CEEB",
-            spacing=TextSpacing(letter_spacing=8.0),
-            glow=TextGlow(enabled=True, color="#4FC3F7", radius=6, opacity=0.4),
-        )
-
-    @staticmethod
-    def preset_banner() -> TextProperties:
-        return TextProperties(
-            font_family="Segoe UI",
-            font_size=18,
-            font_weight=700,
-            color="#FFFFFF",
-            ribbon=TextRibbon(enabled=True, color="#8B4513", padding_x=20, padding_y=8, radius=6),
-            shadow=TextShadow(enabled=True, offset_x=0, offset_y=3, blur=5),
-        )

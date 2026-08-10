@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPen, QColor, QTransform, QPainterPath, QPainterPathStroker
 
+from src.canvas.z_order import ZOrder
 from src.styles.tokens import Colors
 
 
@@ -160,20 +161,6 @@ _HANDLE_CURSORS = {
 }
 
 
-class AlignMode(Enum):
-    LEFT = auto()
-    CENTER_H = auto()
-    RIGHT = auto()
-    TOP = auto()
-    CENTER_V = auto()
-    BOTTOM = auto()
-
-
-class DistributeMode(Enum):
-    HORIZONTAL = auto()
-    VERTICAL = auto()
-
-
 class TransformEngine(QObject):
     """Manages all spatial transformations for selected items."""
 
@@ -231,21 +218,31 @@ class TransformEngine(QObject):
     # --- Rotate ---
 
     def rotate(self, items: list[QGraphicsItem], angle: float, center: QPointF | None = None):
-        """Rotate items around a center point."""
+        """Rotate items around a center point.
+
+        `center` is given in SCENE coordinates (see _get_bounds), but
+        item.pos() is defined relative to the item's PARENT (which is the
+        scene root only for un-parented items — a marker/mob-spawn stamp
+        dropped inside a região is parented to that boundary group instead,
+        see MarkerTool/SpawnTool). Mapping item.pos() through a transform
+        built around the scene-space center without first converting that
+        center into the item's own parent space put the rotated position
+        wildly out of place for any parented item — visually reading as
+        "rotate does nothing" since the item's new position could land far
+        outside the selection (or even outside the visible map)."""
         if not items:
             return
         if center is None:
             center = self._get_bounds(items).center()
 
         for item in items:
-            # Rotate around center
-            item_center = item.sceneBoundingRect().center()
-            offset = item_center - center
+            parent = item.parentItem()
+            local_center = parent.mapFromScene(center) if parent is not None else center
 
             t = QTransform()
-            t.translate(center.x(), center.y())
+            t.translate(local_center.x(), local_center.y())
             t.rotate(angle)
-            t.translate(-center.x(), -center.y())
+            t.translate(-local_center.x(), -local_center.y())
 
             new_pos = t.map(item.pos())
             item.setPos(new_pos)
@@ -272,97 +269,6 @@ class TransformEngine(QObject):
             t.scale(sx, sy)
             item.setTransform(current * t)
 
-    def scale_uniform(self, items: list[QGraphicsItem], factor: float, center: QPointF | None = None):
-        """Scale uniformly (proportional)."""
-        self.scale(items, factor, factor, center)
-
-    # --- Flip ---
-
-    def flip_horizontal(self, items: list[QGraphicsItem]):
-        """Flip items horizontally around their combined center."""
-        if not items:
-            return
-        center = self._get_bounds(items).center()
-        for item in items:
-            pos = item.pos()
-            new_x = center.x() + (center.x() - pos.x())
-            item.setPos(new_x, pos.y())
-
-            current = item.transform()
-            t = QTransform()
-            t.scale(-1, 1)
-            item.setTransform(current * t)
-
-    def flip_vertical(self, items: list[QGraphicsItem]):
-        """Flip items vertically around their combined center."""
-        if not items:
-            return
-        center = self._get_bounds(items).center()
-        for item in items:
-            pos = item.pos()
-            new_y = center.y() + (center.y() - pos.y())
-            item.setPos(pos.x(), new_y)
-
-            current = item.transform()
-            t = QTransform()
-            t.scale(1, -1)
-            item.setTransform(current * t)
-
-    # --- Align ---
-
-    def align(self, items: list[QGraphicsItem], mode: AlignMode):
-        """Align items to a common edge or center."""
-        if len(items) < 2:
-            return
-
-        bounds = self._get_bounds(items)
-
-        for item in items:
-            rect = item.sceneBoundingRect()
-            pos = item.pos()
-
-            if mode == AlignMode.LEFT:
-                item.setPos(pos.x() + (bounds.left() - rect.left()), pos.y())
-            elif mode == AlignMode.CENTER_H:
-                item.setPos(pos.x() + (bounds.center().x() - rect.center().x()), pos.y())
-            elif mode == AlignMode.RIGHT:
-                item.setPos(pos.x() + (bounds.right() - rect.right()), pos.y())
-            elif mode == AlignMode.TOP:
-                item.setPos(pos.x(), pos.y() + (bounds.top() - rect.top()))
-            elif mode == AlignMode.CENTER_V:
-                item.setPos(pos.x(), pos.y() + (bounds.center().y() - rect.center().y()))
-            elif mode == AlignMode.BOTTOM:
-                item.setPos(pos.x(), pos.y() + (bounds.bottom() - rect.bottom()))
-
-    # --- Distribute ---
-
-    def distribute(self, items: list[QGraphicsItem], mode: DistributeMode):
-        """Distribute items evenly along an axis."""
-        if len(items) < 3:
-            return
-
-        if mode == DistributeMode.HORIZONTAL:
-            sorted_items = sorted(items, key=lambda i: i.sceneBoundingRect().center().x())
-            first_center = sorted_items[0].sceneBoundingRect().center().x()
-            last_center = sorted_items[-1].sceneBoundingRect().center().x()
-            spacing = (last_center - first_center) / (len(sorted_items) - 1)
-
-            for i, item in enumerate(sorted_items[1:-1], start=1):
-                target_x = first_center + spacing * i
-                current_x = item.sceneBoundingRect().center().x()
-                item.moveBy(target_x - current_x, 0)
-
-        elif mode == DistributeMode.VERTICAL:
-            sorted_items = sorted(items, key=lambda i: i.sceneBoundingRect().center().y())
-            first_center = sorted_items[0].sceneBoundingRect().center().y()
-            last_center = sorted_items[-1].sceneBoundingRect().center().y()
-            spacing = (last_center - first_center) / (len(sorted_items) - 1)
-
-            for i, item in enumerate(sorted_items[1:-1], start=1):
-                target_y = first_center + spacing * i
-                current_y = item.sceneBoundingRect().center().y()
-                item.moveBy(0, target_y - current_y)
-
     # --- Handles ---
 
     def show_handles(self, items: list[QGraphicsItem]):
@@ -385,7 +291,7 @@ class TransformEngine(QObject):
         border = _SelectionBorder(border_path)
         border.setPen(pen)
         border.setBrush(Qt.BrushStyle.NoBrush)
-        border.setZValue(9999)
+        border.setZValue(ZOrder.TRANSFORM_GROUP_BORDER)
         self._scene.addItem(border)
         self._border = border
 
@@ -403,7 +309,7 @@ class TransformEngine(QObject):
                 item_border = _SelectionBorder(item_path)
                 item_border.setPen(item_pen)
                 item_border.setBrush(Qt.BrushStyle.NoBrush)
-                item_border.setZValue(9998)
+                item_border.setZValue(ZOrder.TRANSFORM_ITEM_BORDER)
                 self._scene.addItem(item_border)
                 self._item_borders.append(item_border)
 
@@ -420,7 +326,7 @@ class TransformEngine(QObject):
         }
         for handle_type, pos in positions.items():
             handle = _HoverHandle(pos.x() - s / 2, pos.y() - s / 2, s, pen, QColor("#FFFFFF"), inverse)
-            handle.setZValue(10000)
+            handle.setZValue(ZOrder.TRANSFORM_HANDLE)
             handle.setData(1, handle_type)
             handle.setCursor(_HANDLE_CURSORS[handle_type])
             self._scene.addItem(handle)
@@ -447,11 +353,11 @@ class TransformEngine(QObject):
             label.setFont(font)
             lb = label.boundingRect()
             label.setPos(d / 2 - lb.width() / 2, d / 2 - lb.height() / 2)
-            label.setZValue(10001)
+            label.setZValue(ZOrder.TRANSFORM_LABEL)
 
             btn = _HoverActionButton(d, pen, QColor(255, 255, 255, 235), inverse, label)
             btn.setPos(cx - d / 2, bar_y)
-            btn.setZValue(10000)
+            btn.setZValue(ZOrder.TRANSFORM_HANDLE)
             btn.setData(1, handle_type)
             btn.setCursor(_HANDLE_CURSORS[handle_type])
             label.setParentItem(btn)
@@ -593,16 +499,6 @@ class TransformEngine(QObject):
         self._initial_positions.clear()
         self._initial_transforms.clear()
         self.transform_finished.emit()
-
-    def cancel_transform(self, items: list[QGraphicsItem]):
-        """Revert items to their initial state."""
-        for item in items:
-            if item in self._initial_positions:
-                item.setPos(self._initial_positions[item])
-            if item in self._initial_transforms:
-                item.setTransform(self._initial_transforms[item])
-        self._initial_positions.clear()
-        self._initial_transforms.clear()
 
     # --- Helpers ---
 

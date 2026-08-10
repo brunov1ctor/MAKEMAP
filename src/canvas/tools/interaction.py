@@ -378,29 +378,48 @@ class ItemInteraction:
     def _delete_selected(self, items: list):
         delete_items(self.viewport.scene(), items, self.transform, self.selection, self.history)
 
-    def _duplicate_selected(self, items: list):
-        """Clone each selected TextItem (deep-copying its TextProperties,
-        including any painted color patterns) a few pixels off from the
-        original. Only wired for TextItem so far — other item types
-        (regions, brush stamps, boundaries) have their own scene-graph
-        bookkeeping outside this class and aren't safe to clone generically
-        yet, so the action button is a no-op for them for now, same as the
-        (also unfinished) Ctrl+D clipboard duplicate."""
-        import copy
+    # Item classes safe to clone generically: each takes a single deep-
+    # copyable `props` dataclass as its whole constructor argument (see
+    # TextItem/MarkerItem/LightItem), so cloning is just "new instance with
+    # a copied props + copied position/rotation/transform". Regions, brush
+    # stamps, and boundaries have their own scene-graph bookkeeping outside
+    # this class and aren't safe to clone this way yet — same limitation
+    # the (also unfinished) Ctrl+D clipboard duplicate has.
+    @staticmethod
+    def _cloneable_classes():
         from src.canvas.text_item import TextItem
-        from src.engines.core.history import CreateItemCommand, CompositeCommand
+        from src.canvas.marker_item import MarkerItem
+        from src.canvas.light_item import LightItem
+        return (TextItem, MarkerItem, LightItem)
+
+    def _duplicate_selected(self, items: list):
+        """Clone each selected item (deep-copying its props dataclass,
+        including any painted color patterns on a TextItem) a few pixels
+        off from the original — parented to the same boundary group as the
+        original, if any, so it lands in the right place instead of being
+        reinterpreted at the scene root."""
+        import copy
+        from src.engines.core.history import CreateItemCommand, PlaceObjectCommand, CompositeCommand
+
+        cloneable = self._cloneable_classes()
+        OFFSET = 20.0
 
         clones = []
         cmds = []
         for item in items:
-            if not isinstance(item, TextItem):
+            if not isinstance(item, cloneable):
                 continue
-            clone = TextItem(copy.deepcopy(item.props))
-            clone.setPos(item.pos().x() + 20, item.pos().y() + 20)
+            clone = type(item)(copy.deepcopy(item.props))
+            clone.setPos(item.pos().x() + OFFSET, item.pos().y() + OFFSET)
             clone.setRotation(item.rotation())
             clone.setTransform(item.transform())
             clone.setZValue(item.zValue())
-            cmds.append(CreateItemCommand(self.viewport.scene(), clone))
+            parent = item.parentItem()
+            if parent is not None:
+                clone.setParentItem(parent)
+                cmds.append(PlaceObjectCommand(clone))
+            else:
+                cmds.append(CreateItemCommand(self.viewport.scene(), clone))
             clones.append(clone)
 
         if not clones:

@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, Signal
 
 from src.styles.tokens import Colors
 from src.layouts.panels.mobs.edit_widgets import _CatalogPickerDialog
-from src.layouts.panels.mobs.category_edit_panel import _ColorSwatch, _SharedColorPicker
+from src.layouts.panels.shared.entity_panel.category_edit_panel import _ColorSwatch, _SharedColorPicker
 
 
 class _TreeTabCreatePanel(QFrame):

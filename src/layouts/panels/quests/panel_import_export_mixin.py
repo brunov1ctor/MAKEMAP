@@ -14,8 +14,8 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtWidgets import (
-    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QTextEdit,
-    QPushButton, QWidget, QStackedWidget, QScrollArea, QFileDialog,
+    QFrame, QVBoxLayout, QLabel, QTextEdit,
+    QWidget, QStackedWidget, QScrollArea, QFileDialog,
 )
 from PySide6.QtCore import Qt
 
@@ -28,6 +28,7 @@ from src.layouts.panels.quests.import_export_constants import (
 )
 from src.layouts.panels.shared.import_export_helpers import (
     DropZone, normalize_blank_cells, read_json, read_csv, read_xlsx, import_button_row,
+    build_tools_header, build_export_view_page,
 )
 
 logger = logging.getLogger("MAKEMAP")
@@ -47,28 +48,7 @@ class QuestsImportExportMixin:
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(8)
 
-        head_row = QHBoxLayout()
-        self._tools_title_lbl = QLabel("")
-        self._tools_title_lbl.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 13px; font-weight: bold; background: transparent; border: none;")
-        head_row.addWidget(self._tools_title_lbl, 1)
-        tools_close_btn = QToolButton()
-        tools_close_btn.setText("✕")
-        tools_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        tools_close_btn.setToolTip("Fechar")
-        tools_close_btn.setStyleSheet(f"""
-            QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: 14px; padding: 2px 6px; }}
-            QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
-            QToolTip {{
-                background-color: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
-        """)
-        tools_close_btn.clicked.connect(self._close_tools_mode)
-        head_row.addWidget(tools_close_btn)
+        head_row, self._tools_title_lbl, _tools_close_btn = build_tools_header(self._close_tools_mode)
         outer.addLayout(head_row)
 
         self._tools_stack = QStackedWidget()
@@ -93,37 +73,7 @@ class QuestsImportExportMixin:
         self._tools_stack.addWidget(import_scroll)
 
         # ── Page 1: read-only JSON/CSV export view ──
-        template_page = QWidget()
-        template_lay = QVBoxLayout(template_page)
-        template_lay.setContentsMargins(0, 0, 0, 0)
-        template_lay.setSpacing(6)
-
-        self._template_hint_lbl = QLabel("")
-        self._template_hint_lbl.setWordWrap(True)
-        self._template_hint_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
-        template_lay.addWidget(self._template_hint_lbl)
-
-        self._template_edit = QTextEdit()
-        self._template_edit.setReadOnly(True)
-        self._template_edit.setStyleSheet(f"""
-            QTextEdit {{ color: {Colors.TEXT_PRIMARY}; font-size: 10px; font-family: Consolas, monospace;
-                background: rgba(0,0,0,0.2); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px; padding: 6px; }}
-        """)
-        template_lay.addWidget(self._template_edit, 1)
-
-        template_btn_row = QHBoxLayout()
-        template_btn_row.addStretch()
-        template_save_btn = QPushButton("💾 Salvar Arquivo")
-        template_save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        template_save_btn.setStyleSheet(f"""
-            QPushButton {{ background: {Colors.ACCENT}; color: #08131F; border: none;
-                border-radius: 6px; padding: 6px 14px; font-size: 10px; font-weight: bold; }}
-            QPushButton:hover {{ background: {Colors.ACCENT_HOVER}; }}
-        """)
-        template_save_btn.clicked.connect(self._on_save_export_file)
-        template_btn_row.addWidget(template_save_btn)
-        template_lay.addLayout(template_btn_row)
-
+        template_page, self._template_hint_lbl, self._template_edit = build_export_view_page(self._on_save_export_file)
         self._tools_stack.addWidget(template_page)
         outer.addWidget(self._tools_stack, 1)
         return panel

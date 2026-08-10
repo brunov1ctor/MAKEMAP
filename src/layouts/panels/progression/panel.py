@@ -1,13 +1,53 @@
-"""5. Progressão do Mundo — painel blockchain redimensionável."""
+"""ProgressionBar — "5. Progressão do Mundo" resizable panel: a guide for
+planning routes through the map as a node graph, one tab (pipeline) per
+route. Each tab owns its own ProgressionCanvas (QGraphicsScene-based node
+graph — see canvas.py), so hover, notes, a per-card map pin, and
+drag-to-redirect/delete on connections all come from the same mechanics the
+Árvore de Habilidades uses (items/skill_tree/). Persisted per-project via
+ProgressionRepository (progression_pipelines table); set_repo() is called
+by ProgressionMediator once a project's UnitOfWork exists.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
 
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QVBoxLayout, QLabel, QScrollArea, QInputDialog, QSizePolicy,
+    QFrame, QHBoxLayout, QVBoxLayout, QLabel, QStackedWidget, QSizePolicy, QToolButton,
 )
 from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush
 
 from src.styles.tokens import Colors, Typography
-from src.components.node_graph import Block, Pipeline, PIPELINE_THEMES
+from .canvas import ProgressionCanvas
+
+PIPELINE_THEMES = [
+    {"name": "Cyan", "color": "#4FC3F7"},
+    {"name": "Purple", "color": "#AB47BC"},
+    {"name": "Green", "color": "#66BB6A"},
+    {"name": "Orange", "color": "#FFA726"},
+    {"name": "Red", "color": "#EF5350"},
+    {"name": "Teal", "color": "#26A69A"},
+]
+
+_DEFAULT_PIPELINES = [
+    ("principal", "Principal", 0, [
+        ("🌲", "Floresta", "Lv 1-10"),
+        ("🏔", "Vale", "Lv 10-20"),
+        ("🌿", "Pântano", "Lv 20-30"),
+        ("⛰", "Montanhas", "Lv 30-40"),
+        ("🏜", "Deserto", "Lv 40-50"),
+        ("🌋", "Vulcão", "Lv 60-70"),
+        ("🌑", "Sombras", "Lv 80-90"),
+        ("⚔", "End Game", "Lv 90-100"),
+    ]),
+    ("side_quests", "Side Quests", 1, [
+        ("📜", "Tutorial", "Lv 1-5"),
+        ("🏴", "Arena PvP", "Lv 20+"),
+        ("💎", "Crafting", "Lv 15+"),
+    ]),
+]
 
 
 class _ResizeHandle(QFrame):
@@ -46,10 +86,15 @@ class _ResizeHandle(QFrame):
 
 
 class ProgressionBar(QFrame):
-    """Painel blockchain — blocos arrastáveis, redimensionável por arraste."""
+    """Painel de progressão — blocos de rota conectados por setas,
+    redimensionável por arraste. Cada aba é um pipeline (rota) independente."""
 
     size_changed = Signal()
-    MIN_HEIGHT = 6  # matches _ResizeHandle height — collapses to just the drag handle
+    pin_pick_requested = Signal(object)    # (ProgressionCanvas, _ProgressionNode)
+    pin_locate_requested = Signal(object)  # (ProgressionCanvas, _ProgressionNode)
+    pipeline_created = Signal(object)      # ProgressionCanvas — so ProgressionMediator can
+                                            # mirror it (pins/connections) onto the real map
+    MIN_HEIGHT = 6
     MAX_HEIGHT = 500
 
     def __init__(self, parent=None):
@@ -60,7 +105,8 @@ class ProgressionBar(QFrame):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
 
-        self._pipelines: list[Pipeline] = []
+        self._repo = None
+        self._pipelines: list[dict] = []  # {"key","name","theme_idx","canvas"}
         self._current_idx = 0
 
         main = QVBoxLayout(self)
@@ -80,85 +126,100 @@ class ProgressionBar(QFrame):
             color: {Colors.TEXT_MUTED}; background: transparent; border: none;
         """)
         header.addWidget(title)
+
+        add_node_btn = QToolButton()
+        add_node_btn.setText("+ Novo Bloco")
+        add_node_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_node_btn.setToolTip("Adicionar bloco de progresso nesta rota")
+        add_node_btn.setStyleSheet("""
+            QToolButton { border: none; border-radius: 6px; font-size: 9px; font-weight: bold;
+                color: #ffffff; background: #2E7D32; padding: 3px 8px; }
+            QToolButton:hover { background: #388E3C; }
+        """)
+        add_node_btn.clicked.connect(self._add_block)
+        header.addWidget(add_node_btn)
+
         header.addStretch()
         self._tabs_layout = QHBoxLayout()
         self._tabs_layout.setSpacing(0)
         header.addLayout(self._tabs_layout)
         main.addLayout(header)
 
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._scroll.setStyleSheet(f"""
-            QScrollArea {{ border: none; background: transparent; }}
-            QScrollBar:horizontal {{ height: 5px; background: transparent; }}
-            QScrollBar::handle:horizontal {{ background: {Colors.BORDER}; border-radius: 2px; }}
-            QScrollBar:vertical {{ width: 5px; background: transparent; }}
-            QScrollBar::handle:vertical {{ background: {Colors.BORDER}; border-radius: 2px; }}
-        """)
-        main.addWidget(self._scroll, 1)
+        self._stack = QStackedWidget()
+        main.addWidget(self._stack, 1)
 
-        self._create_pipeline("Principal", 0, [
-            ("🌲", "Floresta", "Lv 1-10", "✓"),
-            ("🏔", "Vale", "Lv 10-20", "✓"),
-            ("🌿", "Pântano", "Lv 20-30", "◉"),
-            ("⛰", "Montanhas", "Lv 30-40", "○"),
-            ("🏜", "Deserto", "Lv 40-50", "○"),
-            ("🌋", "Vulcão", "Lv 60-70", "○"),
-            ("🌑", "Sombras", "Lv 80-90", "○"),
-            ("⚔", "End Game", "Lv 90-100", "○"),
-        ])
-        self._create_pipeline("Side Quests", 1, [
-            ("📜", "Tutorial", "Lv 1-5", "✓"),
-            ("🏴", "Arena PvP", "Lv 20+", "○"),
-            ("💎", "Crafting", "Lv 15+", "○"),
-        ])
+        # Sem projeto aberto ainda — set_repo() (via ProgressionMediator)
+        # carrega/semeia os pipelines reais assim que houver um uow.
+
+    # ── persistência / carregamento ──
+
+    def set_repo(self, repo):
+        self._repo = repo
+        self._load_pipelines()
+
+    def _load_pipelines(self):
+        while self._stack.count():
+            w = self._stack.widget(0)
+            self._stack.removeWidget(w)
+            w.deleteLater()
+        self._pipelines = []
+
+        rows = self._repo.get_all_ordered() if self._repo else []
+        if not rows:
+            for order, (key, name, theme_idx, segments) in enumerate(_DEFAULT_PIPELINES):
+                self._repo.upsert(key, name=name, theme_idx=theme_idx, sort_order=order,
+                                   data=json.dumps({"nodes": [], "edges": []}))
+                self._create_pipeline(key, name, theme_idx, seed_segments=segments)
+        else:
+            for row in rows:
+                self._create_pipeline(row["pipeline_key"], row["name"], row.get("theme_idx") or 0)
+
         self._switch_pipeline(0)
 
-    def _create_pipeline(self, name: str, theme_idx: int = 0, segments: list = None):
-        theme = PIPELINE_THEMES[theme_idx % len(PIPELINE_THEMES)]
-        pipe = Pipeline(name, theme, segments)
-        for block in pipe.canvas._blocks:
-            block.edit_requested.connect(self._edit_block)
-            block.delete_requested.connect(self._delete_block)
-        pipe.canvas.rect_requested.connect(self._add_rect)
-        self._pipelines.append(pipe)
+    def _create_pipeline(self, key: str, name: str, theme_idx: int, seed_segments: list = None) -> ProgressionCanvas:
+        canvas = ProgressionCanvas(key, repo=self._repo)
+        canvas.pin_pick_requested.connect(lambda node, c=canvas: self.pin_pick_requested.emit((c, node)))
+        canvas.pin_locate_requested.connect(lambda node, c=canvas: self.pin_locate_requested.emit((c, node)))
+        # Emitted before load() so a listener (ProgressionMediator) can
+        # subscribe to this canvas's own `changed` signal in time to catch
+        # the emission load() fires once the graph is actually populated.
+        self.pipeline_created.emit(canvas)
+        canvas.load(seed_segments=seed_segments)
+        self._pipelines.append({"key": key, "name": name, "theme_idx": theme_idx, "canvas": canvas})
+        self._stack.addWidget(canvas)
         self._rebuild_tabs()
+        return canvas
 
     def _add_pipeline(self):
-        name = f"Pipeline {len(self._pipelines) + 1}"
-        self._create_pipeline(name, len(self._pipelines) % len(PIPELINE_THEMES))
+        if self._repo is None:
+            return
+        idx = len(self._pipelines)
+        key = str(uuid.uuid4())
+        name = f"Pipeline {idx + 1}"
+        theme_idx = idx % len(PIPELINE_THEMES)
+        self._repo.upsert(key, name=name, theme_idx=theme_idx, sort_order=idx,
+                           data=json.dumps({"nodes": [], "edges": []}))
+        self._create_pipeline(key, name, theme_idx)
         self._switch_pipeline(len(self._pipelines) - 1)
 
-    def _add_rect(self):
+    def _add_block(self):
         if not self._pipelines:
             return
-        pipe = self._pipelines[self._current_idx]
-        block = Block("🗺", "Novo", "", "#4FC3F7", "○")
-        block.edit_requested.connect(self._edit_block)
-        block.delete_requested.connect(self._delete_block)
-        pipe.canvas.add_block(block)
-
-    def _edit_block(self, block: Block):
-        name, ok = QInputDialog.getText(self, "Editar Bloco", "Nome:", text=block._name)
-        if not ok:
-            return
-        levels, ok2 = QInputDialog.getText(self, "Info", "Nível:", text=block._levels)
-        levels = levels if ok2 else block._levels
-        icon, ok3 = QInputDialog.getText(self, "Ícone", "Emoji:", text=block._icon)
-        icon = icon if ok3 else block._icon
-        block.update_data(icon, name, levels)
-
-    def _delete_block(self, block: Block):
-        self._pipelines[self._current_idx].canvas.remove_block(block)
+        canvas: ProgressionCanvas = self._pipelines[self._current_idx]["canvas"]
+        # Nasce onde a view já está centralizada — não empilhado longe à
+        # direita do que já existe, o que antes deixava o clique em
+        # "+ Novo Bloco" sem efeito visível nenhum (o card ia parar fora da
+        # área visível do painel).
+        center = canvas.view_center_scene_pos()
+        node = canvas.add_node({"icon": "🗺", "name": "Novo", "levels": "",
+                                 "x": center.x(), "y": center.y()})
+        canvas._view.centerOn(node)
 
     def _switch_pipeline(self, idx: int):
+        if not self._pipelines:
+            return
         self._current_idx = idx
-        old = self._scroll.takeWidget()
-        if old:
-            old.setParent(None)
-        self._scroll.setWidget(self._pipelines[idx].canvas)
+        self._stack.setCurrentWidget(self._pipelines[idx]["canvas"])
         self._rebuild_tabs()
 
     def _rebuild_tabs(self):
@@ -172,7 +233,7 @@ class ProgressionBar(QFrame):
             tab.setCursor(Qt.CursorShape.PointingHandCursor)
             tab.setFixedHeight(20)
             is_active = (i == self._current_idx)
-            c = pipe.theme["color"]
+            c = PIPELINE_THEMES[pipe["theme_idx"] % len(PIPELINE_THEMES)]["color"]
             tab.setStyleSheet(f"""
                 QFrame {{
                     border: none;
@@ -187,7 +248,7 @@ class ProgressionBar(QFrame):
             tab_lay = QHBoxLayout(tab)
             tab_lay.setContentsMargins(6, 0, 6, 0)
             tab_lay.setSpacing(0)
-            lbl = QLabel(pipe.name)
+            lbl = QLabel(pipe["name"])
             lbl.setStyleSheet(f"""
                 font-size: 9px; font-weight: {Typography.WEIGHT_BOLD};
                 color: {c if is_active else Colors.TEXT_MUTED};

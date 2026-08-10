@@ -1,5 +1,6 @@
 """LightTool — click to drop a light object; click an existing one to
-select/drag it instead. Named "Luz" (not "Iluminação") on purpose: the
+select/drag it instead (see PlacementTool for the shared click-an-existing-
+item-vs-place-a-new-one flow). Named "Luz" (not "Iluminação") on purpose: the
 toolbar's 💡 "Iluminação" button is a toggle that opens LightPanel (see
 main_layout._toggle_light_panel), not this tool directly — picking a type
 in that panel is what arms this tool (mirrors how "Região" arms
@@ -10,42 +11,30 @@ clicking — see activate()/deactivate()/mouse_move below."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QPointF
-from PySide6.QtGui import QCursor, QMouseEvent
+from PySide6.QtCore import Qt
 
-from src.canvas.tools.base import BaseTool
-from src.canvas.tools.interaction import ItemInteraction
+from PySide6.QtGui import QCursor
+
+from src.canvas.tools.placement_tool import PlacementTool
 from src.canvas.light_item import LightItem
 from src.canvas.lighting_overlay import LightGhostItem
 from src.engines.light import LightProperties
-from src.engines.core.history import PlaceObjectCommand
 
 
-class LightTool(BaseTool):
+class LightTool(PlacementTool):
     name = "Luz"
     cursor = Qt.CursorShape.CrossCursor
+    item_cls = LightItem
 
-    def __init__(
-        self, viewport, tool_manager=None, history_engine=None, selection_engine=None,
-        transform_engine=None, on_placed=None, properties_provider=None,
-    ):
-        super().__init__(viewport)
-        self._tool_manager = tool_manager
-        self._history = history_engine
-        self._selection = selection_engine
-        self._on_placed = on_placed
-        self._properties_provider = properties_provider
-        self._parent_provider = None
-        self._interaction = ItemInteraction(viewport, selection_engine, transform_engine, history_engine) \
-            if selection_engine and transform_engine else None
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._ghost: LightGhostItem | None = None
 
-    def set_properties_provider(self, provider):
-        self._properties_provider = provider
+    def _default_properties(self):
+        return LightProperties()
 
-    def set_parent_provider(self, provider):
-        """provider() -> QGraphicsItem | None — boundary group para parenting."""
-        self._parent_provider = provider
+    def _make_item(self, props):
+        return LightItem(props)
 
     def activate(self):
         super().activate()
@@ -57,7 +46,7 @@ class LightTool(BaseTool):
 
     def _spawn_ghost(self):
         self._remove_ghost()
-        props = self._properties_provider() if self._properties_provider else LightProperties()
+        props = self._properties_provider() if self._properties_provider else self._default_properties()
         self._ghost = LightGhostItem(props)
         self.viewport.scene().addItem(self._ghost)
         # Position it at the cursor's current spot right away instead of
@@ -72,51 +61,14 @@ class LightTool(BaseTool):
                 scene.removeItem(self._ghost)
             self._ghost = None
 
-    def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
-
-        # item_filter: clicking on top of a região/terrain/asset must still
-        # place a new light, not hijack the click into selecting that other
-        # layer (same fix already applied to Spawn/Texto/Marcador).
-        if self._interaction and self._interaction.try_begin(scene_pos, item_filter=lambda it: isinstance(it, LightItem)):
-            return
-
-        props = self._properties_provider() if self._properties_provider else LightProperties()
-        parent_item = self._parent_provider() if self._parent_provider else None
-        item = LightItem(props)
-        item.setPos(scene_pos if not parent_item else parent_item.mapFromScene(scene_pos))
-        item.setZValue(60)
-        if parent_item:
-            item.setParentItem(parent_item)
-        else:
-            self.viewport.scene().addItem(item)
-        if self._history:
-            self._history.push(PlaceObjectCommand(item))
-
-        if self._selection:
-            self._selection.set([item])
-        else:
-            self.viewport.scene().clearSelection()
-            item.setSelected(True)
-
-        if self._tool_manager:
-            self._tool_manager.activate("Selecionar")
-        if self._on_placed:
-            self._on_placed(item)
-
-    def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
+    def mouse_move(self, event, scene_pos):
         # Hide the ghost while actually dragging an existing light (clicked
-        # via the item_filter branch above) — showing a placement preview on
-        # top of the real light being repositioned would just be clutter.
+        # via the item_filter branch in PlacementTool.mouse_press) — showing
+        # a placement preview on top of the real light being repositioned
+        # would just be clutter.
         dragging_existing = bool(self._interaction and self._interaction.active)
         if self._ghost is not None:
             self._ghost.setVisible(not dragging_existing)
             if not dragging_existing:
                 self._ghost.setPos(scene_pos)
-        if self._interaction:
-            self._interaction.move(scene_pos)
-
-    def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
-        if self._interaction:
-            self._interaction.release(scene_pos)
+        super().mouse_move(event, scene_pos)

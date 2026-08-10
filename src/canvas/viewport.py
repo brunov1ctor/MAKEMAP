@@ -476,22 +476,6 @@ class Viewport(QGraphicsView):
     def zoom_reset(self):
         self.set_zoom(1.0)
 
-    def fit_to_content(self):
-        items_rect = self._scene.itemsBoundingRect()
-        if items_rect.isEmpty():
-            return
-        # fitInView builds a fresh axis-aligned transform, discarding any
-        # rotation — resync our tracked state to match so a later
-        # set_zoom/set_rotation (which reapplies _rotation_deg via
-        # _rebuild_transform) doesn't suddenly snap the view back to a
-        # rotation that's no longer actually there.
-        self.fitInView(items_rect, Qt.AspectRatioMode.KeepAspectRatio)
-        self._zoom = math.hypot(self.transform().m11(), self.transform().m12())
-        if self._rotation_deg != 0.0:
-            self._rotation_deg = 0.0
-            self.rotation_changed.emit(0.0)
-        self.zoom_changed.emit(self._zoom)
-
     def center_on_point(self, scene_pos: QPointF):
         self.centerOn(scene_pos)
 

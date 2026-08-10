@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from src.database.connection import Database
 
 logger = logging.getLogger("MAKEMAP")
@@ -1188,6 +1189,37 @@ MIGRATIONS: list[tuple[int, str, str]] = [
             updated_at TEXT DEFAULT (datetime('now'))
         );
     """),
+    (39, "Progressão do Mundo panel — tabela progression_pipelines (grafo de blocos por aba, mesmo molde de skill_trees)", """
+        CREATE TABLE IF NOT EXISTS progression_pipelines (
+            pipeline_key TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            theme_idx INTEGER DEFAULT 0,
+            sort_order INTEGER DEFAULT 0,
+            data TEXT DEFAULT '{"nodes": [], "edges": []}',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+    """),
+    (40, "Índices faltando em FKs filtradas por repositórios (get_by_pack/get_by_world/get_by_dungeon etc.) sem suporte de índice — full table scan hoje", """
+        CREATE INDEX IF NOT EXISTS idx_assets_pack ON assets(pack_id);
+        CREATE INDEX IF NOT EXISTS idx_maps_world ON maps(world_id);
+        CREATE INDEX IF NOT EXISTS idx_continents_world ON continents(world_id);
+        CREATE INDEX IF NOT EXISTS idx_kingdoms_continent ON kingdoms(continent_id);
+        CREATE INDEX IF NOT EXISTS idx_bosses_dungeon ON bosses(dungeon_id);
+        CREATE INDEX IF NOT EXISTS idx_bosses_region ON bosses(region_id);
+    """),
+    (41, "NPCs panel — height field, mirrors migration 25's mob altura so npc_spawn stamps can cast a shadow too", """
+        ALTER TABLE npcs ADD COLUMN altura REAL DEFAULT 0;
+    """),
+    (42, "Explorer panel — tabela explorer_overrides (ícone/cor do label por elemento, editado via popup de clique no ícone)", """
+        CREATE TABLE IF NOT EXISTS explorer_overrides (
+            node_key TEXT PRIMARY KEY,
+            icon TEXT,
+            label_color TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+    """),
 ]
 
 
@@ -1207,8 +1239,25 @@ def run_migrations(db: Database):
 
     for version, desc, sql in pending:
         logger.info("Aplicando migration %d: %s", version, desc)
+        # executescript() issues an implicit COMMIT before running and DDL
+        # auto-commits in SQLite regardless of db.transaction() below — so a
+        # script that fails partway leaves its already-executed statements
+        # applied even though schema_version never got the INSERT for this
+        # version. Without this guard, the next boot retries the same script
+        # and dies on "already exists"/"duplicate column" for the part that
+        # did apply, locking the project out permanently.
+        try:
+            db.conn.executescript(sql)
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "already exists" in msg or "duplicate column" in msg:
+                logger.warning(
+                    "Migration %d parcialmente aplicada em execução anterior (%s) — marcando como concluída.",
+                    version, e,
+                )
+            else:
+                raise
         with db.transaction() as conn:
-            conn.executescript(sql)
             conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
         logger.info("Migration %d aplicada com sucesso", version)
 

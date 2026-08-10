@@ -1,13 +1,12 @@
 """FlowNode — bloco arrastável do editor de Fluxo da quest.
 
-Mesma mecânica de arrastar/conectar de components.node_graph.Block (ponto de
-conexão na borda direita, arraste solto, botão ✕), mas com um vocabulário
-próprio de tipos (Início/Objetivo/Condição/Evento/Fim) em vez de um único
-tipo genérico — cada tipo tem ícone e cor fixos, e o nó mostra um selo com o
-tipo além do título/subtítulo. Vive num arquivo próprio (não em
-components/node_graph.py) porque o Fluxo da quest e a Progressão de bioma
-divergem demais no que cada nó precisa representar para valer a pena forçar
-um widget genérico único entre os dois.
+Ponto de conexão na borda direita, arraste solto, botão ✕, com um
+vocabulário próprio de tipos (Início/Objetivo/Condição/Evento/Fim) em vez de
+um único tipo genérico — cada tipo tem ícone e cor fixos, e o nó mostra um
+selo com o tipo além do título/subtítulo. Vive num arquivo próprio porque o
+Fluxo da quest e a Progressão de bioma divergem demais no que cada nó
+precisa representar para valer a pena forçar um widget genérico único entre
+os dois.
 """
 
 from __future__ import annotations
@@ -148,7 +147,7 @@ class FlowNode(QFrame):
         self._subtitle_lbl.setText(elided_sub)
         self._subtitle_lbl.setToolTip(self._subtitle)
 
-    # ── pintura (mesmo estilo neon de components.node_graph.Block) ──
+    # ── pintura (estilo neon) ──
 
     def paintEvent(self, event):
         p = QPainter(self)

@@ -14,6 +14,8 @@ from PySide6.QtCore import Qt, QLineF, QPointF
 from PySide6.QtGui import QColor, QPen
 from PySide6.QtWidgets import QGraphicsLineItem, QGraphicsScene
 
+from src.canvas.z_order import ZOrder
+
 GUIDE_COLOR = QColor(255, 200, 50, 180)
 GUIDE_WIDTH = 1.5
 EXTENT = 50000
@@ -44,7 +46,7 @@ class PointAlignmentGuides:
         pen = QPen(GUIDE_COLOR, GUIDE_WIDTH, Qt.PenStyle.DashLine)
         pen.setCosmetic(True)
         line.setPen(pen)
-        line.setZValue(9999)
+        line.setZValue(ZOrder.CURSOR_GHOST)
         self._scene.addItem(line)
         self._lines.append(line)
 
@@ -53,7 +55,7 @@ class PointAlignmentGuides:
         pen = QPen(GUIDE_COLOR, GUIDE_WIDTH, Qt.PenStyle.DashLine)
         pen.setCosmetic(True)
         line.setPen(pen)
-        line.setZValue(9999)
+        line.setZValue(ZOrder.CURSOR_GHOST)
         self._scene.addItem(line)
         self._lines.append(line)
 

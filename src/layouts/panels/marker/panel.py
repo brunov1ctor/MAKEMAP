@@ -96,8 +96,5 @@ class MarkerToolPanel(QFrame):
         self._icon = icon
         self.icon_changed.emit(icon)
 
-    def current_icon(self) -> str:
-        return self._icon
-
     def paintEvent(self, event):
         paint_glass_panel(self)

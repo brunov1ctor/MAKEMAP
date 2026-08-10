@@ -6,15 +6,17 @@ import math
 import random
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, QRect
+from PySide6.QtCore import Qt, QPointF, QRectF, QRect
 from PySide6.QtGui import (
     QImage, QPixmap, QPainter, QColor, QBrush, QTransform,
-    QRadialGradient, QPen, QPolygonF, QPainterPath, QRegion, QBitmap,
+    QRadialGradient, QPen, QPolygonF, QPainterPath, QRegion,
 )
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene
 
 from src.canvas.item_utils import suppress_selection_decoration, enable_hover_glow
+from src.canvas.z_order import ZOrder
 from src.styles.tokens import Colors
+from src.engines.map.terrain_effect_geometry import BlobInfo, TerrainEffectGeometry
 
 
 class _LayerItem(QGraphicsItem):
@@ -355,22 +357,34 @@ _ROUGHNESS_JITTER = 0.65
 
 
 def _jagged_circle_path(center: QPointF, radius: float, roughness: float) -> QPainterPath:
-    """A closed path approximating a circle but with the radius perturbed
-    per angular segment — used instead of a perfect drawEllipse() when
-    roughness > 0, only in the freehand soft-stamp path (paint_at). Snap's
-    cell-fill (paint_cell) has no circular edge to begin with, so roughness
-    naturally has no effect there."""
-    segments = 20
-    path = QPainterPath()
-    for i in range(segments):
-        angle = (i / segments) * 2 * math.pi
+    """A closed path approximating a circle but with the radius perturbed —
+    used instead of a perfect drawEllipse() when roughness > 0, only in the
+    freehand soft-stamp path (paint_at). Snap's cell-fill (paint_cell) has
+    no circular edge to begin with, so roughness naturally has no effect
+    there.
+
+    Perturbs radius at a handful of control points, then threads a closed
+    Catmull-Rom spline (converted to cubic Béziers) through them instead of
+    straight lineTo segments between many independently-randomized points —
+    neighboring points stay correlated, so the result reads as an organic
+    torn/bulged edge instead of a sawtooth."""
+    control_count = 8
+    controls = []
+    for i in range(control_count):
+        angle = (i / control_count) * 2 * math.pi
         r = radius * (1.0 + roughness * random.uniform(-_ROUGHNESS_JITTER, _ROUGHNESS_JITTER))
-        x = center.x() + r * math.cos(angle)
-        y = center.y() + r * math.sin(angle)
-        if i == 0:
-            path.moveTo(x, y)
-        else:
-            path.lineTo(x, y)
+        controls.append(QPointF(center.x() + r * math.cos(angle), center.y() + r * math.sin(angle)))
+
+    path = QPainterPath()
+    path.moveTo(controls[0])
+    for i in range(control_count):
+        p0 = controls[(i - 1) % control_count]
+        p1 = controls[i]
+        p2 = controls[(i + 1) % control_count]
+        p3 = controls[(i + 2) % control_count]
+        c1 = p1 + (p2 - p0) / 6.0
+        c2 = p2 - (p3 - p1) / 6.0
+        path.cubicTo(c1, c2, p2)
     path.closeSubpath()
     return path
 
@@ -432,30 +446,6 @@ def morphological_close(img: QImage, radius: int, steps: int = 16) -> QImage:
         ep.drawImage(-dx, -dy, dilated)
     ep.end()
     return eroded
-
-
-def _convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """Andrew's monotone chain — O(n log n), smallest convex polygon
-    containing every point, no external deps. Returns the hull vertices in
-    CCW order; input order doesn't matter and duplicates are ignored."""
-    pts = sorted(set(points))
-    if len(pts) <= 2:
-        return pts
-
-    def cross(o, a, b):
-        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-
-    lower: list[tuple[float, float]] = []
-    for p in pts:
-        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
-            lower.pop()
-        lower.append(p)
-    upper: list[tuple[float, float]] = []
-    for p in reversed(pts):
-        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
-            upper.pop()
-        upper.append(p)
-    return lower[:-1] + upper[:-1]
 
 
 # ─── Organic edge dithering (always on, see build_stamp) ────────────────
@@ -606,8 +596,13 @@ def build_stamp(radius: float, params: TerrainBrushParams, world_pos: QPointF | 
         gradient.setColorAt(0.0, QColor(255, 255, 255, alpha))
         gradient.setColorAt(1.0, QColor(255, 255, 255, alpha))
     else:
+        # Anchor the falloff start to the nominal radius, not gradient_r —
+        # gradient_r is inflated by roughness (to fit the jagged shape's
+        # bulges), but softness's falloff distance shouldn't drift outward
+        # as a side effect of a roughness change the user never asked for.
+        hardness_stop = min(0.99, (hardness * radius) / gradient_r) if gradient_r > 0 else hardness
         gradient.setColorAt(0.0, QColor(255, 255, 255, alpha))
-        gradient.setColorAt(max(0.01, hardness), QColor(255, 255, 255, alpha))
+        gradient.setColorAt(max(0.01, hardness_stop), QColor(255, 255, 255, alpha))
         gradient.setColorAt(1.0, QColor(255, 255, 255, 0))
 
     painter.setPen(Qt.PenStyle.NoPen)
@@ -621,25 +616,6 @@ def build_stamp(radius: float, params: TerrainBrushParams, world_pos: QPointF | 
     if params.dither:
         _apply_edge_dither(img, center, gradient_r, world_pos)
     return img
-
-
-@dataclass
-class BlobInfo:
-    """One contiguous painted patch found by connected_components_local —
-    bounds/center in scene coords (via the layer's own item transform) plus
-    the downsampled opaque grid-cells (scene + local coords) that make it
-    up, cheap enough to reuse as sample points for coverage tests (e.g. "is
-    this blob inside a região") without another full flood-fill.
-    sampled_points_local also lets blob_at_local test actual cell
-    membership instead of the (much looser) bounding box — two winding
-    blobs like elongated rivers can have heavily overlapping bounding
-    boxes despite never actually touching."""
-    bounds_scene: QRectF
-    bounds_local: QRectF
-    center_scene: QPointF
-    sampled_points_scene: list[QPointF]
-    sampled_points_local: list[QPointF]
-    pixel_count: int  # opaque downsampled cells — proxy for relative area
 
 
 class TerrainLayer:
@@ -683,7 +659,7 @@ class TerrainLayer:
         # Scene item (child of parent_item if provided, so it moves with it)
         self._item = _LayerItem(parent_item, tool_manager=tool_manager)
         self._item._terrain_layer = self
-        self._item.setZValue(1)
+        self._item.setZValue(ZOrder.TERRAIN)
         self._item.setPos(0, 0)
         self._item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self._item.setData(0, {"item_type": "terrain"})
@@ -695,20 +671,12 @@ class TerrainLayer:
         self._dirty_rect: QRect | None = None
         self._stroke_dirty: QRect | None = None
 
-        # Cache for opaque_bounds_local() — invalidated on mask mutation
-        self._opaque_bounds_cache: QRect | None = None
-
-        # Cache for connected_components_local() (default scan_size only) —
-        # invalidated alongside _opaque_bounds_cache, see that field.
-        self._blobs_cache: list | None = None
-
-        # Cache for _traced_silhouette() — the morphological close it runs
-        # is cheap-ish but not free, and effect_geometry() (BrushEffectsOverlay,
-        # for animated brush effects like Névoa, plus RegionLayer's border
-        # bake) can call it several times a second even while the mask
-        # itself sits still. Invalidated wherever the mask is mutated (see
-        # invalidate_traced_cache()).
-        self._traced_cache: tuple | None = None
+        # Blob-detection / traced-silhouette geometry queries — split out
+        # into its own collaborator (see terrain_effect_geometry.py); owns
+        # its own caches (opaque bounds / blobs / traced silhouette),
+        # invalidated below via self._geometry.invalidate() wherever the
+        # mask/stencil is mutated.
+        self._geometry = TerrainEffectGeometry(self)
 
     @property
     def mask(self) -> QImage:
@@ -729,12 +697,6 @@ class TerrainLayer:
     def has_texture(self) -> bool:
         return self._texture is not None and not self._texture.isNull()
 
-    def is_mask_only(self) -> bool:
-        return self._mask_only
-
-    def has_stencil_data(self) -> bool:
-        return self._has_stencil
-
     def set_texture(self, pixmap: QPixmap, scale: float = 1.0, rotation: float = 0.0):
         self._texture = pixmap
         self._texture_scale = scale
@@ -752,6 +714,16 @@ class TerrainLayer:
         if self._mask_only == enabled:
             return
         self._mask_only = enabled
+        self._recomposite_full()
+
+    def clear_stencil(self):
+        """Reset the stencil clip left over from Mask mode — leaves the
+        actual painted texture (self._mask) untouched."""
+        if not self._has_stencil:
+            return
+        self._stencil.fill(QColor(0, 0, 0, 0))
+        self._has_stencil = False
+        self._geometry.invalidate()
         self._recomposite_full()
 
     # ─── Painting ────────────────────────────────────────────────────────
@@ -844,9 +816,7 @@ class TerrainLayer:
             self._stroke_dirty = stamp_rect
         else:
             self._stroke_dirty = self._stroke_dirty.united(stamp_rect)
-        self._traced_cache = None
-        self._opaque_bounds_cache = None
-        self._blobs_cache = None
+        self._geometry.invalidate()
 
     def paint_cell(self, polygon: QPolygonF, params: TerrainBrushParams):
         """Flood-fill an entire grid cell — used instead of paint_at() when
@@ -897,9 +867,7 @@ class TerrainLayer:
             self._stroke_dirty = stamp_rect
         else:
             self._stroke_dirty = self._stroke_dirty.united(stamp_rect)
-        self._traced_cache = None
-        self._opaque_bounds_cache = None
-        self._blobs_cache = None
+        self._geometry.invalidate()
 
     def update_live(self):
         """Incremental update: recomposite only the dirty region."""
@@ -1081,9 +1049,7 @@ class TerrainLayer:
         self._height = state["height"]
         self._item.setPos(state["pos"])
         self._result = QImage(self._width, self._height, QImage.Format.Format_ARGB32_Premultiplied)
-        self._traced_cache = None
-        self._opaque_bounds_cache = None
-        self._blobs_cache = None
+        self._geometry.invalidate()
         self._recomposite_full()
 
     # ─── Serialization ───────────────────────────────────────────────────
@@ -1093,330 +1059,46 @@ class TerrainLayer:
     # brush-painted terrain masks the same way RegionMediator already
     # persisted painted zones).
 
-    _OPAQUE_SCAN_SIZE = 64
-    _OPAQUE_ALPHA_THRESHOLD = 10
+    # Blob-detection / traced-silhouette geometry is delegated to
+    # self._geometry (see terrain_effect_geometry.TerrainEffectGeometry) —
+    # these thin wrappers keep TerrainLayer's own public API (and every
+    # external call site: RegionLayer, BrushEffectsOverlay,
+    # ExplorerSyncMediator, _LayerItem's hover glow, ...) unchanged.
 
     def opaque_bounds_local(self) -> QRect | None:
         """Bounding box (layer-local coords) of the painted (non-transparent)
-        area, via a cheap downsampled alpha scan — good enough to crop an
-        export/thumbnail around, not meant to be pixel-exact. Result is
-        cached and invalidated whenever the mask is mutated (paint_at,
-        paint_cell, restore_state, clear)."""
-        if self._opaque_bounds_cache is not None:
-            return self._opaque_bounds_cache
-        w, h = self._mask.width(), self._mask.height()
-        if w == 0 or h == 0:
-            return None
-        small = self._mask.scaled(
-            self._OPAQUE_SCAN_SIZE, self._OPAQUE_SCAN_SIZE,
-            Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation,
-        )
-        min_x = min_y = None
-        max_x = max_y = None
-        for y in range(small.height()):
-            for x in range(small.width()):
-                if small.pixelColor(x, y).alpha() > self._OPAQUE_ALPHA_THRESHOLD:
-                    min_x = x if min_x is None else min(min_x, x)
-                    max_x = x if max_x is None else max(max_x, x)
-                    min_y = y if min_y is None else min(min_y, y)
-                    max_y = y if max_y is None else max(max_y, y)
-        if min_x is None:
-            return None
-        sx, sy = w / small.width(), h / small.height()
-        pad = 2
-        result = QRect(
-            int(max(0, (min_x - pad) * sx)), int(max(0, (min_y - pad) * sy)),
-            int(min(w, (max_x + 1 + pad) * sx) - max(0, (min_x - pad) * sx)),
-            int(min(h, (max_y + 1 + pad) * sy) - max(0, (min_y - pad) * sy)),
-        )
-        self._opaque_bounds_cache = result
-        return result
+        area — see TerrainEffectGeometry.opaque_bounds_local."""
+        return self._geometry.opaque_bounds_local()
 
-    def connected_components_local(self, scan_size: int = _OPAQUE_SCAN_SIZE) -> list[BlobInfo]:
-        """Every contiguous painted patch in the mask, via a flood fill over
-        a small downsampled copy (same reasoning as opaque_bounds_local — a
-        per-pixel scan over a possibly 4096x4096 mask would be far too slow
-        in Python). Originally lived only inside RegionLayer.
-        largest_blob_center_scene (which kept just the largest patch) —
-        moved here, generalized to return every patch, so other callers
-        (e.g. the Explorer's terrain→região coverage check, blob_at_local's
-        hover/selection scoping) can reuse the same scan instead of a third
-        copy of this flood fill.
-
-        Cached (only at the default scan_size — callers that pass a custom
-        one opt out of caching) and invalidated at the same points as
-        opaque_bounds_local, since blob_at_local can now run on every
-        hover-move tick and a fresh flood fill every frame would be far too
-        slow."""
-        use_cache = scan_size == self._OPAQUE_SCAN_SIZE
-        if use_cache and self._blobs_cache is not None:
-            return self._blobs_cache
-        w, h = self._mask.width(), self._mask.height()
-        if w == 0 or h == 0:
-            return []
-        small = self._mask.scaled(scan_size, scan_size, Qt.AspectRatioMode.IgnoreAspectRatio,
-                                   Qt.TransformationMode.FastTransformation)
-        sw, sh = small.width(), small.height()
-        opaque = [[small.pixelColor(x, y).alpha() > self._OPAQUE_ALPHA_THRESHOLD for x in range(sw)] for y in range(sh)]
-        visited = [[False] * sw for _ in range(sh)]
-        sx_scale, sy_scale = w / sw, h / sh
-
-        blobs: list[BlobInfo] = []
-        for sy in range(sh):
-            for sx in range(sw):
-                if visited[sy][sx] or not opaque[sy][sx]:
-                    visited[sy][sx] = True
-                    continue
-                stack = [(sx, sy)]
-                visited[sy][sx] = True
-                cells: list[tuple[int, int]] = []
-                min_x = max_x = sx
-                min_y = max_y = sy
-                while stack:
-                    cx, cy = stack.pop()
-                    cells.append((cx, cy))
-                    min_x, max_x = min(min_x, cx), max(max_x, cx)
-                    min_y, max_y = min(min_y, cy), max(max_y, cy)
-                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                        nx, ny = cx + dx, cy + dy
-                        if 0 <= nx < sw and 0 <= ny < sh and not visited[ny][nx] and opaque[ny][nx]:
-                            visited[ny][nx] = True
-                            stack.append((nx, ny))
-
-                sampled_points_local = [
-                    QPointF((cx + 0.5) * sx_scale, (cy + 0.5) * sy_scale)
-                    for cx, cy in cells
-                ]
-                sampled_points_scene = [self._item.mapToScene(p) for p in sampled_points_local]
-                local_center = QPointF((min_x + max_x + 1) / 2 * sx_scale, (min_y + max_y + 1) / 2 * sy_scale)
-                bounds_local = QRectF(min_x * sx_scale, min_y * sy_scale,
-                                       (max_x - min_x + 1) * sx_scale, (max_y - min_y + 1) * sy_scale)
-                top_left_scene = self._item.mapToScene(bounds_local.topLeft())
-                bottom_right_scene = self._item.mapToScene(bounds_local.bottomRight())
-                blobs.append(BlobInfo(
-                    bounds_scene=QRectF(top_left_scene, bottom_right_scene),
-                    bounds_local=bounds_local,
-                    center_scene=self._item.mapToScene(local_center),
-                    sampled_points_scene=sampled_points_scene,
-                    sampled_points_local=sampled_points_local,
-                    pixel_count=len(cells),
-                ))
-        if use_cache:
-            self._blobs_cache = blobs
-        return blobs
+    def connected_components_local(self, scan_size: int = TerrainEffectGeometry._OPAQUE_SCAN_SIZE) -> list[BlobInfo]:
+        """Every contiguous painted patch in the mask — see
+        TerrainEffectGeometry.connected_components_local."""
+        return self._geometry.connected_components_local(scan_size)
 
     def blob_at_local(self, pos: QPointF) -> "BlobInfo | None":
-        """Which blob (see connected_components_local) `pos` (item-local
-        coords) falls inside, or None if it's in unpainted area or between
-        two blobs — used to scope hover-glow/selection-box to just the one
-        blob under the cursor/click instead of the whole layer, since two
-        independent puddles painted with the same water asset are two
-        blobs of this SAME shared item (see
-        BrushTool._get_or_create_terrain_layer, one TerrainLayer per
-        asset_id for the whole map).
-
-        Tests actual opaque-cell membership (sampled_points_local), not
-        just bounds_local containment — an elongated/winding blob (a
-        river, an S-shaped puddle) has a bounding box far bigger than its
-        actual paint, so two such blobs placed near/across each other can
-        have bounding boxes that overlap heavily despite never touching.
-        A bbox-only test could then match the wrong blob (or, depending on
-        iteration order, silently return None for a click squarely on one
-        blob's real paint because it landed in the OTHER blob's box
-        first) — which is what made clicking a single river highlight/
-        select every blob of that asset at once (selected_blobs_local()
-        falling back to "every blob" whenever this returned None)."""
-        w, h = self._mask.width(), self._mask.height()
-        if w == 0 or h == 0:
-            return None
-        scan = self._OPAQUE_SCAN_SIZE
-        half_w, half_h = w / scan / 2, h / scan / 2
-        for blob in self.connected_components_local():
-            # Cheap bbox pre-filter (padded by half a cell) before the
-            # precise per-cell scan below — most blobs reject instantly.
-            if not blob.bounds_local.adjusted(-half_w, -half_h, half_w, half_h).contains(pos):
-                continue
-            for cell in blob.sampled_points_local:
-                if abs(cell.x() - pos.x()) <= half_w and abs(cell.y() - pos.y()) <= half_h:
-                    return blob
-        return None
+        """Which blob `pos` (item-local coords) falls inside — see
+        TerrainEffectGeometry.blob_at_local."""
+        return self._geometry.blob_at_local(pos)
 
     def blobs_in_rect_local(self, rect: QRectF) -> list["BlobInfo"]:
-        """Which blobs (see connected_components_local) have any actually-
-        painted cell inside `rect` (item-local coords) — used to scope a
-        box-select to just the blob(s) the drag rect really touched instead
-        of the whole layer, same reasoning as blob_at_local. bounds_local
-        alone isn't a safe enough test for an elongated/winding blob (a
-        river's bounding box can span far past a box that only grazes one
-        end of it, or two such blobs can overlap in bbox space without the
-        rect touching either one's real paint) — the bbox check here is
-        just a cheap pre-filter, same as blob_at_local's."""
-        w, h = self._mask.width(), self._mask.height()
-        if w == 0 or h == 0:
-            return []
-        scan = self._OPAQUE_SCAN_SIZE
-        half_w, half_h = w / scan / 2, h / scan / 2
-        hits = []
-        for blob in self.connected_components_local():
-            if not blob.bounds_local.adjusted(-half_w, -half_h, half_w, half_h).intersects(rect):
-                continue
-            for cell in blob.sampled_points_local:
-                if rect.adjusted(-half_w, -half_h, half_w, half_h).contains(cell):
-                    hits.append(blob)
-                    break
-        return hits
-
-    # Padding/smoothing for the traced silhouette (see _traced_silhouette) —
-    # shared constants so RegionLayer's border bake and effect_geometry()
-    # trace the exact same contour.
-    _TRACE_SMOOTH_RADIUS = 30  # px — morphological close radius
-    _TRACE_PAD = 38  # px — _TRACE_SMOOTH_RADIUS + border width + a couple px
+        """Which blobs have any painted cell inside `rect` (item-local
+        coords) — see TerrainEffectGeometry.blobs_in_rect_local."""
+        return self._geometry.blobs_in_rect_local(rect)
 
     def invalidate_traced_cache(self):
-        self._traced_cache = None
-
-    def _masked_to_blob_cells(self, cropped: QImage, blob: "BlobInfo", crop_origin: QPoint) -> QImage:
-        """Zeroes out any pixel in `cropped` that isn't one of `blob`'s own
-        opaque downsampled cells (see connected_components_local/
-        BlobInfo.sampled_points_local) — see _traced_silhouette for why
-        `bounds` alone isn't a safe enough crop for an elongated/winding
-        blob."""
-        scan = self._OPAQUE_SCAN_SIZE
-        cell_w = self._mask.width() / scan
-        cell_h = self._mask.height() / scan
-        owned = QRegion()
-        for p in blob.sampled_points_local:
-            cell = QRect(
-                round(p.x() - cell_w / 2) - crop_origin.x(),
-                round(p.y() - cell_h / 2) - crop_origin.y(),
-                round(cell_w) + 1, round(cell_h) + 1,
-            )
-            owned += cell
-        masked = QImage(cropped.size(), QImage.Format.Format_ARGB32_Premultiplied)
-        masked.fill(QColor(0, 0, 0, 0))
-        painter = QPainter(masked)
-        painter.setClipRegion(owned)
-        painter.drawImage(0, 0, cropped)
-        painter.end()
-        return masked
-
-    def _encompass_all(self, path: QPainterPath) -> QPainterPath:
-        """Replace multiple disconnected sub-paths with their convex hull.
-
-        A brush stroke's dithered edge (see _apply_edge_dither, on by
-        default) is a noisy pattern of fully-opaque and fully-transparent
-        pixels, not a smooth gradient — morphological_close bridges the
-        gaps between MOST of it into one blob, but a speckle that lands
-        just beyond its reach survives as its own tiny, disconnected loop.
-        Stroked as a separate sub-path, it draws as a stray little dash/dot
-        floating outside the main silhouette (see _paint_hover_glow).
-
-        Rather than guessing which sub-paths are "real" vs. noise by some
-        size cutoff (fragile, and quietly drops real paint from the
-        outline), wrap ALL of them in one convex hull instead — guaranteed
-        to contain every last painted pixel under a single closed, gap-free
-        contour, with nothing excluded and no threshold to tune."""
-        polygons = path.toSubpathPolygons()
-        if len(polygons) <= 1:
-            return path
-        points = [(p.x(), p.y()) for poly in polygons for p in poly]
-        hull = _convex_hull(points)
-        if len(hull) < 3:
-            return path
-        hull_path = QPainterPath()
-        hull_path.moveTo(*hull[0])
-        for x, y in hull[1:]:
-            hull_path.lineTo(x, y)
-        hull_path.closeSubpath()
-        return hull_path
+        self._geometry.invalidate_traced_cache()
 
     def _traced_silhouette(self, bounds: QRect | None = None, blob: "BlobInfo | None" = None) -> tuple[QPainterPath, QRect] | None:
-        """The smoothed, single-contour outline of the painted shape within
-        `bounds` (item-local, or the whole layer's opaque bounds when
-        omitted) — shared by RegionLayer's border bake and effect_geometry()
-        (the animated-effect clip, e.g. Névoa, and the hover-glow's per-blob
-        outline — see _LayerItem._paint_hover_glow). A layer is painted as
-        many overlapping soft circular stamps — tracing their raw union
-        directly produces a bumpy, spray-paint-looking edge (every stamp's
-        own little bulge stays visible). A morphological close (dilate then
-        erode by the same radius, see morphological_close) first bridges
-        the gaps/bumps between stamps into one smooth blob, and only THEN
-        gets traced as a single QRegion-derived path — one clean contour
-        instead of following every stamp's edge. Restricted to `bounds`
-        (not the full — possibly 4096x4096 — layer), so it stays cheap
-        regardless of the layer's overall size.
-
-        Passing an explicit `bounds` (e.g. one blob's own bounds_local, to
-        outline just that puddle instead of every blob this asset has
-        anywhere on the map) skips the cache — only the default whole-layer
-        call is cached, since that's the one repeated several times a
-        second by BrushEffectsOverlay/RegionLayer while the mask sits
-        still; a per-blob trace only runs while hovering/selecting.
-
-        `bounds` alone is an axis-aligned box — for a winding/elongated
-        blob (a river, an S-shaped puddle) that box is far bigger than the
-        blob's actual paint, so cropping to it alone can still include
-        real, opaque pixels of a DIFFERENT nearby blob whose box happens to
-        overlap this one (two rivers can cross in bounding-box space
-        without ever touching in paint) — stray fragments of that neighbor
-        would then bleed into the traced outline. Pass the actual `blob`
-        alongside `bounds` to mask the crop down to just its own opaque
-        cells first; omitted, the crop is used as-is (whole-layer calls
-        have no single blob to scope to anyway).
-
-        Returns (path, grown) where `path` is in `grown`-crop-local coords
-        (i.e. (0,0) is grown's top-left, NOT the layer's own origin) — every
-        caller already needs `grown`'s offset for its own painting, so
-        translating here would just make them undo it. None if nothing's
-        painted yet."""
-        use_cache = bounds is None
-        if use_cache and self._traced_cache is not None:
-            return self._traced_cache
-        if bounds is None:
-            bounds = self.opaque_bounds_local()
-        if bounds is None or bounds.width() <= 0 or bounds.height() <= 0:
-            return None
-
-        pad = self._TRACE_PAD
-        grown = bounds.adjusted(-pad, -pad, pad, pad).intersected(
-            QRect(0, 0, self._mask.width(), self._mask.height())
-        )
-        mask_crop = self._mask.copy(grown)
-        if blob is not None:
-            mask_crop = self._masked_to_blob_cells(mask_crop, blob, grown.topLeft())
-        closed = morphological_close(mask_crop, self._TRACE_SMOOTH_RADIUS)
-
-        region = QRegion(QBitmap.fromImage(closed.createAlphaMask()))
-        path = QPainterPath()
-        path.addRegion(region)
-        # addRegion() adds every constituent scanline rectangle as its own
-        # sub-path — stroking that directly shows every internal rectangle
-        # seam as a stray line cutting across the shape. simplified()
-        # merges them into just the outer silhouette before we stroke it.
-        path = path.simplified()
-        path = self._encompass_all(path)
-        result = (path, grown)
-        if use_cache:
-            self._traced_cache = result
-        return result
+        """The smoothed, single-contour outline of the painted shape — see
+        TerrainEffectGeometry._traced_silhouette. Kept as a same-named
+        method here (not just on the collaborator) since RegionLayer's
+        border bake calls this directly on its wrapped TerrainLayer."""
+        return self._geometry._traced_silhouette(bounds, blob)
 
     def effect_geometry(self, bounds: QRect | None = None, blob: "BlobInfo | None" = None) -> tuple[QPainterPath, QRectF] | None:
-        """Traced silhouette (see _traced_silhouette) in this layer's own
-        LOCAL item coords (unlike that method's raw return, already
-        translated by `grown`'s offset) plus its bounding rect — what
-        BrushEffectsOverlay clips an animated brush effect (e.g. Névoa) to,
-        via item.sceneTransform() to bring it into scene coords. `bounds`
-        (item-local), when given, scopes the trace to just that area — see
-        _traced_silhouette. `blob`, when given alongside `bounds`, further
-        masks the trace down to that blob's own opaque cells — see
-        _traced_silhouette. None if
-        nothing's painted yet."""
-        traced = self._traced_silhouette(bounds, blob)
-        if traced is None:
-            return None
-        path, grown = traced
-        path = QTransform().translate(grown.left(), grown.top()).map(path)
-        return path, QRectF(grown)
+        """Traced silhouette in this layer's own LOCAL item coords, plus
+        its bounding rect — see TerrainEffectGeometry.effect_geometry."""
+        return self._geometry.effect_geometry(bounds, blob)
 
     def mask_crop(self, rect: QRect) -> QImage | None:
         """A copy of `_mask` cropped to `rect` (layer-local pixel coords),
@@ -1479,7 +1161,5 @@ class TerrainLayer:
         self._stencil.fill(QColor(0, 0, 0, 0))
         self._result.fill(QColor(0, 0, 0, 0))
         self._has_stencil = False
-        self._opaque_bounds_cache = None
-        self._blobs_cache = None
-        self._traced_cache = None
+        self._geometry.invalidate()
         self._item.setPixmap(QPixmap.fromImage(self._result))

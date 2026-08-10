@@ -13,17 +13,19 @@ with moving lights/occluders/the sky setting.
 
 from __future__ import annotations
 
-import math
 import time
 
-from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import (
-    QBrush, QColor, QConicalGradient, QImage, QPainter, QPainterPath, QPolygonF,
-    QRadialGradient, QTransform,
+    QBrush, QColor, QConicalGradient, QImage, QPainter, QPainterPath, QTransform,
 )
 from PySide6.QtWidgets import QGraphicsItem
 
+from src.canvas.contact_shadow import draw_contact_shadow
+from src.canvas.item_utils import make_non_interactive
 from src.canvas.light_item import LightItem
+from src.canvas.z_order import ZOrder
+from src.engines.fog_noise import paint_volume, volume_textures
 from src.engines.light import LightProperties
 from src.engines.lighting_compositor import (
     compute_lit_path, compute_shadows, cone_path, falloff_gamma, falloff_gradient, shadow_gradient,
@@ -50,6 +52,11 @@ _AMBIENT_ALPHA = 90
 # straight edge (see _paint_spot_glow) — must stay < 0.5 or the two fade
 # ramps would overlap/invert past the cone's center.
 _CONE_EDGE_FADE = 0.16
+
+# Top-level key under GlobalLightingOverlay._volume_cache (see
+# _draw_volumetric) — volume_textures nests its own per-layer cache under
+# this, mirroring the "cache_key" pattern used by brush_effects.
+_VOLUMETRIC_CACHE_KEY = "light_volumetric"
 
 
 def _paint_spot_glow(painter: QPainter, props: LightProperties, radius: float, lit_path: QPainterPath):
@@ -97,22 +104,29 @@ def _paint_spot_glow(painter: QPainter, props: LightProperties, radius: float, l
 class GlobalLightingOverlay(QGraphicsItem):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setZValue(8)  # above terrain/objects, below light gizmos (LightItem, z=60)
-        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-        self.setAcceptHoverEvents(False)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        # Must sit above ZOrder.STAMPED_OBJECT (assets/mobs/npcs) or their
+        # occluder shadows/contact smudges paint underneath the opaque stamp
+        # and never show up on it at all — see z_order.py.
+        self.setZValue(ZOrder.LIGHTING_OVERLAY)
+        make_non_interactive(self)
         self._sky: LightProperties | None = None
         # Cached (fingerprint, lit_path, shadows) per light — id(light) ->
         # tuple, see _light_geometry(). compute_lit_path/compute_shadows
         # rebuild everything from scratch (including a scene.items() query
         # for occluders and per-occluder trig), and LightMediator's refresh
         # timer calls paint() every _REFRESH_TICK_MS unconditionally when any
-        # light is volumetric (it has to, to drive the beam-rotation
-        # animation even when nothing moved) — without this cache, that meant
-        # redoing the same occluder query and shadow math for every light on
-        # every tick even while the map sat completely still.
+        # light is volumetric (it has to, to drive the FBM haze's own
+        # drift/breathing animation even when nothing moved) — without this
+        # cache, that meant redoing the same occluder query and shadow math
+        # for every light on every tick even while the map sat completely
+        # still.
         self._light_cache: dict[int, tuple] = {}
+        # Cached FBM haze textures per volumetric light — id(light) -> entry,
+        # nested under _VOLUMETRIC_CACHE_KEY (see _draw_volumetric/
+        # fog_noise.volume_textures). Regenerated only when a light's
+        # radius/color actually change; pruned alongside _light_cache in
+        # _prune_light_cache.
+        self._volume_cache: dict = {}
         # Bumped whenever something that could occlude a light (an asset or
         # mob stamp) moves/rotates/resizes — see notify_light_moved()/
         # bump_occluder_generation() and LightMediator's transform signal
@@ -177,9 +191,10 @@ class GlobalLightingOverlay(QGraphicsItem):
 
     def animated_footprint(self) -> QRectF | None:
         """Union footprint of only the lights whose paint() output actually
-        changes between periodic ticks — volumetric beam rotation,
-        time.monotonic()-driven. A plain static point/spot light has
-        nothing time-animated and is already repainted via
+        changes between periodic ticks — the volumetric haze's continuous
+        FBM drift/breathing cross-fade, time.monotonic()-driven. A plain
+        static point/spot light has nothing time-animated and is already
+        repainted via
         notify_light_moved whenever it truly changes, so LightMediator's
         periodic tick doesn't need to touch it. None when nothing is
         animated, so the tick can skip entirely."""
@@ -243,6 +258,10 @@ class GlobalLightingOverlay(QGraphicsItem):
         live_ids = {id(l) for l in lights}
         for stale_id in set(self._light_cache) - live_ids:
             del self._light_cache[stale_id]
+        volume_sub = self._volume_cache.get(_VOLUMETRIC_CACHE_KEY)
+        if volume_sub:
+            for stale_id in set(volume_sub) - live_ids:
+                del volume_sub[stale_id]
 
     def _paint_ambient(self, painter: QPainter, option):
         color = QColor(_AMBIENT_COLOR)
@@ -298,20 +317,8 @@ class GlobalLightingOverlay(QGraphicsItem):
         """One soft, squashed-elliptical dark smudge centered at (cx,
         base_y) — shared by both the asset and mob branches of
         _paint_contact_shadows."""
-        w = max(6.0, w)
-        h = w * 0.32
-        cy = base_y - h * 0.25
-        painter.save()
-        painter.translate(cx, cy)
-        painter.scale(1.0, h / w)
-        grad = QRadialGradient(0, 0, w / 2)
-        grad.setColorAt(0.0, QColor(0, 0, 0, 100))
-        grad.setColorAt(0.7, QColor(0, 0, 0, 55))
-        grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(grad))
-        painter.drawEllipse(QPointF(0, 0), w / 2, w / 2)
-        painter.restore()
+        h = max(6.0, w) * 0.32
+        draw_contact_shadow(painter, cx, base_y - h * 0.25, w)
 
     def _paint_sky(self, painter: QPainter, option):
         t = max(0.0, min(100.0, self._sky.day_amount)) / 100.0  # 1 = day, 0 = night
@@ -365,7 +372,16 @@ class GlobalLightingOverlay(QGraphicsItem):
             gamma = falloff_gamma(props.falloff)
             painter.fillPath(lit_path, QBrush(falloff_gradient(QColor(props.color), props.intensity, radius, gamma)))
         if props.volumetric:
-            self._draw_volumetric(painter, radius, QColor(props.color))
+            # The haze's own edge softness comes from its blurred silhouette
+            # mask (see _draw_volumetric), not from this hard vector clip —
+            # keeping lit_path clipped here would slice straight through the
+            # middle of that fade and leave a visible ring right at the
+            # light's radius, which is exactly the hard "cutoff" the mask
+            # was built to avoid.
+            painter.save()
+            painter.setClipping(False)
+            self._draw_volumetric(painter, light, radius, QColor(props.color), lit_path)
+            painter.restore()
 
         # Shadows are painted as their own translucent layer ON TOP of the
         # glow (SourceOver, so they darken it) instead of being cut as a
@@ -402,58 +418,56 @@ class GlobalLightingOverlay(QGraphicsItem):
         painter.fillPath(soft_path, QBrush(shadow_gradient(soft_near, soft_far, max_alpha=soft_alpha)))
         painter.fillPath(shadow.path, QBrush(shadow_gradient(shadow.near, shadow.far, max_alpha=hard_alpha)))
 
-    @staticmethod
-    def _volumetric_noise(beam_index: int, t: float, phase: float) -> float:
-        """Pseudo-noise in ~[0.25, 1.0] — three sine waves at unrelated
-        frequencies/phases (offset per beam so they don't all flicker in
-        sync) summed and normalized. Not true Perlin noise, but cheap,
-        smooth, and enough to break up a beam's brightness into drifting
-        dust-like clumps instead of one flat wedge."""
-        n = (
-            math.sin(t * 17.0 + beam_index * 3.1 + phase * 1.3)
-            + 0.5 * math.sin(t * 41.0 + beam_index * 7.7 - phase * 0.7)
-            + 0.3 * math.sin(t * 83.0 + beam_index * 1.9 + phase * 2.1)
-        )
-        n = (n / 1.8 + 1.0) / 2.0  # roughly 0..1
-        return 0.25 + 0.75 * max(0.0, min(1.0, n))
+    def _draw_volumetric(self, painter: QPainter, light: LightItem, radius: float,
+                          color: QColor, lit_path: QPainterPath):
+        """Continuous FBM haze filling the lit area (or cone, for spot
+        lights) instead of discrete beams — same soft-edged density-field
+        technique as brush_effects' fog/smoke (see fog_noise.volume_textures/
+        paint_volume), reusing `lit_path` itself as the source shape for a
+        blurred silhouette mask, so the haze naturally matches the light's
+        own footprint with a soft, blurred boundary instead of a hard edge.
+        The caller drops its hard vector clip before calling this (see
+        _paint_light) — clipping to lit_path would slice straight through
+        the middle of the mask's fade and reintroduce the hard ring this
+        mask exists to avoid; the mask alone bounds the haze.
+        Painted while the caller's CompositionMode_Plus is still active, so
+        it adds into the glow like real volumetric scattering would; the
+        shadow-darkening pass that runs right after this call (still within
+        the same clip/local space) dims it under occluders exactly like the
+        flat glow — no separate occlusion logic needed. Tuned lighter/
+        thinner than fog/smoke's defaults (smaller texture, higher alpha
+        gamma, lower alpha scale, near-zero drift) so it reads as a subtle
+        drifting haze, not smoke, and nothing about the motion suggests
+        rotation.
 
-    def _draw_volumetric(self, painter: QPainter, radius: float, color: QColor):
-        """Soft rotating beams within the lit area — a visual flourish, not
-        a real volumetric-scattering simulation. Stateless (driven by
-        time.monotonic()), same technique the old LightItem used. Each beam
-        is several segments instead of one smooth gradient wedge, alpha
-        modulated per-segment by the cheap _volumetric_noise sine blend, so
-        it reads as drifting dust/smoke instead of a perfectly uniform
-        beam. Tinted by the light's own `color` (used to be hard-coded pure
-        white, which read as an unrelated white smear cut into a
-        warm-colored glow instead of that light's own beams)."""
-        beam_color = QColor(color).lighter(130)  # a bit brighter than the base glow so beams still read distinctly against it
-        phase = time.monotonic()
-        n = 4
-        beam_width = radius * 0.16
-        segments = 10
-        painter.setPen(Qt.PenStyle.NoPen)
-        for i in range(n):
-            ang = math.degrees(phase * 12 + i * (360 / n))
-            painter.save()
-            painter.rotate(ang)
-            for s in range(segments):
-                t0, t1 = s / segments, (s + 1) / segments
-                tm = (t0 + t1) / 2
-                base_alpha = 65.0 * (1.0 - tm)
-                noise = self._volumetric_noise(i, tm, phase)
-                alpha = max(0, min(255, int(base_alpha * noise)))
-                if alpha <= 0:
-                    continue
-                x0, x1 = t0 * radius, t1 * radius
-                w0 = beam_width / 2 * (1 - t0 * 0.5)
-                w1 = beam_width / 2 * (1 - t1 * 0.5)
-                beam_color.setAlpha(alpha)
-                painter.setBrush(beam_color)
-                painter.drawPolygon(QPolygonF([
-                    QPointF(x0, -w0), QPointF(x1, -w1), QPointF(x1, w1), QPointF(x0, w0),
-                ]))
-            painter.restore()
+        Each density texture's own edge fade (see fog_noise._edge_fade_mask)
+        is Chebyshev/square-shaped, not radial — invisible for brush_effects'
+        fog/smoke because those shapes sit well inside their own bounding
+        square, but a light's lit_path (a circle or cone) fills its bounding
+        square edge-to-edge, so at a draw scale near 1.0 that square fade
+        lands almost exactly on the light's own circular boundary and reads
+        as a visible rectangle/facet instead of a smooth radial falloff. All
+        three layers use the SAME oversized draw scale (~2x the light's
+        diameter, well past where each texture's square fade even starts)
+        so that square never becomes visible inside the light's radius —
+        only the circular blurred mask (from lit_path) defines the visible
+        boundary. Depth/movement still varies per layer via drift speed and
+        alpha, just not apparent size."""
+        bounds = QRectF(-radius, -radius, radius * 2, radius * 2)
+        haze_color = QColor(color).lighter(115)
+        blur_px = max(6, min(22, int(radius * 0.08)))
+        entry = volume_textures(
+            self._volume_cache, light, lit_path, bounds, haze_color,
+            cache_key=_VOLUMETRIC_CACHE_KEY, tex_size=112, base_cells=3,
+            alpha_gamma=2.1, alpha_scale=0.55, blur_px=blur_px, buf_margin=12,
+            breathe_period=26.0,
+        )
+        paint_volume(
+            painter, entry, bounds, time.monotonic(),
+            layers=((2.0, 0.05, 0.45), (2.0, 0.09, 0.65), (2.0, 0.13, 0.85)),
+            drift_fraction=0.035, breathe_period=26.0, swirl_speed=0.0,
+            growth_period=0.0,
+        )
 
 
 class LightGhostItem(QGraphicsItem):
@@ -467,11 +481,8 @@ class LightGhostItem(QGraphicsItem):
     def __init__(self, props: LightProperties, parent=None):
         super().__init__(parent)
         self.props = props
-        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-        self.setAcceptHoverEvents(False)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-        self.setZValue(9999)  # always on top so it reads clearly as a cursor-following ghost
+        make_non_interactive(self)
+        self.setZValue(ZOrder.CURSOR_GHOST)  # always on top so it reads clearly as a cursor-following ghost
 
     def boundingRect(self) -> QRectF:
         r = max(4.0, self.props.radius) + 4.0

@@ -1,19 +1,30 @@
-"""FBM (fractal Brownian motion) value-noise generation for fog rendering
-(see GlobalLightingOverlay._paint_fog). True per-pixel Perlin/Simplex noise
-in pure Python would be far too slow to regenerate every repaint tick, so
-this leans on numpy for the octave math and Qt's own SmoothTransformation
-image scaling as the (bilinear-equivalent) interpolation between each
-octave's small random grid — no hand-written interpolation code, and it's
-fast enough to run interactively. Callers are expected to cache the result
-per light (see GlobalLightingOverlay._fog_cache) rather than regenerate it
-every frame.
+"""FBM (fractal Brownian motion) value-noise generation for fog/haze
+rendering. True per-pixel Perlin/Simplex noise in pure Python would be far
+too slow to regenerate every repaint tick, so this leans on numpy for the
+octave math and Qt's own SmoothTransformation image scaling as the
+(bilinear-equivalent) interpolation between each octave's small random grid
+— no hand-written interpolation code, and it's fast enough to run
+interactively. Callers are expected to cache the result per instance rather
+than regenerate it every frame.
+
+Also hosts `volume_textures`/`paint_volume` — a higher-level, generalized
+compositor built on the primitives above (FBM density -> QImage, plus a
+blurred-silhouette mask) that renders a continuous, softly-drifting density
+field instead of a handful of separate circular puffs: two cross-fading FBM
+textures, several parallax-drifted layers, optional swirl/growth envelopes,
+masked through `path_to_blurred_mask` so the field's own boundary fades out
+rather than cutting off hard. Used by both `src/engines/map/brush_effects`
+(map-region fog/smoke/gas effects) and `GlobalLightingOverlay` (per-light
+volumetric haze, see `_draw_volumetric` in src/canvas/lighting_overlay.py).
 """
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QTransform
 
 
 def fbm_density(width: int, height: int, seed: int, octaves: int = 4,
@@ -157,3 +168,101 @@ def path_to_blurred_mask(path: QPainterPath, size: int, blur_px: int) -> QImage:
     out = np.ascontiguousarray(out)
     img = QImage(out.data, size, size, size * 4, QImage.Format.Format_ARGB32)
     return img.copy()
+
+
+def center_path(path: QPainterPath, bounds: QRectF) -> QPainterPath:
+    return QTransform().translate(-bounds.center().x(), -bounds.center().y()).map(path)
+
+
+def subcache(cache: dict, name: str) -> dict:
+    return cache.setdefault(name, {})
+
+
+def volume_textures(cache: dict, layer, path: QPainterPath, bounds: QRectF, color: QColor, *,
+                     cache_key: str, tex_size: int = 160, base_cells: int = 4,
+                     alpha_gamma: float = 1.8, alpha_scale: float = 0.8, blur_px: int = 10,
+                     buf_margin: int = 24, breathe_period: float = 40.0, seed_salt: int = 0) -> dict:
+    """Builds (and caches, per `id(layer)`) two cross-fading FBM density
+    textures plus a blurred silhouette mask of `path` — the shared
+    ingredients `paint_volume` composites into a continuous, softly-drifting
+    density field. Regenerated only when `bounds`/`color` actually change
+    (rounded/keyed), so repeated calls on an unchanged layer are cheap."""
+    sub = subcache(cache, cache_key)
+    key = (round(bounds.width() / 20) * 20, round(bounds.height() / 20) * 20, color.name())
+    entry = sub.get(id(layer))
+    if entry is not None and entry.get("key") == key:
+        return entry
+
+    seed = (id(layer) & 0xFFFFFFFF) ^ seed_salt
+    near_color = color.lighter(140)
+    far_color = color.darker(150)
+    density_a = fbm_density(tex_size, tex_size, seed, base_cells=base_cells)
+    density_b = fbm_density(tex_size, tex_size, seed ^ 0x5EED, base_cells=base_cells)
+    max_scale = 1.6
+    buf_size = int(max(bounds.width(), bounds.height()) * max_scale) + buf_margin * 2
+    entry = {
+        "key": key,
+        "img_a": density_to_qimage(density_a, near_color, far_color, alpha_gamma=alpha_gamma, alpha_scale=alpha_scale),
+        "img_b": density_to_qimage(density_b, near_color, far_color, alpha_gamma=alpha_gamma, alpha_scale=alpha_scale),
+        "phase_offset": (seed % 1000) / 1000.0 * breathe_period,
+        "buf_size": buf_size,
+        "mask": path_to_blurred_mask(center_path(path, bounds), buf_size, blur_px),
+        "buf": None,
+    }
+    sub[id(layer)] = entry
+    return entry
+
+
+def paint_volume(painter: QPainter, entry: dict, bounds: QRectF, t: float, *,
+                  layers: tuple, drift_fraction: float = 0.06, breathe_period: float = 40.0,
+                  swirl_speed: float = 0.0, growth_period: float = 0.0,
+                  growth_range: tuple[float, float] = (0.85, 1.15)):
+    """Paints an entry built by volume_textures — parallax drift + breathing
+    cross-fade, plus optional swirl (per-layer rotation) and growth/
+    dissipation (slow scale+opacity envelope over the same two cached
+    textures, so the effect can pulse without regenerating FBM)."""
+    tt = t + entry["phase_offset"]
+    mix = (math.sin(2 * math.pi * tt / breathe_period) + 1) / 2
+
+    envelope = 1.0
+    if growth_period > 0:
+        cycle = (tt % growth_period) / growth_period
+        tri = 1.0 - abs(cycle * 2 - 1)
+        lo, hi = growth_range
+        envelope = lo + (hi - lo) * tri
+
+    buf_size = entry["buf_size"]
+    buf = entry["buf"]
+    if buf is None or buf.width() != buf_size:
+        buf = QImage(buf_size, buf_size, QImage.Format.Format_ARGB32_Premultiplied)
+        entry["buf"] = buf
+    buf.fill(0)
+
+    bp = QPainter(buf)
+    bp.setRenderHint(QPainter.RenderHint.Antialiasing)
+    bp.translate(buf_size / 2, buf_size / 2)
+    bp.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
+    diag = max(bounds.width(), bounds.height())
+    for draw_scale, drift_speed, alpha_mult in layers:
+        size = diag * draw_scale * envelope
+        dx = math.sin(tt * drift_speed) * diag * drift_fraction
+        dy = math.cos(tt * drift_speed * 0.8) * diag * drift_fraction
+        bp.save()
+        bp.translate(dx, dy)
+        if swirl_speed:
+            bp.rotate(tt * swirl_speed * 57.29577951308232 * drift_speed)
+        target = QRectF(-size / 2, -size / 2, size, size)
+        bp.setOpacity(max(0.0, min(1.0, alpha_mult * (1 - mix) * envelope)))
+        bp.drawImage(target, entry["img_a"])
+        bp.setOpacity(max(0.0, min(1.0, alpha_mult * mix * envelope)))
+        bp.drawImage(target, entry["img_b"])
+        bp.restore()
+    bp.setOpacity(1.0)
+    bp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+    bp.drawImage(QRectF(-buf_size / 2, -buf_size / 2, buf_size, buf_size), entry["mask"])
+    bp.end()
+
+    painter.save()
+    painter.translate(bounds.center())
+    painter.drawImage(QRectF(-buf_size / 2, -buf_size / 2, buf_size, buf_size), buf)
+    painter.restore()

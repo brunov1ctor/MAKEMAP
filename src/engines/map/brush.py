@@ -98,17 +98,8 @@ class BrushEngine(QObject):
 
     # --- Configuration ---
 
-    def set_config(self, config: BrushConfig):
-        self.config = config
-
     def set_size(self, size: float):
         self.config.size = max(1.0, min(2048.0, size))
-
-    def set_spacing(self, spacing: float):
-        self.config.spacing = max(0.01, min(2.0, spacing))
-
-    def set_scatter(self, scatter: float):
-        self.config.scatter = max(0.0, min(1.0, scatter))
 
     def set_density(self, density: float):
         self.config.density = max(0.1, min(10.0, density))
@@ -187,12 +178,6 @@ class BrushEngine(QObject):
         self._current_stroke.clear()
         self._last_pos = None
         return result
-
-    def cancel_stroke(self):
-        """Cancel without emitting finished."""
-        self._active = False
-        self._current_stroke.clear()
-        self._last_pos = None
 
     @property
     def is_active(self) -> bool:
@@ -306,61 +291,3 @@ class BrushEngine(QObject):
                 return entry
         return None
 
-
-# --- Preset Brushes ---
-
-def create_forest_brush(tree_ids: list[str]) -> BrushConfig:
-    """Preset: dense forest brush."""
-    config = BrushConfig(
-        name="Forest Brush",
-        size=200,
-        spacing=0.2,
-        scatter=0.8,
-        density=3,
-        random_rotation=True,
-        random_scale=True,
-    )
-    for tid in tree_ids:
-        config.assets.append(BrushAssetEntry(
-            asset_id=tid, weight=1.0,
-            scale_min=0.7, scale_max=1.3,
-        ))
-    return config
-
-
-def create_rock_brush(rock_ids: list[str]) -> BrushConfig:
-    """Preset: scattered rocks."""
-    config = BrushConfig(
-        name="Rock Brush",
-        size=150,
-        spacing=0.4,
-        scatter=0.6,
-        density=2,
-        random_rotation=True,
-        random_scale=True,
-    )
-    for rid in rock_ids:
-        config.assets.append(BrushAssetEntry(
-            asset_id=rid, weight=1.0,
-            scale_min=0.5, scale_max=1.5,
-        ))
-    return config
-
-
-def create_vegetation_brush(plant_ids: list[str]) -> BrushConfig:
-    """Preset: bushes and vegetation."""
-    config = BrushConfig(
-        name="Vegetation Brush",
-        size=120,
-        spacing=0.25,
-        scatter=0.7,
-        density=4,
-        random_rotation=True,
-        random_scale=True,
-    )
-    for pid in plant_ids:
-        config.assets.append(BrushAssetEntry(
-            asset_id=pid, weight=1.0,
-            scale_min=0.6, scale_max=1.1,
-        ))
-    return config

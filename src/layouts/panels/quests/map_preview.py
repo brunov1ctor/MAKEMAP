@@ -22,6 +22,8 @@ from PySide6.QtWidgets import QGraphicsView, QGraphicsEllipseItem, QFrame
 from PySide6.QtCore import Qt, QRectF, QTimer
 from PySide6.QtGui import QPainter, QColor, QPen
 
+from src.canvas.z_order import ZOrder
+
 _PING_MS = 1800
 _FRAME_PADDING = 90
 
@@ -152,7 +154,7 @@ class QuestMapPreview(QGraphicsView):
         ring = QGraphicsEllipseItem(center.x() - radius, center.y() - radius, radius * 2, radius * 2)
         ring.setPen(QPen(color, 4))
         ring.setBrush(Qt.BrushStyle.NoBrush)
-        ring.setZValue(9999)
+        ring.setZValue(ZOrder.CURSOR_GHOST)
         scene.addItem(ring)
         self._ping_item = ring
         self._ping_timer.start(_PING_MS)

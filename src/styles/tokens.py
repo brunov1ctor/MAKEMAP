@@ -84,13 +84,6 @@ class Navigation:
     ZOOM_STEP = 1.15          # scroll wheel zoom factor
     SCROLL_PAN_SPEED = 1.0    # multiplier for scroll-based pan
 
-class Animation:
-    DURATION_FAST = 100
-    DURATION_NORMAL = 200
-    DURATION_SLOW = 350
-    EASING = "QEasingCurve.Type.OutCubic"
-
-
 def combo_popup_qss(border: str = Colors.BORDER) -> str:
     """Shared QComboBox popup (QAbstractItemView) rule. Every panel styles
     its own QComboBox face differently (compact filter rows, inline layer

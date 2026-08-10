@@ -101,39 +101,6 @@ class MenuPanel(QWidget):
         """Access the content layout to add widgets."""
         return self._content_layout
 
-    def add_empty_state(self, message: str):
-        """Show an empty state message with icon."""
-        container = QWidget()
-        container.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(container)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.setSpacing(12)
-
-        icon = QLabel(self._icon or "📋")
-        icon.setStyleSheet("font-size: 48px; background: transparent; border: none;")
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(icon)
-
-        msg = QLabel(message)
-        msg.setStyleSheet(
-            f"color: {Colors.TEXT_MUTED}; font-size: 11pt; background: transparent; border: none;"
-        )
-        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        msg.setWordWrap(True)
-        lay.addWidget(msg)
-
-        hint = QLabel("Em breve...")
-        hint.setStyleSheet(
-            f"color: {Colors.TEXT_MUTED}; font-size: 9pt; font-style: italic; "
-            f"background: transparent; border: none;"
-        )
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(hint)
-
-        self._content_layout.addStretch()
-        self._content_layout.addWidget(container)
-        self._content_layout.addStretch()
-
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)

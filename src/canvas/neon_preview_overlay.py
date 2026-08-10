@@ -15,6 +15,8 @@ from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsScene, QStyleOptionGraphicsItem
 
+from src.canvas.z_order import ZOrder
+
 
 class NeonPreviewOverlay(QGraphicsPathItem):
     PULSE_INTERVAL_MS = 40
@@ -27,7 +29,7 @@ class NeonPreviewOverlay(QGraphicsPathItem):
 
     def __init__(self, scene: QGraphicsScene):
         super().__init__()
-        self.setZValue(50)  # above boundaries (-500) and terrain art
+        self.setZValue(ZOrder.TOOL_PREVIEW)  # above the boundary (ZOrder.BOUNDARY_GROUP) and terrain art
         self._alpha = float(self.PULSE_MIN_ALPHA)
         self._alpha_dir = 1
         scene.addItem(self)

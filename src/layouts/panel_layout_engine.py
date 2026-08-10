@@ -36,6 +36,34 @@ class PanelLayoutEngine:
         )
         l.compass_hud.raise_()
 
+    def _size_to_content(self, panel, avail: QRect):
+        """Resizes `panel` in place to its own content_height(), capped to
+        the available work area — shared by every panel whose real height
+        needs this override because PanelManager's generic _content_height()
+        (which only measures the first QScrollArea it finds) undercounts it:
+        a pinned header/button living outside the scroll area, or several
+        nested QScrollAreas. Used for Brush, Região, Terrain, Background and
+        Spawn — see each call site's own comment for why THAT panel needs
+        the override."""
+        geo = panel.geometry()
+        panel_h = min(panel.content_height(), avail.height())
+        panel.setGeometry(geo.x(), geo.y(), geo.width(), panel_h)
+
+    def _dock_beside(self, host_rect: QRect, guest, avail: QRect, height: int):
+        """Docks `guest` immediately to the right of `host_rect` (the host
+        panel's already-computed geometry), width capped to the guest's own
+        PANEL_WIDTH and the available work area — the shared x/width/raise
+        plumbing behind every "sub-panel rides next to its host" pairing
+        (Brush/AssetBrowser, Região/RegionEdit, Terrain/TerrainEdit, Spawn/
+        MobSub, Texto/Personalizar). `height` is computed by the caller —
+        each pairing derives it slightly differently (own content_height()
+        vs PanelManager._content_height() vs the host's own height), see
+        each call site's own comment."""
+        x = host_rect.right() + 8
+        w = min(guest.PANEL_WIDTH, max(0, avail.right() - x))
+        guest.setGeometry(x, host_rect.y(), w, height)
+        guest.raise_()
+
     def apply(self, w: int, h: int):
         l = self._l
 
@@ -73,9 +101,7 @@ class PanelLayoutEngine:
         # pattern as Região/Terrain/Background, applied before the asset
         # browser below reads this panel's (now corrected) geometry.
         if l.brush_panel.isVisible():
-            bp = l.brush_panel.geometry()
-            bp_h = min(l.brush_panel.content_height(), avail.height())
-            l.brush_panel.setGeometry(bp.x(), bp.y(), bp.width(), bp_h)
+            self._size_to_content(l.brush_panel, avail)
 
         # Asset browser rides next to Brush the same way RegionEditPanel
         # rides next to Região's CRUD list — sized to fill the full
@@ -85,11 +111,8 @@ class PanelLayoutEngine:
         # rows with tons of unused space below).
         if l.brush_panel.isVisible() and l.asset_browser_panel.isVisible():
             bp_rect = l.brush_panel.geometry()
-            ab_x = bp_rect.right() + 8
-            ab_w = min(l.asset_browser_panel.PANEL_WIDTH, max(0, avail.right() - ab_x))
             ab_h = min(l.asset_browser_panel.content_height(), max(0, avail.bottom() - bp_rect.y()))
-            l.asset_browser_panel.setGeometry(ab_x, bp_rect.y(), ab_w, ab_h)
-            l.asset_browser_panel.raise_()
+            self._dock_beside(bp_rect, l.asset_browser_panel, avail, ab_h)
 
         # Região's CRUD list has a pinned header + "Nova Região" button
         # living OUTSIDE its card-list scroll area, so PanelManager's
@@ -97,17 +120,13 @@ class PanelLayoutEngine:
         # QScrollArea it finds) undercounts it — override with the panel's
         # own content_height(), which accounts for both.
         if l.region_panel.isVisible():
-            rp = l.region_panel.geometry()
-            rp_h = min(l.region_panel.content_height(), avail.height())
-            l.region_panel.setGeometry(rp.x(), rp.y(), rp.width(), rp_h)
+            self._size_to_content(l.region_panel, avail)
 
         # Terrain nests several QScrollAreas (whole-panel, terrain-card
         # list, background image browser) — same ambiguity as Região's
         # generic sizing, same override via its own content_height().
         if l.terrain_panel.isVisible():
-            tp = l.terrain_panel.geometry()
-            tp_h = min(l.terrain_panel.content_height(), avail.height())
-            l.terrain_panel.setGeometry(tp.x(), tp.y(), tp.width(), tp_h)
+            self._size_to_content(l.terrain_panel, avail)
 
         # Terreno's edit sub painel rides next to the CRUD list, same
         # convention as Região's edit panel below — sized to its own
@@ -115,47 +134,34 @@ class PanelLayoutEngine:
         # own height, so one being shorter never squashes the other.
         if l.terrain_panel.isVisible() and l.terrain_edit_panel.isVisible():
             tp_rect = l.terrain_panel.geometry()
-            te_x = tp_rect.right() + 8
-            te_w = min(l.terrain_edit_panel.PANEL_WIDTH, max(0, avail.right() - te_x))
             max_h = max(0, avail.bottom() - tp_rect.y())
             te_h = min(PanelManager._content_height(l.terrain_edit_panel), max_h)
-            l.terrain_edit_panel.setGeometry(te_x, tp_rect.y(), te_w, te_h)
-            l.terrain_edit_panel.raise_()
+            self._dock_beside(tp_rect, l.terrain_edit_panel, avail, te_h)
 
         # Same nested-QScrollArea ambiguity as Terrain above (this panel
         # wraps BackgroundSection, which owns its own image-browser grid
         # scroll area) — same content_height() override.
         if l.background_panel.isVisible():
-            bgp = l.background_panel.geometry()
-            bgp_h = min(l.background_panel.content_height(), avail.height())
-            l.background_panel.setGeometry(bgp.x(), bgp.y(), bgp.width(), bgp_h)
+            self._size_to_content(l.background_panel, avail)
 
         # Spawn's header (outside its scroll area) has the same undercount
         # issue as Região's CRUD list — same content_height() override.
         if l.spawn_panel.isVisible():
-            sp = l.spawn_panel.geometry()
-            sp_h = min(l.spawn_panel.content_height(), avail.height())
-            l.spawn_panel.setGeometry(sp.x(), sp.y(), sp.width(), sp_h)
+            self._size_to_content(l.spawn_panel, avail)
 
         # Mob sub-panel rides next to Spawn's categories the same way
         # AssetBrowserPanel rides next to Brush.
         if l.spawn_panel.isVisible() and l.spawn_mob_sub_panel.isVisible():
             sp_rect = l.spawn_panel.geometry()
-            ms_x = sp_rect.right() + 8
-            ms_w = min(l.spawn_mob_sub_panel.PANEL_WIDTH, max(0, avail.right() - ms_x))
             ms_h = min(sp_rect.height(), max(0, avail.bottom() - sp_rect.y()))
-            l.spawn_mob_sub_panel.setGeometry(ms_x, sp_rect.y(), ms_w, ms_h)
-            l.spawn_mob_sub_panel.raise_()
+            self._dock_beside(sp_rect, l.spawn_mob_sub_panel, avail, ms_h)
 
         # Personalizar rides next to Texto (not through PanelManager — see
         # where it's created), sized to its own content.
         if l.text_panel.isVisible() and l.color_customize_panel.isVisible():
             tp_rect = l.text_panel.geometry()
-            cc_x = tp_rect.right() + 8
-            cc_w = min(l.color_customize_panel.PANEL_WIDTH, max(0, avail.right() - cc_x))
             cc_h = min(PanelManager._content_height(l.color_customize_panel), avail.height())
-            l.color_customize_panel.setGeometry(cc_x, tp_rect.y(), cc_w, cc_h)
-            l.color_customize_panel.raise_()
+            self._dock_beside(tp_rect, l.color_customize_panel, avail, cc_h)
 
         # Região's edit panel rides next to the CRUD list the same way —
         # but sized to its OWN content (collapsible sections growing/
@@ -164,15 +170,12 @@ class PanelLayoutEngine:
         # height verbatim (which ignored its collapsed/expanded sections).
         if l.region_panel.isVisible() and l.region_edit_panel.isVisible():
             rp_rect = l.region_panel.geometry()
-            re_x = rp_rect.right() + 8
-            re_w = min(l.region_edit_panel.PANEL_WIDTH, max(0, avail.right() - re_x))
             # Capped to the available work area, NOT to Region's own height —
             # the two panels size independently to their own content now, so
             # one being shorter must never squash the other.
             max_h = max(0, avail.bottom() - rp_rect.y())
             re_h = min(PanelManager._content_height(l.region_edit_panel), max_h)
-            l.region_edit_panel.setGeometry(re_x, rp_rect.y(), re_w, re_h)
-            l.region_edit_panel.raise_()
+            self._dock_beside(rp_rect, l.region_edit_panel, avail, re_h)
 
         # Asset effects editor — not anchored to any tool/panel (opened from
         # the fullscreen Config view), so it floats centered over whatever's
@@ -244,6 +247,6 @@ class PanelLayoutEngine:
             l.floating.push_clear("minimap")
 
         menu_container = l._menu_med._menu_container
-        if menu_container and menu_container.isVisible():
+        if menu_container:
             menu_container.setGeometry(0, top_h, w, body_h)
             menu_container.raise_()

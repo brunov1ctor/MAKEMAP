@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 from PySide6.QtCore import QObject, Signal, QPointF
 from PySide6.QtWidgets import QGraphicsItem
@@ -165,47 +164,6 @@ class PlaceObjectCommand(Command):
         self.item.setVisible(False)
 
 
-class ChangePropertyCommand(Command):
-    """Change a property on an item's data dict."""
-
-    def __init__(self, item: QGraphicsItem, key: str, old_value: Any, new_value: Any):
-        self.item = item
-        self.key = key
-        self.old_value = old_value
-        self.new_value = new_value
-        self.description = f"Alterar {key}"
-
-    def redo(self):
-        data = self.item.data(0) or {}
-        data[self.key] = self.new_value
-        self.item.setData(0, data)
-
-    def undo(self):
-        data = self.item.data(0) or {}
-        data[self.key] = self.old_value
-        self.item.setData(0, data)
-
-
-class ChangeLayerCommand(Command):
-    """Move item between layers."""
-
-    def __init__(self, item: QGraphicsItem, old_layer_id: str, new_layer_id: str):
-        self.item = item
-        self.old_layer_id = old_layer_id
-        self.new_layer_id = new_layer_id
-        self.description = "Mudar camada"
-
-    def redo(self):
-        data = self.item.data(0) or {}
-        data["layer_id"] = self.new_layer_id
-        self.item.setData(0, data)
-
-    def undo(self):
-        data = self.item.data(0) or {}
-        data["layer_id"] = self.old_layer_id
-        self.item.setData(0, data)
-
-
 class CompositeCommand(Command):
     """Groups multiple commands into a single undo/redo step."""
 
@@ -343,15 +301,6 @@ class HistoryEngine(QObject):
             self._redo_stack.clear()
             self._trim()
             self._emit()
-
-    def cancel_group(self):
-        """Cancel group and undo all commands in it."""
-        if self._group is None:
-            return
-
-        for cmd in reversed(self._group):
-            cmd.undo()
-        self._group = None
 
     # --- Helpers ---
 

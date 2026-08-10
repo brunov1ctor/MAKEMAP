@@ -10,12 +10,9 @@ Layers:
 from __future__ import annotations
 
 import random
-import logging
 from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-
-logger = logging.getLogger("MAKEMAP")
 
 
 SOUNDS_DIR = Path(__file__).resolve().parents[3] / "library" / "sounds"
@@ -159,10 +156,14 @@ class ObjectLayer(QObject):
         for k in to_remove:
             player, output = self._active.pop(k)
             player.stop()
+            player.deleteLater()
+            output.deleteLater()
 
     def stop(self):
         for player, output in self._active.values():
             player.stop()
+            player.deleteLater()
+            output.deleteLater()
         self._active.clear()
 
 
@@ -409,7 +410,6 @@ class BrushSoundLayer(QObject):
         if not self._paint_looping or not hasattr(self, '_paint_file'):
             return
         self._paint_crossfading = True
-        vol = self._master * self._paint_vol_mult
 
         # Create next player starting at volume 0
         output = QAudioOutput(self)
@@ -442,12 +442,18 @@ class BrushSoundLayer(QObject):
 
         if self._paint_fade_step >= self._paint_fade_steps:
             self._paint_fade_timer.stop()
+            self._paint_fade_timer.deleteLater()
             if self._active_paint:
                 self._active_paint[0].stop()
                 try:
                     self._active_paint[0].positionChanged.disconnect(self._on_paint_position)
                 except (RuntimeError, TypeError):
                     pass
+                # Crossfade replaces this pair with _paint_next below — stop()
+                # alone leaves both QObjects alive as children of self for
+                # the rest of the session; deleteLater() actually frees them.
+                self._active_paint[0].deleteLater()
+                self._active_paint[1].deleteLater()
             if self._paint_next:
                 self._active_paint = self._paint_next
                 self._active_paint[0].positionChanged.connect(self._on_paint_position)
@@ -607,7 +613,13 @@ class BrushSoundLayer(QObject):
             if step_count[0] >= steps:
                 timer.stop()
                 old_player.stop()
-                # Swap
+                # Swap — stop() alone leaves the old player/output/timer
+                # alive as children of self for the rest of the session;
+                # deleteLater() actually frees them (see also
+                # _start_paint_crossfade's identical fix).
+                old_player.deleteLater()
+                old_output.deleteLater()
+                timer.deleteLater()
                 self._ambient_players[key] = (player, output)
                 self._ambient_crossfading[key] = False
                 player.positionChanged.connect(
@@ -735,14 +747,6 @@ class SoundEngine(QObject):
         self.music.stop()
         self.brush.stop()
 
-    def set_enabled(self, enabled: bool):
-        self._enabled = enabled
-        if not enabled:
-            self.stop()
-
-    def set_master_volume(self, vol: float):
-        self._master_volume = max(0.0, min(1.0, vol))
-
     def on_zoom_changed(self, zoom_percent: int):
         self._zoom = zoom_percent / 100.0
         self._update_zoom_volumes()
@@ -793,7 +797,3 @@ class SoundEngine(QObject):
     def _periodic_update(self):
         """Periodic volume sync."""
         self._update_zoom_volumes()
-
-    def notify_asset_placed(self, asset_name: str):
-        """Convenience: trigger sound context refresh on asset placement."""
-        pass  # Handled by viewport scan in CanvasEngine

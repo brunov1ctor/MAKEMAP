@@ -1,1 +1,0 @@
-"""Game engines — domínio MMORPG."""

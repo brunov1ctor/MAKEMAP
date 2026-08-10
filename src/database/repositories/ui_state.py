@@ -18,9 +18,9 @@ class UIStateRepository:
         return row["value"] if row else default
 
     def set(self, key: str, value: str):
-        existing = self.db.fetchone(f"SELECT key FROM {self.TABLE} WHERE key = ?", (key,))
         with self.db.transaction():
-            if existing:
-                self.db.execute(f"UPDATE {self.TABLE} SET value = ? WHERE key = ?", (value, key))
-            else:
-                self.db.execute(f"INSERT INTO {self.TABLE} (key, value) VALUES (?, ?)", (key, value))
+            self.db.execute(
+                f"INSERT INTO {self.TABLE} (key, value) VALUES (?, ?) "
+                f"ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )

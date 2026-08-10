@@ -320,9 +320,8 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             self._respawn_time_spin.setValue(0)
             self._spawn_radius_spin.setValue(0)
             self._shadow_pct_spin.setValue(0)
+            self._height_spin.setValue(0)
 
-            self._visible_on_map_check.setChecked(True)
-            self._shows_on_minimap_check.setChecked(True)
             self._shows_quest_icon_check.setChecked(True)
             self._uses_animations_check.setChecked(True)
             self._notes_edit.clear()
@@ -399,9 +398,8 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
         self._respawn_time_spin.setValue(int(npc.get("respawn_time", 0) or 0))
         self._spawn_radius_spin.setValue(float(npc.get("spawn_radius", 0) or 0))
         self._shadow_pct_spin.setValue(float(npc.get("shadow_pct", 0) or 0))
+        self._height_spin.setValue(float(npc.get("altura", 0) or 0))
 
-        self._visible_on_map_check.setChecked(bool(npc.get("visible_on_map", 1)))
-        self._shows_on_minimap_check.setChecked(bool(npc.get("shows_on_minimap", 1)))
         self._shows_quest_icon_check.setChecked(bool(npc.get("shows_quest_icon", 1)))
         self._uses_animations_check.setChecked(bool(npc.get("uses_animations", 1)))
         self._notes_edit.setPlainText(npc.get("notes", "") or "")
@@ -445,8 +443,9 @@ class NPCEditPanel(OverviewSectionMixin, AtributosSectionMixin, ExtrasSectionMix
             respawn_time=self._respawn_time_spin.value(),
             spawn_radius=self._spawn_radius_spin.value(),
             shadow_pct=self._shadow_pct_spin.value(),
-            visible_on_map=int(self._visible_on_map_check.isChecked()),
-            shows_on_minimap=int(self._shows_on_minimap_check.isChecked()),
+            altura=self._height_spin.value(),
+            visible_on_map=1,
+            shows_on_minimap=1,
             shows_quest_icon=int(self._shows_quest_icon_check.isChecked()),
             uses_animations=int(self._uses_animations_check.isChecked()),
             notes=self._notes_edit.toPlainText(),

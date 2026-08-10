@@ -52,6 +52,7 @@ class MobsPanel(
     closed = Signal()
     item_open_requested = Signal(str)  # item_id — bubbled from MobEditPanel tile click
     ability_open_requested = Signal(str)  # skill_id — bubbled from MobEditPanel tile click
+    entity_saved = Signal(str)  # mob_id — see MobCrudMixin._on_save; lets SpawnMediator refresh already-placed stamps
 
     # Left column / center grid / edit panel now live in a draggable
     # QSplitter (see _build_ui) instead of a plain QHBoxLayout, so the user

@@ -24,6 +24,7 @@ from src.canvas.map_boundary import MapBoundary
 from src.canvas.neon_preview_overlay import NeonPreviewOverlay
 from src.canvas.vertex_handles_overlay import VertexHandlesOverlay
 from src.canvas.point_alignment_guides import PointAlignmentGuides
+from src.canvas.z_order import ZOrder
 from src.layouts.panels.terrain.panel import TerrainSettingsPanel
 from src.layouts.panels.terrain.terrain_edit_panel import TerrainEditPanel
 from src.services.project_assets import import_asset, resolve_asset_path
@@ -949,16 +950,16 @@ class TerrainMediator:
         return float(terr.width * terr.height)
 
     def _count_objects_in(self, terr: _Terrain) -> int:
-        """Heuristic: stamped/generated assets sit at zValue >= 10, above
-        terrain (1) and zones (5) — count scene items at that tier whose
-        position falls inside this terreno's boundary shape. Same idea as
+        """Heuristic: stamped/generated assets sit at ZOrder.STAMPED_OBJECT
+        or above — count scene items at that tier whose position falls
+        inside this terreno's boundary shape. Same idea as
         RegionMediator._count_objects_in."""
         boundary = self._boundaries.get(terr.id)
         if not boundary:
             return 0
         count = 0
         for item in self._l.canvas.engine.viewport.scene().items():
-            if item.zValue() < 10:
+            if item.zValue() < ZOrder.STAMPED_OBJECT:
                 continue
             if boundary.contains_point(item.scenePos()):
                 count += 1

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import logging
 import math
+import sqlite3
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QPointF, QRectF, QRect
+from PySide6.QtCore import Qt, QPointF, QRect
 from PySide6.QtGui import (
-    QMouseEvent, QPen, QColor, QBrush, QPainterPath, QPolygonF,
-    QRadialGradient, QImage, QPixmap, QPainter,
+    QMouseEvent, QPen, QColor, QBrush, QPainterPath, QPolygonF, QImage,
 )
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsPathItem, QGraphicsPolygonItem,
@@ -18,9 +18,12 @@ from PySide6.QtWidgets import (
 )
 
 from src.canvas.tools.base import BaseTool
-from src.engines.map.terrain_layer import TerrainLayer, TerrainBrushParams, build_stamp, dilate, morphological_close
-from src.engines.core.history import PaintStrokeCommand, PlaceObjectCommand, CompositeCommand
+from src.canvas.tools.shoreline_blend import ShorelineBlender
+from src.canvas.tools.object_stamper import ObjectStamper
+from src.engines.map.terrain_layer import TerrainLayer, TerrainBrushParams, build_stamp
+from src.engines.core.history import PaintStrokeCommand, CompositeCommand
 from src.canvas.item_utils import suppress_selection_decoration
+from src.canvas.z_order import ZOrder
 
 if TYPE_CHECKING:
     from src.canvas.viewport import Viewport
@@ -31,9 +34,51 @@ if TYPE_CHECKING:
 logger = logging.getLogger("MAKEMAP")
 
 
+class _DashedCursorMixin:
+    """Dashed-circle cursor preview shared by BrushTool and RegionBrushTool
+    — same look, diameter driven by whatever the subclass calls its brush
+    size (`_cursor_diameter()`)."""
+
+    def _cursor_diameter(self) -> float:
+        raise NotImplementedError
+
+    def set_minimap(self, minimap):
+        self._minimap = minimap
+
+    def _show_cursor(self):
+        if self._cursor_item:
+            return
+        d = self._cursor_diameter()
+        r = d / 2
+        self._cursor_item = QGraphicsEllipseItem(-r, -r, d, d)
+        self._cursor_item.setPen(QPen(QColor(255, 255, 255, 150), 1.5, Qt.PenStyle.DashLine))
+        self._cursor_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        self._cursor_item.setZValue(ZOrder.TRANSFORM_HANDLE)
+        self.viewport.scene().addItem(self._cursor_item)
+        if self._minimap:
+            self._minimap.register_hidden_item(self._cursor_item)
+
+    def _hide_cursor(self):
+        if self._cursor_item:
+            if self._minimap:
+                self._minimap.unregister_hidden_item(self._cursor_item)
+            self.viewport.scene().removeItem(self._cursor_item)
+            self._cursor_item = None
+
+    def update_cursor_size(self):
+        """Refresh cursor circle diameter when brush size changes."""
+        if self._cursor_item:
+            rect = self._cursor_item.rect()
+            cx = rect.x() + rect.width() / 2
+            cy = rect.y() + rect.height() / 2
+            d = self._cursor_diameter()
+            r = d / 2
+            self._cursor_item.setRect(cx - r, cy - r, d, d)
+
+
 # ─── Brush Tool (terrain + object) ──────────────────────────────────────
 
-class BrushTool(BaseTool):
+class BrushTool(_DashedCursorMixin, BaseTool):
     """Brush — terrain mask painting + object stamp placement.
 
     Terrain assets (category='terrain'): paints into a TerrainLayer mask.
@@ -51,33 +96,6 @@ class BrushTool(BaseTool):
     # (see _check_is_terrain, which DOES hit the DB).
     EFFECT_ASSET_PREFIX = "effect:"
     MAX_FADE_SECONDS = 3.0        # smoothness=1.0 fade-in duration, real seconds
-    SHORELINE_DILATE = 70         # px — outer reach of the foam glow from a land/water boundary
-    SHORELINE_SMOOTH = 12         # px — rounds the edge-dither's jagged notches before glowing
-    # (radius fraction of SHORELINE_DILATE, alpha) rings, outer/faintest
-    # first — painted in this order so each smaller+stronger ring lands
-    # on top (SourceOver), reading as one smooth gradient glow instead of
-    # a flat-opacity band. See _blend_shoreline_pair. Kept translucent even
-    # at its strongest (peak ~25%) — a solid opaque stripe reads as a
-    # painted-on ribbon, not a faint glow the terrain still shows through.
-    # Many closer-spaced, low-alpha rings so the falloff reads as one long,
-    # soft gradient across the full DILATE reach instead of visible steps.
-    SHORELINE_RINGS = (
-        (1.00, 2),
-        (0.80, 4),
-        (0.60, 6),
-        (0.42, 10),
-        (0.26, 13),
-        (0.12, 17),
-    )
-    # "cartoon" style water gets a different shoreline effect entirely — a
-    # few concentric wave lines hugging the coast (like a stylized map
-    # icon) instead of the realistic soft foam glow above, which reads as
-    # too photoreal next to flat cartoon terrain. See _blend_shoreline_pair
-    # (branches on the water asset's own `style`) and _wave_shoreline_image.
-    CARTOON_WAVE_RADII = (5, 12, 20, 29)   # px — distance of each wave line from the coast
-    CARTOON_WAVE_THICKNESS = 2             # px — stroke width of each wave line
-    CARTOON_WAVE_REACH = 40                # px — how far past the coast waves are allowed to show at all
-    CARTOON_WAVE_ALPHA = 215                # white, same as _alpha_stencil's fixed tint color
 
     def __init__(self, viewport: Viewport, brush_engine: BrushEngine,
                  asset_engine: AssetEngine = None, history_engine: HistoryEngine = None,
@@ -95,7 +113,13 @@ class BrushTool(BaseTool):
         self._sound_engine = None
         self._snap_manager = None
         self._cursor_item: QGraphicsEllipseItem | None = None
-        self._stroke_items: list = []
+
+        # Object-stamp placement (non-terrain assets placed as individual
+        # QGraphicsPixmapItems) — see object_stamper.ObjectStamper's own
+        # docstring; split out since it only ever reads BrushTool's shared
+        # collaborators (asset_engine/active_boundary/viewport/history/
+        # brush engine), never the terrain-painting state itself.
+        self._object_stamper = ObjectStamper(self)
 
         # Terrain layers: asset_id -> TerrainLayer
         self._terrain_layers: dict[str, TerrainLayer] = {}
@@ -111,12 +135,10 @@ class BrushTool(BaseTool):
         self._is_terrain_mode = False
         self._is_effect_mode = False
 
-        # (water_asset_id, land_asset_id) -> the standalone foam overlay
-        # item for that pair (see _apply_shoreline_blend) — recomputed
-        # from scratch after every stroke, never written into either
-        # layer's own paint mask, so undo/"Apagar Pintura" of the actual
-        # terrain is completely unaffected by this purely-derived overlay.
-        self._shoreline_overlays: dict[tuple[str, str], QGraphicsPixmapItem] = {}
+        # Shoreline foam blend — see shoreline_blend.ShorelineBlender's own
+        # docstring; split out since it only reads terrain_layers/
+        # asset_engine/viewport, never the brush/stamp painting state.
+        self._shoreline = ShorelineBlender(self)
 
         # Undo state — asset_id -> pre-stroke layer snapshot, for layers
         # touched (painted or erased-into) during the current stroke.
@@ -133,11 +155,16 @@ class BrushTool(BaseTool):
         self.texture_scale = 0.5
         self.texture_rotation = 0.0
         self.erase_mode = False
-        self.mask_mode = False
+        self._mask_mode = False
         # True only while a stroke started with the right mouse button is
         # in progress — right-click is a momentary "erase" shortcut that
         # doesn't touch the erase_mode toggle itself.
         self._stroke_force_erase = False
+        # Button that started the current stroke — mirrors RegionBrushTool's
+        # _stroke_button so releasing a *different* button mid-stroke (e.g.
+        # pressing left, then right, then releasing one of them) doesn't end
+        # the stroke early or leave it stuck active.
+        self._stroke_button = None
 
         # Smoothness cross-fade state — reset whenever a *new* stroke starts
         # painting a different asset than the previous stroke did, so
@@ -172,14 +199,23 @@ class BrushTool(BaseTool):
     def size(self) -> float:
         return self._engine.config.size
 
-    def update_cursor_size(self):
-        """Refresh cursor circle diameter when brush size changes."""
-        if self._cursor_item:
-            rect = self._cursor_item.rect()
-            cx = rect.x() + rect.width() / 2
-            cy = rect.y() + rect.height() / 2
-            r = self.size / 2
-            self._cursor_item.setRect(cx - r, cy - r, self.size, self.size)
+    @property
+    def mask_mode(self) -> bool:
+        return self._mask_mode
+
+    @mask_mode.setter
+    def mask_mode(self, value: bool):
+        if self._mask_mode and not value:
+            # Leaving Mask mode — discard the stencil clip so Paint/Erase
+            # strokes on this asset's layer aren't left permanently confined
+            # to whatever shape was last stenciled (see clear_stencil()).
+            layer = self._terrain_layers.get(self._active_asset_id)
+            if layer:
+                layer.clear_stencil()
+        self._mask_mode = value
+
+    def _cursor_diameter(self) -> float:
+        return self.size
 
     def activate(self):
         super().activate()
@@ -247,18 +283,23 @@ class BrushTool(BaseTool):
         self._is_effect_mode = asset_id.startswith(self.EFFECT_ASSET_PREFIX)
         self._is_terrain_mode = False if self._is_effect_mode else self._check_is_terrain(asset_id)
 
-    def _check_is_terrain(self, asset_id: str) -> bool:
-        """Check if asset belongs to 'terrain', 'water' or 'road' category
-        — all three paint into a TerrainLayer mask."""
+    def _get_asset_category(self, asset_id: str) -> str | None:
+        """Look up an asset's category from the library DB, or None if the
+        asset engine/library/row isn't available."""
         if not self._asset_engine or not asset_id:
-            return False
+            return None
         lib = getattr(self._asset_engine, 'library', None)
         if not lib:
-            return False
+            return None
         row = lib._db.execute(
             "SELECT category FROM assets WHERE id = ?", (asset_id,)
         ).fetchone()
-        return row["category"] in ("terrain", "water", "road") if row else False
+        return row["category"] if row else None
+
+    def _check_is_terrain(self, asset_id: str) -> bool:
+        """Check if asset belongs to 'terrain', 'water' or 'road' category
+        — all three paint into a TerrainLayer mask."""
+        return self._get_asset_category(asset_id) in ("terrain", "water", "road")
 
     # ─── Mouse Events ─────────────────────────────────────────────────
 
@@ -283,6 +324,7 @@ class BrushTool(BaseTool):
         if is_right and not is_terrain:
             return
         self._stroke_force_erase = is_right
+        self._stroke_button = event.button()
 
         if is_terrain:
             self._begin_terrain_stroke(scene_pos)
@@ -301,8 +343,9 @@ class BrushTool(BaseTool):
             self._engine.continue_stroke(scene_pos)
 
     def mouse_release(self, event: QMouseEvent, scene_pos: QPointF):
-        if event.button() not in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+        if event.button() != self._stroke_button:
             return
+        self._stroke_button = None
 
         if self._active_terrain_layer:
             self._end_terrain_stroke()
@@ -310,7 +353,7 @@ class BrushTool(BaseTool):
         elif self._engine.is_active:
             self._engine.end_stroke()
             try:
-                self._engine.stamp_placed.disconnect(self._on_object_stamp)
+                self._engine.stamp_placed.disconnect(self._object_stamper.on_stamp)
             except (RuntimeError, TypeError):
                 pass
             if self._history:
@@ -508,255 +551,20 @@ class BrushTool(BaseTool):
         self._active_terrain_layer = None
         self._last_terrain_pos = None
         try:
-            self._apply_shoreline_blend()
+            self._shoreline.apply()
         except Exception:
             logger.exception("Falha ao aplicar halo de espuma terra-água")
 
-    # ─── Shoreline blend (Fase C — land/water foam halo) ────────────────
-    # Only ever runs here, at stroke-finish — never live-drag, same cost
-    # pattern RegionLayer._bordered_result already uses (dilate/erode a
-    # small cropped region, not the whole layer, only once per stroke).
+    # ─── Shoreline blend (Fase C — land/water foam halo) — see
+    # shoreline_blend.ShorelineBlender. Kept as BrushTool delegators below
+    # since engine.py/brush_mediator.py call these directly after
+    # reloading terrain from the DB. ────────────────────────────────────
 
     def _apply_shoreline_blend(self):
-        """Soft white foam band wherever a water-tagged terrain layer
-        meets a non-water one — the Inkarnate-style effect. Checks every
-        (water, land) layer pair; a cheap scene-rect intersection test
-        skips anything not actually near each other before any of the
-        more expensive mask work runs."""
-        # is_water_asset() alone would foam every water asset uniformly —
-        # fine for ocean/sea, wrong for a calm river. has_shore_foam() is
-        # the per-asset opt-out (see AssetEffectsPanel's "🌊 Maresia"
-        # toggle, only shown for water-category assets), default True so
-        # existing water assets keep looking exactly as before.
-        #
-        # Water assets are walked even when foam is currently disabled
-        # (instead of being filtered out of the loop entirely) so that an
-        # asset whose foam was just turned off — but that already has a
-        # foam overlay sitting in the scene from before the toggle — gets
-        # that stale overlay actively cleared here rather than silently
-        # skipped and left behind forever (nothing else ever revisits an
-        # excluded pair to clean it up).
-        water_ids = [aid for aid in self._terrain_layers if self.is_water_asset(aid)]
-        if not water_ids:
-            return
-        for water_id in water_ids:
-            water_layer = self._terrain_layers[water_id]
-            foam_enabled = self._asset_engine.library.has_shore_foam(water_id)
-            for land_id, land_layer in self._terrain_layers.items():
-                if land_id == water_id or self.is_water_asset(land_id):
-                    continue
-                if foam_enabled:
-                    self._blend_shoreline_pair(water_id, water_layer, land_id, land_layer)
-                else:
-                    self._clear_shoreline_overlay((water_id, land_id))
-
-    def _shared_scene_overlap(self, layer_a: TerrainLayer, layer_b: TerrainLayer,
-                               pad: int) -> QRectF | None:
-        """Bounding rect (scene coords) covering wherever two terrain
-        layers' painted areas are within `pad` px of each other — None if
-        neither overlaps nor is even close. Used by _blend_shoreline_pair
-        as the cheap pre-check that skips the more expensive mask/dilate
-        work for any pair that's nowhere near touching."""
-        a_bounds = layer_a.opaque_bounds_local()
-        b_bounds = layer_b.opaque_bounds_local()
-        if a_bounds is None or b_bounds is None:
-            return None
-        a_scene = layer_a.item.mapToScene(QRectF(a_bounds)).boundingRect().adjusted(-pad, -pad, pad, pad)
-        b_scene = layer_b.item.mapToScene(QRectF(b_bounds)).boundingRect().adjusted(-pad, -pad, pad, pad)
-        overlap = a_scene.intersected(b_scene)
-        return overlap if not overlap.isEmpty() else None
-
-    @staticmethod
-    def _mask_and(img: QImage, mask: QImage) -> QImage:
-        """A copy of `img` with its alpha further clipped by `mask`'s own
-        alpha (DestinationIn) — e.g. "img, but only where mask is also
-        opaque". Used by _blend_shoreline_pair."""
-        result = QImage(img)
-        p = QPainter(result)
-        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-        p.drawImage(0, 0, mask)
-        p.end()
-        return result
-
-    @staticmethod
-    def _mask_subtract(img: QImage, minus: QImage) -> QImage:
-        """A copy of `img` with its alpha punched out wherever `minus` is
-        opaque (DestinationOut) — "img, but not where minus is also
-        opaque". Used by _wave_shoreline_image to turn a filled dilated
-        blob into a thin annulus/shell (outer dilation minus inner
-        dilation = a ring right at that distance from the coast)."""
-        result = QImage(img)
-        p = QPainter(result)
-        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
-        p.drawImage(0, 0, minus)
-        p.end()
-        return result
-
-    def _wave_shoreline_image(self, w_smooth: QImage, l_smooth: QImage) -> QImage | None:
-        """Cartoon-style shoreline effect: a few concentric thin wave
-        lines hugging the coast, instead of the realistic soft gradient
-        glow (see _blend_shoreline_pair, which picks between the two
-        based on the water asset's own `style`). Reuses the same
-        dilate/AND-mask primitives as the glow — each wave line is the
-        thin annulus/shell between two dilation radii of the water mask
-        (an "isoline" at that exact distance from the coast), kept only
-        where it's still close enough to land (CARTOON_WAVE_REACH) so
-        waves don't bleed out into open water far from any shore."""
-        l_reach = dilate(l_smooth, self.CARTOON_WAVE_REACH)
-        waves = QImage(w_smooth.size(), QImage.Format.Format_ARGB32_Premultiplied)
-        waves.fill(QColor(0, 0, 0, 0))
-        wp = QPainter(waves)
-        any_content = False
-        for r in self.CARTOON_WAVE_RADII:
-            outer = dilate(w_smooth, r + self.CARTOON_WAVE_THICKNESS)
-            inner = dilate(w_smooth, r)
-            shell = self._mask_and(self._mask_subtract(outer, inner), l_reach)
-            if not self._image_has_opacity(shell):
-                continue
-            any_content = True
-            tinted = self._alpha_stencil(shell, self.CARTOON_WAVE_ALPHA)
-            wp.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-            wp.drawImage(0, 0, tinted)
-        wp.end()
-        return waves if any_content else None
-
-    @staticmethod
-    def _alpha_stencil(ring: QImage, alpha: int) -> QImage:
-        """A flat, `alpha`-strength alpha-only stencil shaped like `ring`'s
-        own silhouette — scales a ring's already-graded/binary alpha down
-        to one fixed strength. Used by _blend_shoreline_pair."""
-        stencil = QImage(ring.size(), QImage.Format.Format_ARGB32_Premultiplied)
-        stencil.fill(QColor(0, 0, 0, 0))
-        sp = QPainter(stencil)
-        sp.fillRect(stencil.rect(), QColor(255, 255, 255, alpha))
-        sp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-        sp.drawImage(0, 0, ring)
-        sp.end()
-        return stencil
-
-    def _blend_shoreline_pair(self, water_id: str, water_layer: TerrainLayer,
-                               land_id: str, land_layer: TerrainLayer):
-        key = (water_id, land_id)
-        pad = self.SHORELINE_DILATE + 4
-        overlap_scene = self._shared_scene_overlap(water_layer, land_layer, pad)
-        if overlap_scene is None:
-            self._clear_shoreline_overlay(key)
-            return
-
-        w_local_rect = water_layer.item.mapFromScene(overlap_scene).boundingRect().toAlignedRect()
-        l_local_rect = land_layer.item.mapFromScene(overlap_scene).boundingRect().toAlignedRect()
-        w_crop = water_layer.mask_crop(w_local_rect)
-        l_crop = land_layer.mask_crop(l_local_rect)
-        if w_crop is None or l_crop is None or w_crop.size() != l_crop.size():
-            # Mismatched crop sizes only happens if one layer's bounds
-            # needed clamping and the other didn't (e.g. right at the very
-            # edge of an independently-expanded layer) — skip this stroke
-            # rather than risk compositing two different-sized images;
-            # the halo reappears on the next stroke once it realigns.
-            self._clear_shoreline_overlay(key)
-            return
-
-        # Pre-smooth each mask before dilating — the edge-dither (organic
-        # terrain-to-terrain mixing, see build_stamp) deliberately tears
-        # small notches into the raw paint mask, and dilating THAT
-        # directly (plus dilate's own 16-facet approximation of a circle)
-        # produced a spiky, jagged halo instead of a calm glow. Closing
-        # first rounds those notches away for the glow's own computation
-        # only — the actual painted terrain keeps its organic edge.
-        w_smooth = morphological_close(w_crop, self.SHORELINE_SMOOTH)
-        l_smooth = morphological_close(l_crop, self.SHORELINE_SMOOTH)
-
-        # Cartoon-style water gets concentric wave lines instead of the
-        # realistic soft glow below — see _wave_shoreline_image. Checked
-        # per water asset (not per stroke/session) since different water
-        # assets painted in the same map can each have their own style.
-        library = getattr(self._asset_engine, "library", None)
-        is_cartoon = bool(library) and library.get_style(water_id) == "cartoon"
-        if is_cartoon:
-            foam = self._wave_shoreline_image(w_smooth, l_smooth)
-            if foam is None:
-                self._clear_shoreline_overlay(key)
-                return
-            overlay = self._get_or_create_shoreline_overlay(key)
-            overlay.setPixmap(QPixmap.fromImage(foam))
-            overlay.setPos(overlap_scene.topLeft())
-            return
-
-        # Built from several nested dilate radii, largest/faintest first —
-        # SourceOver painting order means each smaller, more opaque ring
-        # lands on top of the previous, larger, fainter one, so the net
-        # result reads as a soft gradient glow (strongest right at the
-        # boundary, fading outward) instead of one flat-opacity band.
-        foam = QImage(w_smooth.size(), QImage.Format.Format_ARGB32_Premultiplied)
-        foam.fill(QColor(0, 0, 0, 0))
-        fp = QPainter(foam)
-        any_content = False
-        for radius_fraction, alpha in self.SHORELINE_RINGS:
-            r = max(1, round(self.SHORELINE_DILATE * radius_fraction))
-            w_dilated = dilate(w_smooth, r)
-            l_dilated = dilate(l_smooth, r)
-
-            ring = self._mask_and(w_dilated, l_dilated)
-            if not self._image_has_opacity(ring):
-                continue
-            any_content = True
-
-            tinted = self._alpha_stencil(ring, alpha)
-
-            fp.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-            fp.drawImage(0, 0, tinted)
-        fp.end()
-
-        if not any_content:
-            self._clear_shoreline_overlay(key)
-            return
-
-        overlay = self._get_or_create_shoreline_overlay(key)
-        overlay.setPixmap(QPixmap.fromImage(foam))
-        overlay.setPos(overlap_scene.topLeft())
-
-    def _get_or_create_shoreline_overlay(self, key: tuple[str, str]) -> QGraphicsPixmapItem:
-        overlay = self._shoreline_overlays.get(key)
-        if overlay is None:
-            overlay = QGraphicsPixmapItem()
-            # Between terrain (z=1) and painted régions/objects (z=5/10+)
-            # — the foam should sit on top of the terrain it's blending
-            # but not visually block anything stamped on top of the map.
-            overlay.setZValue(1.5)
-            overlay.setData(0, {"item_type": "shoreline_blend"})
-            suppress_selection_decoration(overlay)
-            self.viewport.scene().addItem(overlay)
-            self._shoreline_overlays[key] = overlay
-        return overlay
-
-    def _clear_shoreline_overlay(self, key: tuple[str, str]):
-        overlay = self._shoreline_overlays.pop(key, None)
-        if overlay is not None:
-            scene = overlay.scene()
-            if scene is not None:
-                scene.removeItem(overlay)
+        self._shoreline.apply()
 
     def _clear_all_blend_overlays(self):
-        """Drops every derived shoreline-foam overlay — called when the
-        underlying terrain layers themselves are wiped (see
-        BrushCanvasEngine.clear_terrain_layers), so a project reload
-        doesn't leave the previous project's overlays orphaned in the
-        scene."""
-        for key in list(self._shoreline_overlays):
-            self._clear_shoreline_overlay(key)
-
-    @staticmethod
-    def _image_has_opacity(img: QImage) -> bool:
-        """Cheap downsampled alpha scan (same technique as RegionLayer.
-        area_m2) — whether `img` has any non-transparent pixel at all."""
-        if img.width() == 0 or img.height() == 0:
-            return False
-        small = img.scaled(16, 16, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
-        for y in range(small.height()):
-            for x in range(small.width()):
-                if small.pixelColor(x, y).alpha() > 10:
-                    return True
-        return False
+        self._shoreline.clear_all()
 
     def _push_stroke_history(self):
         if not self._history or not self._stroke_snapshots:
@@ -779,18 +587,11 @@ class BrushTool(BaseTool):
 
     def _get_asset_sound_key(self, asset_id: str) -> str:
         """Get the sound key for an asset — returns the asset category."""
-        if not self._asset_engine or not asset_id:
-            return asset_id
-        lib = getattr(self._asset_engine, 'library', None)
-        if not lib:
-            return asset_id
         try:
-            row = lib._db.execute(
-                "SELECT category FROM assets WHERE id = ?", (asset_id,)
-            ).fetchone()
-            return row["category"] if row and row["category"] else asset_id
-        except Exception:
+            category = self._get_asset_category(asset_id)
+        except sqlite3.Error:
             return asset_id
+        return category or asset_id
 
     def _terrain_params(self) -> TerrainBrushParams:
         opacity = self._engine.config.opacity
@@ -883,138 +684,81 @@ class BrushTool(BaseTool):
         self._effect_layers[asset_id] = layer
         return layer
 
-    def is_water_asset(self, asset_id: str) -> bool:
-        """Whether `asset_id` belongs to the "water" category — used by
-        _apply_shoreline_blend to find land/water layer pairs. Queried
-        live (not cached) every time: this only runs a handful of times
-        per stroke-finish (never per-stamp), and an asset's category can
-        change at any moment via the Config/Assets panel's drag-and-drop
-        move, independent of the Brush tool's own lifecycle — a cache
-        here would just go stale the moment that happens mid-session."""
-        if not self._asset_engine or not getattr(self._asset_engine, "library", None):
-            return False
-        return self._asset_engine.library.is_water(asset_id)
-
-    # ─── Object Stroke ───────────────────────────────────────────────
+    # ─── Object Stroke — delegated to ObjectStamper (see
+    # object_stamper.py). place_stamp_item is kept as a same-named method
+    # here (not just on the collaborator) since CanvasEngine.place_stamp_item
+    # calls it directly on this BrushTool instance. ─────────────────────
 
     def _begin_object_stroke(self, pos: QPointF):
-        self._stroke_items.clear()
-        self._engine.stamp_placed.connect(self._on_object_stamp)
-        self._engine.begin_stroke(pos)
-        if self._history:
-            self._history.begin_group("Pintura de objetos")
+        self._object_stamper.begin_stroke(pos)
 
     def place_stamp_item(self, asset_id: str, position: QPointF, rotation: float,
                           scale: float, opacity: float) -> QGraphicsPixmapItem | None:
-        """Builds+places a single brush-stamped object item — shared by
-        live painting (_on_object_stamp) and BrushMediator's DB-reload on
-        project switch, so both produce identical items. `position` is in
-        scene coordinates regardless of boundary parenting."""
-        if not self._asset_engine or not asset_id:
-            return None
+        return self._object_stamper.place_stamp_item(asset_id, position, rotation, scale, opacity)
 
-        pixmap = self._asset_engine.get_pixmap(asset_id)
-        if not pixmap or pixmap.isNull():
-            return None
+    # ─── Cursor (see _DashedCursorMixin) ───────────────────────────────
 
-        # Parent to boundary group so stamp moves with the terrain
-        parent_item = None
-        if self._active_boundary and self._active_boundary._item:
-            parent_item = self._active_boundary.group
 
-        item = QGraphicsPixmapItem(pixmap, parent_item)
-        item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
-        item.setTransformOriginPoint(pixmap.width() / 2, pixmap.height() / 2)
-        # Default MaskShape hit-tests against opaque pixels only — a click
-        # anywhere on a sprite's transparent padding (very common: trees,
-        # decorations rarely fill their whole bounding box) missed the item
-        # entirely, while a box-select drag still caught it (looser
-        # intersection test), making single-click selection feel broken.
-        # spawn_tool.py's stamp already does this; asset stamps didn't.
-        item.setShapeMode(QGraphicsPixmapItem.ShapeMode.BoundingRectShape)
+# ─── Polyline Draw Tool (base for RegionTool) ──────────────────────────────
 
-        if parent_item:
-            local_pos = parent_item.mapFromScene(position)
-            item.setPos(
-                local_pos.x() - pixmap.width() / 2,
-                local_pos.y() - pixmap.height() / 2,
-            )
-        else:
-            item.setPos(
-                position.x() - pixmap.width() / 2,
-                position.y() - pixmap.height() / 2,
-            )
-            self.viewport.scene().addItem(item)
+class PolylineDrawTool(BaseTool):
+    """Common click-to-add-point / right-click-to-finalize / Escape-to-cancel
+    flow used by RegionTool — supplies its own _update_preview/_finalize
+    and, if it needs more than 2 points to commit, overrides
+    _min_points_to_finalize."""
 
-        item.setScale(scale)
-        item.setRotation(rotation)
-        item.setOpacity(opacity)
-        item.setZValue(0.5)
-        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
-        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
-        item.setData(0, {"item_type": "asset", "asset_id": asset_id})
-        suppress_selection_decoration(item)
-        # TransformEngine._item_bounds usa selection_bounding_rect() quando
-        # presente — sem isso, sceneBoundingRect() inclui filhos (e.g.
-        # AssetEffectsOverlay) e o canvas de seleção fica inflado.
-        # Usa lambda com weak-ref implícita via pixmap size para evitar
-        # ciclo de referência no Shiboken que poderia deletar o item cedo.
-        _w, _h = pixmap.width(), pixmap.height()
-        item.selection_bounding_rect = lambda: QRectF(0, 0, _w, _h)
-        return item
+    _min_points_to_finalize = 2
 
-    def _on_object_stamp(self, stamp):
-        """Render object stamp as individual QGraphicsPixmapItem."""
-        item = self.place_stamp_item(stamp.asset_id, stamp.position, stamp.rotation, stamp.scale, stamp.opacity)
-        if item is None:
-            return
-        self._stroke_items.append(item)
+    def __init__(self, viewport: Viewport):
+        super().__init__(viewport)
+        self._points: list[QPointF] = []
+        self._preview: QGraphicsPathItem | None = None
 
-        if self._history:
-            self._history.push(PlaceObjectCommand(item))
+    def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._points.append(scene_pos)
+            self._update_preview()
+        elif event.button() == Qt.MouseButton.RightButton:
+            if len(self._points) >= self._min_points_to_finalize:
+                self._finalize()
+            self._clear_preview()
 
-    # ─── Cursor ─────────────────────────────────────────────────────
+    def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
+        if self._points:
+            self._update_preview(scene_pos)
 
-    def set_minimap(self, minimap):
-        """Set minimap reference so cursor can be hidden from it."""
-        self._minimap = minimap
+    def _update_preview(self, cursor_pos: QPointF = None):
+        raise NotImplementedError
 
-    def _show_cursor(self):
-        if self._cursor_item:
-            return
-        r = self.size / 2
-        self._cursor_item = QGraphicsEllipseItem(-r, -r, self.size, self.size)
-        self._cursor_item.setPen(QPen(QColor(255, 255, 255, 150), 1.5, Qt.PenStyle.DashLine))
-        self._cursor_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-        self._cursor_item.setZValue(10000)
-        self.viewport.scene().addItem(self._cursor_item)
-        if self._minimap:
-            self._minimap.register_hidden_item(self._cursor_item)
+    def _finalize(self):
+        raise NotImplementedError
 
-    def _hide_cursor(self):
-        if self._cursor_item:
-            if self._minimap:
-                self._minimap.unregister_hidden_item(self._cursor_item)
-            self.viewport.scene().removeItem(self._cursor_item)
-            self._cursor_item = None
+    def _clear_preview(self):
+        if self._preview:
+            self.viewport.scene().removeItem(self._preview)
+            self._preview = None
+        self._points.clear()
+
+    def key_press(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self._clear_preview()
 
 
 # ─── Region Tool ───────────────────────────────────────────────────────────
 
-class RegionTool(BaseTool):
+class RegionTool(PolylineDrawTool):
     """Região — desenha polígono fechado ao clicar pontos.
-    
+
     Chama callbacks registrados via on_region_finalized(callback) quando fechado.
     """
 
     name = "Região"
     shortcut = "R"
     cursor = Qt.CursorShape.CrossCursor
+    _min_points_to_finalize = 3
 
     def __init__(self, viewport: Viewport):
         super().__init__(viewport)
-        self._points: list[QPointF] = []
-        self._preview: QGraphicsPathItem | None = None
         self._color = QColor(79, 195, 247, 60)
         self._border_color = QColor(79, 195, 247, 200)
         self._finalize_callbacks: list = []
@@ -1022,19 +766,6 @@ class RegionTool(BaseTool):
     def on_region_finalized(self, callback):
         """Registra callback(QPolygonF) chamado ao finalizar região."""
         self._finalize_callbacks.append(callback)
-
-    def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._points.append(scene_pos)
-            self._update_preview()
-        elif event.button() == Qt.MouseButton.RightButton:
-            if len(self._points) >= 3:
-                self._finalize()
-            self._clear_preview()
-
-    def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
-        if self._points:
-            self._update_preview(scene_pos)
 
     def _update_preview(self, cursor_pos: QPointF = None):
         path = QPainterPath()
@@ -1050,7 +781,7 @@ class RegionTool(BaseTool):
             self._preview = QGraphicsPathItem()
             self._preview.setPen(QPen(self._border_color, 2, Qt.PenStyle.DashLine))
             self._preview.setBrush(QBrush(self._color))
-            self._preview.setZValue(50)
+            self._preview.setZValue(ZOrder.TOOL_PREVIEW)
             self.viewport.scene().addItem(self._preview)
         self._preview.setPath(path)
 
@@ -1059,7 +790,7 @@ class RegionTool(BaseTool):
         item = QGraphicsPolygonItem(polygon)
         item.setPen(QPen(self._border_color, 2))
         item.setBrush(QBrush(self._color))
-        item.setZValue(5)
+        item.setZValue(ZOrder.ZONE_FILL)
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
         item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
         suppress_selection_decoration(item)
@@ -1068,183 +799,10 @@ class RegionTool(BaseTool):
             cb(polygon)
         self._points.clear()
 
-    def _clear_preview(self):
-        if self._preview:
-            self.viewport.scene().removeItem(self._preview)
-            self._preview = None
-        self._points.clear()
-
-    def key_press(self, event):
-        if event.key() == Qt.Key.Key_Escape:
-            self._clear_preview()
-
-
-# ─── Road Tool ─────────────────────────────────────────────────────────────
-
-class RoadTool(BaseTool):
-    """Estrada — desenha path com pontos clicados."""
-
-    name = "Estrada"
-    shortcut = "P"
-    cursor = Qt.CursorShape.CrossCursor
-
-    def __init__(self, viewport: Viewport):
-        super().__init__(viewport)
-        self._points: list[QPointF] = []
-        self._preview: QGraphicsPathItem | None = None
-        self._color = QColor(139, 119, 80, 220)
-        self._width = 8.0
-
-    def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._points.append(scene_pos)
-            self._update_preview()
-        elif event.button() == Qt.MouseButton.RightButton:
-            if len(self._points) >= 2:
-                self._finalize()
-            self._clear_preview()
-
-    def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
-        if self._points:
-            self._update_preview(scene_pos)
-
-    def _update_preview(self, cursor_pos: QPointF = None):
-        path = QPainterPath()
-        if self._points:
-            path.moveTo(self._points[0])
-            for pt in self._points[1:]:
-                path.lineTo(pt)
-            if cursor_pos:
-                path.lineTo(cursor_pos)
-
-        if self._preview is None:
-            self._preview = QGraphicsPathItem()
-            self._preview.setPen(QPen(self._color, self._width, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-            self._preview.setZValue(50)
-            self.viewport.scene().addItem(self._preview)
-        self._preview.setPath(path)
-
-    def _finalize(self):
-        path = QPainterPath()
-        path.moveTo(self._points[0])
-        for pt in self._points[1:]:
-            path.lineTo(pt)
-
-        item = QGraphicsPathItem(path)
-        item.setPen(QPen(self._color, self._width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        item.setZValue(8)
-        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
-        suppress_selection_decoration(item)
-        self.viewport.scene().addItem(item)
-        self._points.clear()
-
-    def _clear_preview(self):
-        if self._preview:
-            self.viewport.scene().removeItem(self._preview)
-            self._preview = None
-        self._points.clear()
-
-    def key_press(self, event):
-        if event.key() == Qt.Key.Key_Escape:
-            self._clear_preview()
-
-
-# ─── River Tool ────────────────────────────────────────────────────────────
-
-class RiverTool(BaseTool):
-    """Rio — desenha curva suave com pontos clicados."""
-
-    name = "Rio"
-    shortcut = "W"
-    cursor = Qt.CursorShape.CrossCursor
-
-    def __init__(self, viewport: Viewport):
-        super().__init__(viewport)
-        self._points: list[QPointF] = []
-        self._preview: QGraphicsPathItem | None = None
-        self._color = QColor(30, 144, 255, 180)
-        self._width = 6.0
-
-    def mouse_press(self, event: QMouseEvent, scene_pos: QPointF):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._points.append(scene_pos)
-            self._update_preview()
-        elif event.button() == Qt.MouseButton.RightButton:
-            if len(self._points) >= 2:
-                self._finalize()
-            self._clear_preview()
-
-    def mouse_move(self, event: QMouseEvent, scene_pos: QPointF):
-        if self._points:
-            self._update_preview(scene_pos)
-
-    def _build_smooth_path(self, points: list[QPointF]) -> QPainterPath:
-        path = QPainterPath()
-        if len(points) < 2:
-            if points:
-                path.moveTo(points[0])
-            return path
-
-        path.moveTo(points[0])
-        if len(points) == 2:
-            path.lineTo(points[1])
-            return path
-
-        for i in range(len(points) - 1):
-            p0 = points[max(0, i - 1)]
-            p1 = points[i]
-            p2 = points[min(len(points) - 1, i + 1)]
-            p3 = points[min(len(points) - 1, i + 2)]
-
-            cp1 = QPointF(
-                p1.x() + (p2.x() - p0.x()) / 6,
-                p1.y() + (p2.y() - p0.y()) / 6,
-            )
-            cp2 = QPointF(
-                p2.x() - (p3.x() - p1.x()) / 6,
-                p2.y() - (p3.y() - p1.y()) / 6,
-            )
-            path.cubicTo(cp1, cp2, p2)
-
-        return path
-
-    def _update_preview(self, cursor_pos: QPointF = None):
-        pts = list(self._points)
-        if cursor_pos:
-            pts.append(cursor_pos)
-
-        path = self._build_smooth_path(pts)
-        if self._preview is None:
-            self._preview = QGraphicsPathItem()
-            self._preview.setPen(QPen(self._color, self._width, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-            self._preview.setZValue(50)
-            self.viewport.scene().addItem(self._preview)
-        self._preview.setPath(path)
-
-    def _finalize(self):
-        path = self._build_smooth_path(self._points)
-        item = QGraphicsPathItem(path)
-        item.setPen(QPen(self._color, self._width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        item.setZValue(7)
-        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
-        suppress_selection_decoration(item)
-        self.viewport.scene().addItem(item)
-        self._points.clear()
-
-    def _clear_preview(self):
-        if self._preview:
-            self.viewport.scene().removeItem(self._preview)
-            self._preview = None
-        self._points.clear()
-
-    def key_press(self, event):
-        if event.key() == Qt.Key.Key_Escape:
-            self._clear_preview()
-
 
 # ─── Region Brush Tool (Região panel — paint/edit a colored área) ─────────
 
-class RegionBrushTool(BaseTool):
+class RegionBrushTool(_DashedCursorMixin, BaseTool):
     """Circular brush that paints (or erases) into a target RegionLayer.
 
     Distinct from RegionTool above — that one is the toolbar's click-point
@@ -1290,20 +848,11 @@ class RegionBrushTool(BaseTool):
         """Registra callback() chamado ao soltar o botão após pintar."""
         self._stroke_finished_callbacks.append(callback)
 
-    # ─── Cursor — same dashed-circle preview as BrushTool (see
-    # BrushTool._show_cursor/_hide_cursor above), diameter driven by
-    # radius*2 instead of a `size` property. ──────────────────────────
+    # ─── Cursor (see _DashedCursorMixin) — diameter driven by radius*2
+    # instead of a `size` property. ─────────────────────────────────────
 
-    def set_minimap(self, minimap):
-        self._minimap = minimap
-
-    def update_cursor_size(self):
-        if self._cursor_item:
-            rect = self._cursor_item.rect()
-            cx = rect.x() + rect.width() / 2
-            cy = rect.y() + rect.height() / 2
-            d = self.radius * 2
-            self._cursor_item.setRect(cx - self.radius, cy - self.radius, d, d)
+    def _cursor_diameter(self) -> float:
+        return self.radius * 2
 
     def activate(self):
         super().activate()
@@ -1312,25 +861,6 @@ class RegionBrushTool(BaseTool):
     def deactivate(self):
         super().deactivate()
         self._hide_cursor()
-
-    def _show_cursor(self):
-        if self._cursor_item:
-            return
-        d = self.radius * 2
-        self._cursor_item = QGraphicsEllipseItem(-self.radius, -self.radius, d, d)
-        self._cursor_item.setPen(QPen(QColor(255, 255, 255, 150), 1.5, Qt.PenStyle.DashLine))
-        self._cursor_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-        self._cursor_item.setZValue(10000)
-        self.viewport.scene().addItem(self._cursor_item)
-        if self._minimap:
-            self._minimap.register_hidden_item(self._cursor_item)
-
-    def _hide_cursor(self):
-        if self._cursor_item:
-            if self._minimap:
-                self._minimap.unregister_hidden_item(self._cursor_item)
-            self.viewport.scene().removeItem(self._cursor_item)
-            self._cursor_item = None
 
     def set_target(self, layer):
         """RegionLayer to paint into, or None to disarm painting."""

@@ -25,6 +25,7 @@ class ExplorerPanel(CollapsiblePanel):
 
     node_activated = Signal(dict)  # payload de um ExplorerNode não-categoria (ex.: scene_pos)
     node_hovered = Signal(dict, bool)  # (payload, hovered) — mouse enter/leave de uma linha não-categoria
+    icon_clicked = Signal(object)  # ExplorerNode não-categoria — abre o popup de ícone/cor
 
     def __init__(self, parent=None):
         super().__init__(title="Explorer", icon="🌍", parent=parent, radius=12)
@@ -90,7 +91,7 @@ class ExplorerPanel(CollapsiblePanel):
         """
 
         self.btn_expand = QToolButton()
-        self.btn_expand.setText("⊞")
+        self.btn_expand.setText("⏬")
         self.btn_expand.setToolTip("Expandir Tudo")
         self.btn_expand.setFixedSize(28, 28)
         self.btn_expand.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -99,7 +100,7 @@ class ExplorerPanel(CollapsiblePanel):
         search_row.addWidget(self.btn_expand)
 
         self.btn_collapse = QToolButton()
-        self.btn_collapse.setText("⊟")
+        self.btn_collapse.setText("⏫")
         self.btn_collapse.setToolTip("Recolher Tudo")
         self.btn_collapse.setFixedSize(28, 28)
         self.btn_collapse.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -127,6 +128,7 @@ class ExplorerPanel(CollapsiblePanel):
             QTreeWidget::branch {{ background: transparent; border: none; }}
         """)
         self.tree.itemClicked.connect(self._on_item_clicked)
+        self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         content_layout.addWidget(self.tree, 1)
 
         self.content_layout.addWidget(content)
@@ -138,12 +140,6 @@ class ExplorerPanel(CollapsiblePanel):
         """Substitui a árvore inteira pelos `roots` — chamado a cada rebuild
         do ExplorerSyncMediator. Preserva busca e estado expandir/recolher."""
         self._all_roots = roots
-        self._render(self._filtered_roots(self.search.text()))
-
-    def set_selected_ids(self, ids: set[int]):
-        """Atualiza quais itens de cena estão selecionados e re-renderiza
-        apenas o estado de destaque/pulso, sem reconstruir a árvore toda."""
-        self._selected_ids = ids
         self._render(self._filtered_roots(self.search.text()))
 
     # ─── Busca ───────────────────────────────────────────────────────────
@@ -198,6 +194,15 @@ class ExplorerPanel(CollapsiblePanel):
         if node is None or node.kind == "category":
             return
         self.node_activated.emit(node.payload)
+
+    def _on_item_double_clicked(self, item: QTreeWidgetItem, _column: int):
+        # Double-click (not single-click, which is heavily used for
+        # "Localizar" — pan/select on canvas) opens the icon/label-color
+        # edit popup for this element.
+        node: ExplorerNode = item.data(0, _NODE_ROLE)
+        if node is None or node.kind == "category":
+            return
+        self.icon_clicked.emit(node)
 
     # ─── Render ──────────────────────────────────────────────────────────
 
@@ -337,7 +342,10 @@ class ExplorerPanel(CollapsiblePanel):
         if node.kind == "category":
             label_text = f"{node.label} ({len(node.children)})"
 
-        text_color = Colors.ACCENT if is_selected else (Colors.TEXT_PRIMARY if is_parent else Colors.TEXT_SECONDARY)
+        if node.label_color:
+            text_color = node.label_color
+        else:
+            text_color = Colors.ACCENT if is_selected else (Colors.TEXT_PRIMARY if is_parent else Colors.TEXT_SECONDARY)
         font_weight = Typography.WEIGHT_BOLD if (is_selected or is_parent) else Typography.WEIGHT_NORMAL
 
         lbl = QLabel(label_text)
@@ -348,6 +356,8 @@ class ExplorerPanel(CollapsiblePanel):
         row.addWidget(lbl, 1)
 
         if not is_parent:
+            w.setCursor(Qt.CursorShape.PointingHandCursor)
+            w.setToolTip("Duplo clique para editar ícone e cor")
             payload = node.payload
 
             def enter_event(event, payload=payload):

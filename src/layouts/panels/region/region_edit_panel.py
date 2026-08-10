@@ -454,10 +454,6 @@ class RegionEditPanel(QFrame):
         self._terrain_names = {tid: name for tid, name in options}
         self._refresh_terrain_label()
 
-    def set_terrain_id(self, terrain_id: str):
-        self._terrain_id_val = terrain_id or ""
-        self._refresh_terrain_label()
-
     def set_terrain_label(self, terrain_id: str, name: str):
         """Atualiza o label diretamente com id e nome — chamado por
         TerrainMediator.on_selected sem depender de _terrain_names."""

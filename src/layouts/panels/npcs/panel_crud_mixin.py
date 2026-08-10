@@ -51,6 +51,7 @@ class NPCCrudMixin:
         self._selected_id = npc_id
         self._reload()
         self._on_card_selected(npc_id)
+        self.entity_saved.emit(npc_id)
         logger.info("NPC salvo: id=%s (%d campos, novo=%s)", npc_id, len(values), is_new)
 
     def _on_rename(self, npc_id: str, new_name: str):

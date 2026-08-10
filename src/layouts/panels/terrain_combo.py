@@ -50,9 +50,6 @@ class TerrainCombo(QWidget):
         self._terrain_id = terrain_id
         self._refresh()
 
-    def current_terrain_id(self) -> str:
-        return self._terrain_id
-
     def _refresh(self):
         name = self._names.get(self._terrain_id, "Mapa Infinito") if self._terrain_id else "Mapa Infinito"
         self._label.setText(f"Terreno: {name}")

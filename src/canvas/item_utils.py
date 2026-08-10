@@ -4,7 +4,21 @@ from __future__ import annotations
 
 from typing import Callable
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGraphicsItem, QStyle
+
+
+def make_non_interactive(item: QGraphicsItem):
+    """Purely decorative overlay item — never steals a click/hover meant for
+    whatever it's drawn on top of (the item it's attached to, or another
+    tool's placement underneath it), and can't be selected/dragged on its
+    own. Shared by AssetEffectsOverlay, BrushEffectsOverlay,
+    GlobalLightingOverlay and LightGhostItem, which used to each set these
+    same four calls individually."""
+    item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+    item.setAcceptHoverEvents(False)
+    item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+    item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
 
 
 def enable_hover_glow(item: QGraphicsItem, on_hover_changed: Callable[[bool], None]):

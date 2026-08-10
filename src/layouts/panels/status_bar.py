@@ -209,7 +209,7 @@ class StatusBar(QFrame):
         layout.addWidget(zoom_in)
 
         fit_btn = QToolButton()
-        fit_btn.setText("⊡")
+        fit_btn.setText("⛶")
         fit_btn.setToolTip("Encaixar na tela")
         fit_btn.setFixedSize(20, 20)
         fit_btn.setStyleSheet(btn_style)
@@ -290,9 +290,6 @@ class StatusBar(QFrame):
             font-weight: {Typography.WEIGHT_BOLD}; background: transparent; border: none;
         """)
         self.fps_label.setText(f"{avg:.0f} FPS")
-
-    def _update_fps(self):
-        pass
 
     def update_stats(self, **kwargs):
         """Delegate to dashboard."""

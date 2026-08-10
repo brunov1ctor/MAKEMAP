@@ -16,7 +16,9 @@ from PySide6.QtCore import QTimer
 
 from src.canvas.light_item import LightItem
 from src.canvas.lighting_overlay import GlobalLightingOverlay
+from src.canvas.z_order import ZOrder
 from src.engines.light import GLOBAL_TYPES, LightProperties, default_color, default_intensity
+from src.layouts.mediators.canvas_item_sync import CanvasItemSyncMixin, TerrainAwareMediator
 from src.layouts.panels.light.panel import LightPanel
 from src.layouts.panels.light.edit_panel import LightEditPanel
 from src.layouts.panels.light.sky_panel import SkyEditPanel
@@ -37,8 +39,11 @@ _REFRESH_SAFETY_NET_TICKS = 20
 _SKY_UI_STATE_KEY = "light_sky::default"  # matches LightMediator.MAP_ID
 
 
-class LightMediator:
+class LightMediator(CanvasItemSyncMixin, TerrainAwareMediator):
     MAP_ID = "default"
+    _SYNC_ITEM_TYPE = "light"
+    _SYNC_ITEM_CLASS = LightItem
+    _TERRAIN_PANEL_ATTR = "light_panel"
 
     def __init__(self, layout: MainLayout):
         self._l = layout
@@ -135,12 +140,6 @@ class LightMediator:
             return
         self._pending_type = key
         self._l.canvas.engine.tool_manager.activate("Luz")
-
-    def set_active_terrain(self, terrain_id: str):
-        """Chamado por TerrainMediator.on_selected para sincronizar o label e o boundary ativo."""
-        boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
-        self._active_boundary = boundary
-        self._l.light_panel.terrain_combo.set_terrain(terrain_id)
 
     def _provide_properties(self) -> LightProperties:
         return LightProperties(
@@ -303,6 +302,15 @@ class LightMediator:
         self._overlay.bump_occluder_generation()
         self._overlay.update()
 
+    def notify_occluders_changed(self):
+        """Public entry point for other mediators — e.g. SpawnMediator,
+        after retroactively patching an already-placed stamp's cached
+        "height" data(0) field once its mob/npc's Altura is edited & saved
+        (see SpawnMediator.refresh_stamp_height) — to force the same cache
+        invalidation _on_occluders_moved gives a drag/resize, without an
+        actual TransformEngine move having happened."""
+        self._on_occluders_moved()
+
     # ─── Persistence ───
 
     def set_uow(self, uow):
@@ -332,56 +340,29 @@ class LightMediator:
             return
         self._uow.ui_state.set(_SKY_UI_STATE_KEY, json.dumps(dataclasses.asdict(self._sky_props)))
 
-    def _load_from_db(self):
-        scene = self._l.canvas.engine.viewport.scene()
-        for item in self._items.values():
-            if item.scene() is not None:
-                item.scene().removeItem(item)
-        self._items.clear()
-        if not self._uow:
-            return
+    def _make_sync_item(self, row) -> LightItem:
+        try:
+            meta = json.loads(row["metadata"] or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+        props = LightProperties()
+        for key, value in meta.items():
+            if hasattr(props, key):
+                setattr(props, key, value)
+        item = LightItem(props)
+        item.setPos(row["position_x"], row["position_y"])
+        item.setZValue(ZOrder.PLACED_GIZMO)  # matches light_tool.py's placement z
+        return item
 
-        for row in self._uow.canvas_items.get_by_map(self.MAP_ID):
-            if row["item_type"] != "light":
-                continue
-            try:
-                meta = json.loads(row["metadata"] or "{}")
-            except (TypeError, ValueError):
-                meta = {}
-            props = LightProperties()
-            for key, value in meta.items():
-                if hasattr(props, key):
-                    setattr(props, key, value)
-            item = LightItem(props)
-            item.setPos(row["position_x"], row["position_y"])
-            item.setZValue(60)  # matches light_tool.py's placement z — see its comment
-            item.setData(1, row["id"])
-            scene.addItem(item)
-            self._items[row["id"]] = item
+    def _after_sync_load(self):
         self._overlay.mark_lights_dirty()
+
+    def _sync_fields(self, item: LightItem) -> dict:
+        return dict(
+            item_type="light", name=item.props.light_type,
+            position_x=item.pos().x(), position_y=item.pos().y(),
+            metadata=json.dumps(dataclasses.asdict(item.props)),
+        )
 
     def _schedule_sync(self):
         self._sync_timer.start(_SYNC_DEBOUNCE_MS)
-
-    def _sync_to_db(self):
-        if not self._uow:
-            return
-        seen_ids: set[str] = set()
-        for item in self._l.canvas.engine.viewport.scene().items():
-            if not isinstance(item, LightItem) or not item.isVisible():
-                continue
-            fields = dict(
-                item_type="light", name=item.props.light_type,
-                position_x=item.pos().x(), position_y=item.pos().y(),
-                metadata=json.dumps(dataclasses.asdict(item.props)),
-            )
-            row_id = item.data(1)
-            if not row_id or not self._uow.canvas_items.update(row_id, **fields):
-                row_id = self._uow.canvas_items.create(map_id=self.MAP_ID, **fields)
-                item.setData(1, row_id)
-            self._items[row_id] = item
-            seen_ids.add(row_id)
-
-        for stale_id in set(self._items) - seen_ids:
-            self._uow.canvas_items.delete(stale_id)
-            del self._items[stale_id]

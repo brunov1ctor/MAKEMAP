@@ -6,17 +6,21 @@ from pathlib import Path
 
 from src.database.connection import Database
 from src.database.migrations.schema import run_migrations
-from src.database.repositories.entities import (
-    WorldRepository, ContinentRepository, KingdomRepository,
-    RegionRepository, BiomeRepository, CityRepository,
+from src.database.repositories.world import RegionRepository, LoreRepository
+from src.database.repositories.creatures import (
     NPCRepository, NPCCategoryRepository, NPCAssetRepository,
-    MobRepository, MobCategoryRepository, MobAssetRepository, BossRepository,
-    ItemRepository, SkillRepository, SkillTreeRepository, ResourceRepository, QuestRepository,
-    QuestChainRepository, QuestNPCRepository, LoreRepository, DungeonRepository, BuildingRepository,
-    BuildingCategoryRepository, DungeonTypeRepository, EventRepository,
-    FactionRepository, TagRepository, MapRepository,
-    LayerRepository, CanvasItemRepository, AssetRepository,
-    AssetPackRepository, ZoneRepository, TerrainPaintRepository, TerrainRepository,
+    MobRepository, MobCategoryRepository, MobAssetRepository,
+)
+from src.database.repositories.items import (
+    ItemRepository, SkillRepository, SkillTreeRepository, ProgressionRepository,
+)
+from src.database.repositories.quests import QuestRepository, QuestChainRepository, QuestNPCRepository
+from src.database.repositories.dungeons import (
+    DungeonRepository, BuildingRepository, BuildingCategoryRepository, DungeonTypeRepository,
+)
+from src.database.repositories.map import (
+    CanvasItemRepository, ZoneRepository, TerrainPaintRepository, TerrainRepository,
+    ExplorerOverrideRepository,
 )
 from src.database.repositories.asset_settings import AssetSettingsRepository
 from src.database.repositories.ui_state import UIStateRepository
@@ -31,23 +35,17 @@ class UnitOfWork:
         run_migrations(self.db)
 
         # Repositories
-        self.worlds = WorldRepository(self.db)
-        self.continents = ContinentRepository(self.db)
-        self.kingdoms = KingdomRepository(self.db)
         self.regions = RegionRepository(self.db)
-        self.biomes = BiomeRepository(self.db)
-        self.cities = CityRepository(self.db)
         self.npcs = NPCRepository(self.db)
         self.npc_categories = NPCCategoryRepository(self.db)
         self.npc_assets = NPCAssetRepository(self.db)
         self.mobs = MobRepository(self.db)
         self.mob_categories = MobCategoryRepository(self.db)
         self.mob_assets = MobAssetRepository(self.db)
-        self.bosses = BossRepository(self.db)
         self.items = ItemRepository(self.db)
         self.skills = SkillRepository(self.db)
         self.skill_trees = SkillTreeRepository(self.db)
-        self.resources = ResourceRepository(self.db)
+        self.progression = ProgressionRepository(self.db)
         self.quests = QuestRepository(self.db)
         self.quest_chains = QuestChainRepository(self.db)
         self.quest_npcs = QuestNPCRepository(self.db)
@@ -56,18 +54,12 @@ class UnitOfWork:
         self.buildings = BuildingRepository(self.db)
         self.building_categories = BuildingCategoryRepository(self.db)
         self.dungeon_types = DungeonTypeRepository(self.db)
-        self.events = EventRepository(self.db)
-        self.factions = FactionRepository(self.db)
-        self.tags = TagRepository(self.db)
-        self.maps = MapRepository(self.db)
-        self.layers = LayerRepository(self.db)
         self.canvas_items = CanvasItemRepository(self.db)
-        self.assets = AssetRepository(self.db)
-        self.asset_packs = AssetPackRepository(self.db)
         self.asset_settings = AssetSettingsRepository(self.db)
         self.zones = ZoneRepository(self.db)
         self.painted_terrain = TerrainPaintRepository(self.db)
         self.terrains = TerrainRepository(self.db)
+        self.explorer_overrides = ExplorerOverrideRepository(self.db)
         self.ui_state = UIStateRepository(self.db)
 
     def close(self):

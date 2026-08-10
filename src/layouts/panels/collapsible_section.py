@@ -71,8 +71,8 @@ class CollapsibleSection(QFrame):
         self.content_layout = QVBoxLayout(self._content)
         self.content_layout.setContentsMargins(4, 2, 4, 4)
         self.content_layout.setSpacing(8)
-        self._content.setVisible(expanded)
         main.addWidget(self._content)
+        self._content.setVisible(expanded)
 
     def _toggle(self):
         self._expanded = not self._expanded

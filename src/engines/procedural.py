@@ -243,28 +243,6 @@ class ProceduralEngine:
         self._results[result.id] = result
         return result
 
-    def regenerate(self, result_id: str, new_seed: int = None) -> Optional[GenerationResult]:
-        result = self._results.get(result_id)
-        if not result:
-            return None
-        if new_seed is not None:
-            result.params.seed = new_seed
-        generator = self._generators[result.generator_type]
-        result.items = generator.generate(result.params)
-        return result
-
-    def remove_result(self, result_id: str) -> Optional[GenerationResult]:
-        return self._results.pop(result_id, None)
-
-    def get_result(self, result_id: str) -> Optional[GenerationResult]:
-        return self._results.get(result_id)
-
-    def get_all_results(self) -> list[GenerationResult]:
-        return list(self._results.values())
-
-    def register_generator(self, gen_type: GeneratorType, generator: BaseGenerator):
-        self._generators[gen_type] = generator
-
     @property
     def result_count(self) -> int:
         return len(self._results)

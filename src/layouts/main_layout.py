@@ -5,7 +5,6 @@ warnings.filterwarnings("ignore", message=".*Failed to disconnect.*", category=R
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panels.top_bar import TopBar
@@ -21,12 +20,11 @@ from src.layouts.panels.info_modal import InfoModal
 from src.layouts.panels.freehand_badge import FreehandBadge
 from src.layouts.panels.logs_panel import QtLogHandler
 from src.canvas.overlays import Compass, CompassHUD, MiniMap
-from src.canvas.map_boundary import MapBoundary
 from src.engines.integrator import EngineIntegrator
 from src.layouts.mediators import (
     BrushMediator, TerrainMediator, GridMediator, ToolbarMediator, RegionMediator, SpawnMediator,
     TextMediator, MarkerMediator, LightMediator, AssetEffectsMediator, MenuViewMediator,
-    ExplorerSyncMediator,
+    ExplorerSyncMediator, ProgressionMediator,
 )
 from src.layouts.panel_manager import PanelManager
 from src.layouts.panel_layout_engine import PanelLayoutEngine
@@ -193,6 +191,7 @@ class MainLayout(QWidget):
         # Progression + Status
         self.progression = ProgressionBar(self)
         self.progression.size_changed.connect(self._reposition)
+        self._progression_med = ProgressionMediator(self)
         self.status_bar = StatusBar(self)
 
         # Overlays

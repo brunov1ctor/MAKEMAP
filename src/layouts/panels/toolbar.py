@@ -28,6 +28,34 @@ def _paint_glass(widget, event, radius=10):
 
 _THICKNESS = 42  # fixed size along the toolbar's short axis, both orientations
 
+# (icon, name, shortcut, is_tool, is_toggle=False, label=name) — hoisted to
+# module level (rather than built inline in __init__) so TOOL_ICON_BY_NAME
+# below can derive a name->icon lookup other panels (e.g. the map Explorer)
+# reuse to keep their own default icons in sync with the toolbar's.
+TOOL_DEFS = [
+    ("⬚", "Selecionar", "V", True),
+    ("🌎", "Terreno", "", False, True),  # toggle action
+    ("🖌", "Brush", "B", True, False, "Pincel"),
+    ("🌳", "Região", "", False, True),  # toggle action — opens the CRUD panel
+    ("T", "Texto", "T", True),
+    ("👾", "Spawn", "", True),
+    ("📍", "Marcador", "K", True),
+    ("💡", "Iluminação", "", False, True),  # toggle action
+    None,
+    ("📐", "Grid", "G", False),
+    "__view__",
+    ("🖼", "Plano de Fundo", "", False, True),  # toggle action
+    None,
+    ("↶", "Undo", "Ctrl+Z", False),
+    ("↷", "Redo", "Ctrl+Y", False),
+    None,
+    ("📤", "Exportar", "", False),
+]
+
+TOOL_ICON_BY_NAME: dict[str, str] = {
+    item[1]: item[0] for item in TOOL_DEFS if isinstance(item, tuple)
+}
+
 
 class CanvasToolbar(QFrame):
     """Toolbar superior completa — ferramentas de edição profissional.
@@ -60,25 +88,7 @@ class CanvasToolbar(QFrame):
         # tool. See _on_tool_toggled for why that distinction matters.
         self._active_tool_name = "Pan"
 
-        self._tool_defs = [
-            ("⬚", "Selecionar", "V", True),
-            ("🌎", "Terreno", "", False, True),  # toggle action
-            ("🖌", "Brush", "B", True, False, "Pincel"),
-            ("🌳", "Região", "", False, True),  # toggle action — opens the CRUD panel
-            ("T", "Texto", "T", True),
-            ("👾", "Spawn", "", True),
-            ("📍", "Marcador", "K", True),
-            ("💡", "Iluminação", "", False, True),  # toggle action
-            None,
-            ("📐", "Grid", "G", False),
-            "__view__",
-            ("🖼", "Plano de Fundo", "", False, True),  # toggle action
-            None,
-            ("↶", "Undo", "Ctrl+Z", False),
-            ("↷", "Redo", "Ctrl+Y", False),
-            None,
-            ("📤", "Exportar", "", False),
-        ]
+        self._tool_defs = TOOL_DEFS
 
         self._tool_buttons = []  # (name, btn, is_tool, is_toggle)
         self._items: list[QFrame | QToolButton] = []  # buttons + separators, in order

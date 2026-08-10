@@ -6,6 +6,7 @@ import sqlite3
 import logging
 from pathlib import Path
 from contextlib import contextmanager
+from typing import Callable
 
 logger = logging.getLogger("MAKEMAP")
 
@@ -16,6 +17,14 @@ class Database:
     def __init__(self, db_path: Path):
         self.path = db_path
         self._conn: sqlite3.Connection | None = None
+        # Fired after every committed transaction() — every repository
+        # write (create/update/delete, everywhere in the app) goes through
+        # transaction() as its single choke point, so this is the one spot
+        # that can notify "something changed" without every call site
+        # needing to know or care who's listening. Set by whoever wants
+        # live notifications (see EngineIntegrator.set_uow) instead of
+        # polling the DB on a timer for changes that already happened.
+        self.on_write: Callable[[], None] | None = None
 
     def connect(self):
         self._conn = sqlite3.connect(str(self.path))
@@ -45,6 +54,9 @@ class Database:
         except Exception:
             conn.rollback()
             raise
+        else:
+            if self.on_write is not None:
+                self.on_write()
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         return self.conn.execute(sql, params)

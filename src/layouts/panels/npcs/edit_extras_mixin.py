@@ -1,5 +1,5 @@
 """ExtrasSectionMixin — "Informações Extras": Posição no Mundo (X/Y/Z),
-Configurações Adicionais (map-visibility checkboxes), Notas, Itens
+Configurações Adicionais, Notas, Itens
 Fornecidos (linked to the Item catalog, mirroring Mobs' Drops Principais —
 what this NPC can supply/sell instead of combat loot), and the Assets list
 (npc_assets — stamp images the Spawn tool will later pick from, see
@@ -68,20 +68,13 @@ class ExtrasSectionMixin:
 
         outer.addWidget(_section_label("CONFIGURAÇÕES ADICIONAIS"))
         outer.addWidget(_hr())
-        self._visible_on_map_check = _checkbox("Visível no mapa")
-        self._shows_on_minimap_check = _checkbox("Aparece no minimapa")
         self._shows_quest_icon_check = _checkbox("Mostra ícone de missão")
         self._uses_animations_check = _checkbox("Usa animações")
         checks_row1 = QHBoxLayout()
         checks_row1.setSpacing(14)
-        checks_row1.addWidget(self._visible_on_map_check)
-        checks_row1.addWidget(self._shows_on_minimap_check)
+        checks_row1.addWidget(self._shows_quest_icon_check)
+        checks_row1.addWidget(self._uses_animations_check)
         outer.addLayout(checks_row1)
-        checks_row2 = QHBoxLayout()
-        checks_row2.setSpacing(14)
-        checks_row2.addWidget(self._shows_quest_icon_check)
-        checks_row2.addWidget(self._uses_animations_check)
-        outer.addLayout(checks_row2)
 
         outer.addWidget(_section_label("NOTAS DO DESIGNER"))
         self._notes_edit = QTextEdit()

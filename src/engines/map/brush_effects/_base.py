@@ -7,9 +7,13 @@ import time
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QTransform
+from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPen
 
-from src.engines.fog_noise import density_to_qimage, fbm_density, path_to_blurred_mask
+from src.engines.fog_noise import (
+    center_path as _center_path, density_to_qimage, fbm_density,
+    paint_volume as _paint_volume, path_to_blurred_mask,
+    subcache as _subcache, volume_textures as _volume_textures,
+)
 
 _FOG_TEX_SIZE = 160
 _FOG_BREATHE_PERIOD = 40.0
@@ -21,10 +25,6 @@ _FOG_LAYERS = (
 _FOG_DRIFT_FRACTION = 0.06
 _FOG_BLUR_PX = 10
 _FOG_BUF_MARGIN = 24
-
-
-def _center_path(path: QPainterPath, bounds: QRectF) -> QPainterPath:
-    return QTransform().translate(-bounds.center().x(), -bounds.center().y()).map(path)
 
 
 def _fog_textures(cache: dict, layer, path: QPainterPath, bounds: QRectF, color: QColor) -> dict:
@@ -221,10 +221,6 @@ def _paint_particles(painter: QPainter, cache: dict, layer, path: QPainterPath,
     painter.restore()
 
 
-def _subcache(cache: dict, name: str) -> dict:
-    return cache.setdefault(name, {})
-
-
 def _paint_particles_layered(painter: QPainter, cache: dict, layer, path: QPainterPath,
                               bounds: QRectF, color: QColor, base_motion: dict, depths: list[dict]):
     """Draws several independent particle passes (e.g. far/mid/near depth
@@ -344,95 +340,6 @@ def _paint_wash(painter: QPainter, layer, path: QPainterPath, bounds: QRectF, co
     painter.save()
     painter.setClipPath(path)
     painter.fillRect(bounds, wash_color)
-    painter.restore()
-
-
-def _volume_textures(cache: dict, layer, path: QPainterPath, bounds: QRectF, color: QColor, *,
-                      cache_key: str, tex_size: int = 160, base_cells: int = 4,
-                      alpha_gamma: float = 1.8, alpha_scale: float = 0.8, blur_px: int = 10,
-                      buf_margin: int = 24, breathe_period: float = 40.0, seed_salt: int = 0) -> dict:
-    """Generalized version of _fog_textures — same FBM/cross-fade/mask
-    technique, but with tunable constants instead of fog's fixed ones, so a
-    second effect (e.g. smoke) can reuse the machinery with its own look
-    without touching _fog_textures/paint_nevoa."""
-    sub = _subcache(cache, cache_key)
-    key = (round(bounds.width() / 20) * 20, round(bounds.height() / 20) * 20, color.name())
-    entry = sub.get(id(layer))
-    if entry is not None and entry.get("key") == key:
-        return entry
-
-    seed = (id(layer) & 0xFFFFFFFF) ^ seed_salt
-    near_color = color.lighter(140)
-    far_color = color.darker(150)
-    density_a = fbm_density(tex_size, tex_size, seed, base_cells=base_cells)
-    density_b = fbm_density(tex_size, tex_size, seed ^ 0x5EED, base_cells=base_cells)
-    max_scale = 1.6
-    buf_size = int(max(bounds.width(), bounds.height()) * max_scale) + buf_margin * 2
-    entry = {
-        "key": key,
-        "img_a": density_to_qimage(density_a, near_color, far_color, alpha_gamma=alpha_gamma, alpha_scale=alpha_scale),
-        "img_b": density_to_qimage(density_b, near_color, far_color, alpha_gamma=alpha_gamma, alpha_scale=alpha_scale),
-        "phase_offset": (seed % 1000) / 1000.0 * breathe_period,
-        "buf_size": buf_size,
-        "mask": path_to_blurred_mask(_center_path(path, bounds), buf_size, blur_px),
-        "buf": None,
-    }
-    sub[id(layer)] = entry
-    return entry
-
-
-def _paint_volume(painter: QPainter, entry: dict, bounds: QRectF, t: float, *,
-                   layers: tuple, drift_fraction: float = 0.06, breathe_period: float = 40.0,
-                   swirl_speed: float = 0.0, growth_period: float = 0.0,
-                   growth_range: tuple[float, float] = (0.85, 1.15)):
-    """Paints an entry built by _volume_textures — parallax drift + breathing
-    cross-fade like paint_nevoa, plus optional swirl (per-layer rotation)
-    and growth/dissipation (slow scale+opacity envelope over the same two
-    cached textures, so smoke can pulse without regenerating FBM)."""
-    tt = t + entry["phase_offset"]
-    mix = (math.sin(2 * math.pi * tt / breathe_period) + 1) / 2
-
-    envelope = 1.0
-    if growth_period > 0:
-        cycle = (tt % growth_period) / growth_period
-        tri = 1.0 - abs(cycle * 2 - 1)
-        lo, hi = growth_range
-        envelope = lo + (hi - lo) * tri
-
-    buf_size = entry["buf_size"]
-    buf = entry["buf"]
-    if buf is None or buf.width() != buf_size:
-        buf = QImage(buf_size, buf_size, QImage.Format.Format_ARGB32_Premultiplied)
-        entry["buf"] = buf
-    buf.fill(0)
-
-    bp = QPainter(buf)
-    bp.setRenderHint(QPainter.RenderHint.Antialiasing)
-    bp.translate(buf_size / 2, buf_size / 2)
-    bp.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-    diag = max(bounds.width(), bounds.height())
-    for draw_scale, drift_speed, alpha_mult in layers:
-        size = diag * draw_scale * envelope
-        dx = math.sin(tt * drift_speed) * diag * drift_fraction
-        dy = math.cos(tt * drift_speed * 0.8) * diag * drift_fraction
-        bp.save()
-        bp.translate(dx, dy)
-        if swirl_speed:
-            bp.rotate(tt * swirl_speed * 57.29577951308232 * drift_speed)
-        target = QRectF(-size / 2, -size / 2, size, size)
-        bp.setOpacity(max(0.0, min(1.0, alpha_mult * (1 - mix) * envelope)))
-        bp.drawImage(target, entry["img_a"])
-        bp.setOpacity(max(0.0, min(1.0, alpha_mult * mix * envelope)))
-        bp.drawImage(target, entry["img_b"])
-        bp.restore()
-    bp.setOpacity(1.0)
-    bp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-    bp.drawImage(QRectF(-buf_size / 2, -buf_size / 2, buf_size, buf_size), entry["mask"])
-    bp.end()
-
-    painter.save()
-    painter.translate(bounds.center())
-    painter.drawImage(QRectF(-buf_size / 2, -buf_size / 2, buf_size, buf_size), buf)
     painter.restore()
 
 

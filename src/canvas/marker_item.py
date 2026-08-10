@@ -23,8 +23,9 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsDropShadowEffect, QStyle
 
+from src.canvas.contact_shadow import draw_contact_shadow
 from src.canvas.item_utils import enable_hover_glow
-from src.engines.marker import MarkerProperties
+from src.engines.marker import MarkerProperties, normalize_effect_layers
 from src.styles.tokens import Colors
 
 _HOVER_SCALE = 1.15
@@ -81,19 +82,40 @@ class MarkerItem(QGraphicsItem):
     def boundingRect(self) -> QRectF:
         r = _BASE_SIZE / 2 + _HOVER_PAD
         if self.props.effects:
-            r = max(r, self.props.effect_radius + _HOVER_PAD)
+            layers = self.props.effect_layers or {}
+            radii = [layers.get(k, {}).get("radius", self.props.effect_radius) for k in self.props.effects]
+            if radii:
+                r = max(r, max(radii) + _HOVER_PAD)
+        if self.props.shadow_enabled:
+            r = max(r, _BASE_SIZE * 0.9 + _HOVER_PAD)
         return QRectF(-r, -r, r * 2, r * 2)
 
     def paint(self, painter, option, widget=None):
         option.state &= ~QStyle.StateFlag.State_Selected
         painter.setRenderHint(painter.RenderHint.Antialiasing)
 
+        # Normalized once here (not just on load) so edits made live through
+        # MarkerEditPanel — which only ever touch the keys it changed — still
+        # paint correctly for any effect a menu toggle just activated without
+        # an existing layer entry yet.
+        layers = normalize_effect_layers(
+            self.props.effect_layers, self.props.effects, self.props.effect_radius, self.props.effect_intensity,
+        )
+        self.props.effect_layers = layers
+
+        if self.props.shadow_enabled:
+            _draw_contact_shadow(painter, self.props.shadow_strength)
+
         if self.props.effects:
             phase = time.monotonic()
             for key in self.props.effects:
                 drawer = EFFECT_DRAWERS.get(key)
-                if drawer:
-                    drawer(self, painter, self.props.effect_radius, phase, self.props.effect_intensity)
+                layer = layers.get(key)
+                if drawer and layer:
+                    painter.save()
+                    painter.setOpacity(layer["opacity"] / 100)
+                    drawer(self, painter, layer, phase)
+                    painter.restore()
 
         plate_r = _BASE_SIZE / 2
         font = QFont()
@@ -116,7 +138,23 @@ def _intensity_count(intensity: float, lo: int, hi: int) -> int:
     return max(lo, round(lo + (hi - lo) * t))
 
 
-def _draw_redemoinhos(item, painter, radius: float, phase: float, intensity: float):
+def _draw_contact_shadow(painter, strength: float):
+    """Soft dark ellipse under the icon, grounding the marker instead of
+    letting it float — independent of the 5 shader effects, so it's always
+    drawn first (beneath everything else) regardless of which are active."""
+    t = max(0.0, min(100.0, strength)) / 100.0
+    if t <= 0:
+        return
+    w = _BASE_SIZE * (0.7 + 0.4 * t)
+    h = w * 0.34
+    cy = _BASE_SIZE * 0.4 + h * 0.15
+    alpha = int(60 + 110 * t)
+    draw_contact_shadow(painter, 0, cy, w, alpha_center=alpha, alpha_mid=int(alpha * 0.35), squash=0.34)
+
+
+def _draw_redemoinhos(item, painter, layer: dict, phase: float):
+    radius, intensity = layer["radius"], layer["intensity"]
+    color = QColor(layer["color"])
     count = _intensity_count(intensity, 1, 4)
     arms = item._effect_params("redemoinhos", count, lambda rng: dict(
         offset=rng.uniform(0, 360), speed=rng.uniform(40, 85),
@@ -124,22 +162,28 @@ def _draw_redemoinhos(item, painter, radius: float, phase: float, intensity: flo
         direction=rng.choice((1, -1)),
     ))
     painter.save()
-    painter.setPen(QPen(QColor(120, 200, 255, 140), 2))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
     steps = 36
     for arm in arms:
-        path = QPainterPath()
+        prev = None
         for s in range(steps + 1):
             t = s / steps
             ang = math.radians(arm["offset"] + arm["direction"] * (phase * arm["speed"] + t * 360 * arm["turns"]))
             r = radius * 0.15 + radius * 0.85 * arm["spread"] * t
-            x, y = r * math.cos(ang), r * math.sin(ang)
-            path.moveTo(x, y) if s == 0 else path.lineTo(x, y)
-        painter.drawPath(path)
+            pt = QPointF(r * math.cos(ang), r * math.sin(ang))
+            if prev is not None:
+                # Fades in from the center outward, like a comet trail,
+                # instead of one constant-alpha stroke along the whole arm.
+                alpha = int(30 + 170 * t)
+                painter.setPen(QPen(QColor(color.red(), color.green(), color.blue(), alpha), 2))
+                painter.drawLine(prev, pt)
+            prev = pt
     painter.restore()
 
 
-def _draw_folhas(item, painter, radius: float, phase: float, intensity: float):
+def _draw_folhas(item, painter, layer: dict, phase: float):
+    radius, intensity = layer["radius"], layer["intensity"]
+    base = QColor(layer["color"])
+    base.setAlpha(190)
     count = _intensity_count(intensity, 2, 12)
     leaves = item._effect_params("folhas", count, lambda rng: dict(
         angle=rng.uniform(0, 360), radius_factor=rng.uniform(0.55, 1.1),
@@ -147,7 +191,6 @@ def _draw_folhas(item, painter, radius: float, phase: float, intensity: float):
         bob_amp=rng.uniform(3, 10), bob_speed=rng.uniform(0.6, 1.9),
         spin_speed=rng.uniform(-70, 70), phase_offset=rng.uniform(0, 6.28),
         size=rng.uniform(7, 14), squash=rng.uniform(0.4, 0.65),
-        green=rng.uniform(150, 215),
     ))
     painter.save()
     painter.setPen(Qt.PenStyle.NoPen)
@@ -160,14 +203,25 @@ def _draw_folhas(item, painter, radius: float, phase: float, intensity: float):
         painter.save()
         painter.translate(cx, cy)
         painter.rotate((phase * leaf["spin_speed"] + leaf["phase_offset"] * 57) % 360)
-        painter.setBrush(QColor(90, int(leaf["green"]), 60, 190))
         w = leaf["size"]
-        painter.drawEllipse(QRectF(-w / 2, -w * leaf["squash"] / 2, w, w * leaf["squash"]))
+        h = w * leaf["squash"]
+        # Own soft shadow, offset slightly down-right, before the lit leaf
+        # itself — gives each leaf a sense of catching light instead of
+        # reading as a flat cutout.
+        painter.setBrush(QColor(0, 0, 0, 70))
+        painter.drawEllipse(QRectF(-w / 2 + w * 0.12, -h / 2 + h * 0.25, w, h))
+        grad = QLinearGradient(-w / 2, -h / 2, w / 2, h / 2)
+        grad.setColorAt(0.0, base.lighter(135))
+        grad.setColorAt(1.0, base.darker(125))
+        painter.setBrush(QBrush(grad))
+        painter.drawEllipse(QRectF(-w / 2, -h / 2, w, h))
         painter.restore()
     painter.restore()
 
 
-def _draw_nuvens(item, painter, radius: float, phase: float, intensity: float):
+def _draw_nuvens(item, painter, layer: dict, phase: float):
+    radius, intensity = layer["radius"], layer["intensity"]
+    base = QColor(layer["color"])
     count = _intensity_count(intensity, 1, 8)
     clouds = item._effect_params("nuvens", count, lambda rng: dict(
         angle=rng.uniform(0, 360), dist_factor=rng.uniform(0.3, 0.85),
@@ -179,23 +233,28 @@ def _draw_nuvens(item, painter, radius: float, phase: float, intensity: float):
     painter.setPen(Qt.PenStyle.NoPen)
     for c in clouds:
         alpha = max(30, min(180, int(c["alpha_base"] + c["alpha_amp"] * math.sin(phase * 1.1 + c["alpha_phase"]))))
-        painter.setBrush(QColor(55, 55, 68, alpha))
         ang = math.radians(c["angle"] + phase * c["speed"])
         cx = radius * c["dist_factor"] * math.cos(ang)
         cy = radius * c["height_factor"] + radius * 0.12 * math.sin(ang)
         w, h = radius * c["w"], radius * c["h"] * c["squish"]
+        # A darker, offset duplicate underneath reads as the cloud's own
+        # shadow/underside instead of one uniform-lit blob.
+        painter.setBrush(QColor(0, 0, 0, int(alpha * 0.5)))
+        painter.drawEllipse(QRectF(cx - w / 2 + w * 0.08, cy - h / 2 + h * 0.18, w, h))
+        painter.setBrush(QColor(base.red(), base.green(), base.blue(), alpha))
         painter.drawEllipse(QRectF(cx - w / 2, cy - h / 2, w, h))
     painter.restore()
 
     if intensity >= 55:
-        _draw_neblina(item, painter, radius, phase, intensity)
+        _draw_neblina(item, painter, layer, phase)
     if intensity >= 80:
-        _draw_relampago(item, painter, radius, phase, intensity)
+        _draw_relampago(item, painter, layer, phase)
 
 
-def _draw_neblina(item, painter, radius: float, phase: float, intensity: float):
+def _draw_neblina(item, painter, layer: dict, phase: float):
     """Low drifting fog band — kicks in once Intensidade crosses 55 on the
     "nuvens" effect, growing more opaque up to 100."""
+    radius, intensity = layer["radius"], layer["intensity"]
     strands = item._effect_params("neblina", 2, lambda rng: dict(
         speed=rng.uniform(0.3, 0.7), phase_offset=rng.uniform(0, 6.28), y_offset=rng.uniform(0.18, 0.32),
     ))
@@ -216,9 +275,10 @@ def _draw_neblina(item, painter, radius: float, phase: float, intensity: float):
     painter.restore()
 
 
-def _draw_relampago(item, painter, radius: float, phase: float, intensity: float):
+def _draw_relampago(item, painter, layer: dict, phase: float):
     """Occasional lightning flash — kicks in once Intensidade crosses 80 on
     the "nuvens" effect, flashing more often as it approaches 100."""
+    radius, intensity = layer["radius"], layer["intensity"]
     seed = item._effect_params("relampago", 1, lambda rng: dict(
         offset=rng.uniform(0, 10), x=rng.uniform(-0.3, 0.3),
     ))[0]
@@ -243,7 +303,10 @@ def _draw_relampago(item, painter, radius: float, phase: float, intensity: float
     painter.restore()
 
 
-def _draw_espinhos(item, painter, radius: float, phase: float, intensity: float):
+def _draw_espinhos(item, painter, layer: dict, phase: float):
+    radius, intensity = layer["radius"], layer["intensity"]
+    base = QColor(layer["color"])
+    base.setAlpha(200)
     count = _intensity_count(intensity, 4, 16)
     spikes = item._effect_params("espinhos", count, lambda rng: dict(
         angle=rng.uniform(0, 360), base_r=rng.uniform(0.85, 0.98), tip_r=rng.uniform(1.04, 1.28),
@@ -252,7 +315,6 @@ def _draw_espinhos(item, painter, radius: float, phase: float, intensity: float)
     ))
     painter.save()
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor(150, 120, 90, 200))
     for s in spikes:
         breathe = 1.0 + s["breathe_amp"] * math.sin(phase * s["breathe_speed"] + s["breathe_phase"])
         ang = math.radians(s["angle"])
@@ -264,19 +326,34 @@ def _draw_espinhos(item, painter, radius: float, phase: float, intensity: float)
         p1 = QPointF(bx + w * math.cos(perp), by + w * math.sin(perp))
         p2 = QPointF(bx - w * math.cos(perp), by - w * math.sin(perp))
         p3 = QPointF(tx, ty)
+        # Base-to-tip gradient (dark root, lit tip) instead of one flat
+        # fill — gives each spike a sense of volume/directional light.
+        grad = QLinearGradient(QPointF(bx, by), QPointF(tx, ty))
+        grad.setColorAt(0.0, base.darker(145))
+        grad.setColorAt(1.0, base.lighter(140))
+        painter.setBrush(QBrush(grad))
         painter.drawPolygon(QPolygonF([p1, p2, p3]))
     painter.restore()
 
 
-def _draw_brilho(item, painter, radius: float, phase: float, intensity: float):
+def _draw_brilho(item, painter, layer: dict, phase: float):
+    radius, intensity = layer["radius"], layer["intensity"]
+    base = QColor(layer["color"])
     t = max(0.0, min(100.0, intensity)) / 100.0
     peak = int(80 + 130 * t)
     pulse = 0.5 + 0.5 * math.sin(phase * 2.0)
     painter.save()
-    grad = QRadialGradient(0, 0, radius)
-    grad.setColorAt(0.0, QColor(255, 235, 150, int(peak * pulse) + 20))
-    grad.setColorAt(1.0, QColor(255, 235, 150, 0))
     painter.setPen(Qt.PenStyle.NoPen)
+    # Wide, dim outer halo behind the tighter core glow — two overlapping
+    # gradients read as a softer, deeper glow than one alone.
+    outer = QRadialGradient(0, 0, radius * 1.3)
+    outer.setColorAt(0.0, QColor(base.red(), base.green(), base.blue(), int(peak * pulse * 0.35)))
+    outer.setColorAt(1.0, QColor(base.red(), base.green(), base.blue(), 0))
+    painter.setBrush(QBrush(outer))
+    painter.drawEllipse(QRectF(-radius * 1.3, -radius * 1.3, radius * 2.6, radius * 2.6))
+    grad = QRadialGradient(0, 0, radius)
+    grad.setColorAt(0.0, QColor(base.red(), base.green(), base.blue(), int(peak * pulse) + 20))
+    grad.setColorAt(1.0, QColor(base.red(), base.green(), base.blue(), 0))
     painter.setBrush(QBrush(grad))
     painter.drawEllipse(QRectF(-radius, -radius, radius * 2, radius * 2))
     painter.restore()

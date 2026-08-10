@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QGraphicsDropShadowEffect, QGraphicsPixmapItem, QG
 from src.canvas.tools.base import BaseTool
 from src.canvas.tools.interaction import ItemInteraction
 from src.canvas.item_utils import suppress_selection_decoration, enable_hover_glow
+from src.canvas.z_order import ZOrder
 from src.engines.core.history import PlaceObjectCommand
 from src.layouts.panels.spawn.portrait_compose import compose_group_portrait
 from src.styles.tokens import Colors
@@ -165,7 +166,7 @@ class SpawnTool(BaseTool):
         item = QGraphicsPixmapItem(pixmap)
         item.setOffset(-pixmap.width() / 2, -pixmap.height() / 2)
         item.setPos(scene_pos)
-        item.setZValue(0.5)
+        item.setZValue(ZOrder.STAMPED_OBJECT)
         # compose_group_portrait draws the front token at only ~60% of the
         # canvas (room for the dimmed fan behind it — see _LAYOUTS), so a
         # big transparent margin surrounds the visible circle. The default

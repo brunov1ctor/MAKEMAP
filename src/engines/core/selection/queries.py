@@ -38,7 +38,10 @@ def items_in_rect(scene: QGraphicsScene, rect: QRectF, is_selectable: IsSelectab
 
 def items_in_polygon(scene: QGraphicsScene, polygon: QPolygonF, is_selectable: IsSelectable) -> list[QGraphicsItem]:
     """Items within a freeform polygon."""
-    return [item for item in scene.items(polygon) if is_selectable(item)]
+    return [
+        item for item in scene.items(polygon)
+        if is_selectable(item) and item.parentItem() is None and item.isVisible()
+    ]
 
 
 def items_all_selectable(scene: QGraphicsScene, is_selectable: IsSelectable) -> list[QGraphicsItem]:

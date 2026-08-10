@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog,
+    QToolButton, QTextEdit, QWidget,
 )
 
 from src.styles.tokens import Colors
@@ -193,3 +194,78 @@ class DropZone(QFrame):
             if path:
                 self.file_chosen.emit(path)
         super().mousePressEvent(event)
+
+
+def build_tools_header(on_close, title_font_size: int = 13, close_font_size: int = 14) -> tuple[QHBoxLayout, QLabel, QToolButton]:
+    """Title label + ✕ close button row shared by every entity panel's
+    tools shell (_build_tools_panel) — identical everywhere except two
+    font sizes, which vary between the "toggle" panels (Itens/Dungeons/
+    Quests, 13/14) and the "single entity" panels (Mobs/NPCs, 12/12).
+    Returns (head_row, title_label, close_button) — the caller adds
+    head_row to its own `outer` layout and keeps the title_label reference
+    (as self._tools_title_lbl) to update its text later."""
+    head_row = QHBoxLayout()
+    title_lbl = QLabel("")
+    title_lbl.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: {title_font_size}px; font-weight: bold; background: transparent; border: none;")
+    head_row.addWidget(title_lbl, 1)
+    close_btn = QToolButton()
+    close_btn.setText("✕")
+    close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    close_btn.setToolTip("Fechar")
+    close_btn.setStyleSheet(f"""
+        QToolButton {{ border: none; background: transparent; color: {Colors.TEXT_MUTED}; font-size: {close_font_size}px; padding: 2px 6px; }}
+        QToolButton:hover {{ color: {Colors.TEXT_PRIMARY}; }}
+        QToolTip {{
+            background-color: {Colors.BG_ELEVATED};
+            color: {Colors.TEXT_PRIMARY};
+            border: 1px solid {Colors.BORDER};
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-size: 11px;
+        }}
+    """)
+    close_btn.clicked.connect(on_close)
+    head_row.addWidget(close_btn)
+    return head_row, title_lbl, close_btn
+
+
+def build_export_view_page(on_save) -> tuple[QWidget, QLabel, QTextEdit]:
+    """Page 1 of the tools stack (see _build_tools_panel) — the read-only
+    Exportar view: a hint label, a read-only monospace text box showing
+    the export content, and a "Salvar Arquivo" button. Byte-identical
+    across every entity panel. Returns (page, hint_label, text_edit) — the
+    caller adds `page` to its own QStackedWidget and keeps the two live
+    widgets (as self._template_hint_lbl/self._template_edit) to fill in
+    on export."""
+    page = QWidget()
+    lay = QVBoxLayout(page)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(6)
+
+    hint_lbl = QLabel("")
+    hint_lbl.setWordWrap(True)
+    hint_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
+    lay.addWidget(hint_lbl)
+
+    text_edit = QTextEdit()
+    text_edit.setReadOnly(True)
+    text_edit.setStyleSheet(f"""
+        QTextEdit {{ color: {Colors.TEXT_PRIMARY}; font-size: 10px; font-family: Consolas, monospace;
+            background: rgba(0,0,0,0.2); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px; padding: 6px; }}
+    """)
+    lay.addWidget(text_edit, 1)
+
+    btn_row = QHBoxLayout()
+    btn_row.addStretch()
+    save_btn = QPushButton("💾 Salvar Arquivo")
+    save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    save_btn.setStyleSheet(f"""
+        QPushButton {{ background: {Colors.ACCENT}; color: #08131F; border: none;
+            border-radius: 6px; padding: 6px 14px; font-size: 10px; font-weight: bold; }}
+        QPushButton:hover {{ background: {Colors.ACCENT_HOVER}; }}
+    """)
+    save_btn.clicked.connect(on_save)
+    btn_row.addWidget(save_btn)
+    lay.addLayout(btn_row)
+
+    return page, hint_lbl, text_edit

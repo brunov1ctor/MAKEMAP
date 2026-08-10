@@ -30,6 +30,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene
 
 from src.canvas.item_utils import suppress_selection_decoration
+from src.canvas.z_order import ZOrder
 
 if TYPE_CHECKING:
     pass
@@ -634,7 +635,7 @@ class RiverPathItem(_BasePathItem):
         self._scroll_osc_period = random.uniform(10.0, 20.0)
         self._scroll_osc_phase = random.uniform(0.0, math.tau)
         self._scroll_osc_amp = random.uniform(0.15, 0.35)
-        self.setZValue(7)
+        self.setZValue(ZOrder.RIVER_PATH)
         self._spawn_particles()
 
     def _spawn_particles(self):
@@ -762,7 +763,7 @@ class RoadPathItem(_BasePathItem):
 
     def __init__(self, width: float = 20.0, texture: QPixmap | None = None, parent=None):
         super().__init__(width, texture, parent)
-        self.setZValue(8)
+        self.setZValue(ZOrder.ROAD_PATH)
         self._spawn_particles()
 
     def _spawn_particles(self):

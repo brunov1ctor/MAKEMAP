@@ -16,7 +16,9 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QTimer
 
 from src.canvas.marker_item import MarkerItem
-from src.engines.marker import MarkerProperties, category_for_icon
+from src.canvas.z_order import ZOrder
+from src.engines.marker import MarkerProperties, category_for_icon, default_layer, normalize_effect_layers
+from src.layouts.mediators.canvas_item_sync import CanvasItemSyncMixin, TerrainAwareMediator
 from src.layouts.panels.marker.panel import MarkerToolPanel
 from src.layouts.panels.marker.edit_panel import MarkerEditPanel
 
@@ -29,14 +31,23 @@ _SYNC_DEBOUNCE_MS = 250
 _EFFECT_TICK_MS = 100
 
 
-class MarkerMediator:
+class MarkerMediator(CanvasItemSyncMixin, TerrainAwareMediator):
     MAP_ID = "default"  # matches Brush/Region/Spawn/Text mediators
+    _SYNC_ITEM_TYPE = "marker"
+    _SYNC_ITEM_CLASS = MarkerItem
+    _TERRAIN_PANEL_ATTR = "marker_panel"
 
     def __init__(self, layout: MainLayout):
         self._l = layout
         self._uow = None
         self._pending_icon = "📍"
         self._items: dict[str, MarkerItem] = {}  # canvas_items row id -> MarkerItem
+        # Only ever set later by set_active_terrain (called from
+        # TerrainMediator.on_selected once a terreno is selected) — must
+        # exist from the start too, since the marker tool's parent_provider
+        # lambda below reads it on every single marker placement, including
+        # the very first one before any terreno has ever been selected.
+        self._active_boundary = None
 
         # Marcador — MarkerToolPanel (icon picker, shown while the tool is
         # armed) and MarkerEditPanel (rich per-marker editor, shown on
@@ -60,8 +71,9 @@ class MarkerMediator:
         edit.icon_changed.connect(self._on_icon_changed)
         edit.description_changed.connect(self._on_description_changed)
         edit.effects_changed.connect(self._on_effects_changed)
-        edit.radius_changed.connect(self._on_radius_changed)
-        edit.effect_intensity_changed.connect(self._on_effect_intensity_changed)
+        edit.effect_layer_changed.connect(self._on_effect_layer_changed)
+        edit.shadow_enabled_changed.connect(self._on_shadow_enabled_changed)
+        edit.shadow_strength_changed.connect(self._on_shadow_strength_changed)
 
         self._l.canvas.engine._marker_tool.set_properties_provider(self._provide_properties)
         self._l.canvas.engine._marker_tool.set_parent_provider(lambda: self._active_boundary.group if self._active_boundary and self._active_boundary._item else None)
@@ -80,12 +92,6 @@ class MarkerMediator:
 
     def _on_icon_picked(self, icon: str):
         self._pending_icon = icon
-
-    def set_active_terrain(self, terrain_id: str):
-        """Chamado por TerrainMediator.on_selected para sincronizar o label e o boundary ativo."""
-        boundary = self._l._terrain_med.boundaries.get(terrain_id) if terrain_id else None
-        self._active_boundary = boundary
-        self._l.marker_panel.terrain_combo.set_terrain(terrain_id)
 
     def _provide_properties(self) -> MarkerProperties:
         """Read by MarkerTool at the moment a new marker is placed."""
@@ -144,22 +150,33 @@ class MarkerMediator:
         item = self._selected_marker()
         if item:
             item.props.effects = list(effects)
+            for key in effects:
+                item.props.effect_layers.setdefault(key, default_layer(key))
             item.prepareGeometryChange()
             item.update()
             self._schedule_sync()
 
-    def _on_radius_changed(self, radius: float):
+    def _on_effect_layer_changed(self, key: str, field: str, value):
         item = self._selected_marker()
         if item:
-            item.props.effect_radius = radius
+            item.props.effect_layers.setdefault(key, default_layer(key))[field] = value
+            if field == "radius":
+                item.prepareGeometryChange()
+            item.update()
+            self._schedule_sync()
+
+    def _on_shadow_enabled_changed(self, enabled: bool):
+        item = self._selected_marker()
+        if item:
+            item.props.shadow_enabled = enabled
             item.prepareGeometryChange()
             item.update()
             self._schedule_sync()
 
-    def _on_effect_intensity_changed(self, intensity: float):
+    def _on_shadow_strength_changed(self, strength: float):
         item = self._selected_marker()
         if item:
-            item.props.effect_intensity = intensity
+            item.props.shadow_strength = strength
             item.update()
             self._schedule_sync()
 
@@ -176,57 +193,35 @@ class MarkerMediator:
         self._uow = uow
         self._load_from_db()
 
-    def _load_from_db(self):
-        scene = self._l.canvas.engine.viewport.scene()
-        for item in self._items.values():
-            if item.scene() is not None:
-                item.scene().removeItem(item)
-        self._items.clear()
-        if not self._uow:
-            return
+    def _make_sync_item(self, row) -> MarkerItem:
+        try:
+            meta = json.loads(row["metadata"] or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+        props = MarkerProperties()
+        for key, value in meta.items():
+            if hasattr(props, key):
+                setattr(props, key, value)
+        # Coerces whatever was in metadata.effect_layers (missing, from
+        # an older save that only had the flat global effect_radius/
+        # effect_intensity, or just malformed) into a complete, valid
+        # per-effect layers dict — see normalize_effect_layers.
+        props.effect_layers = normalize_effect_layers(
+            props.effect_layers, props.effects, props.effect_radius, props.effect_intensity,
+        )
+        item = MarkerItem(props)
+        item.setPos(row["position_x"], row["position_y"])
+        item.setRotation(row["rotation"] or 0.0)
+        item.setZValue(ZOrder.PLACED_GIZMO)
+        return item
 
-        for row in self._uow.canvas_items.get_by_map(self.MAP_ID):
-            if row["item_type"] != "marker":
-                continue
-            try:
-                meta = json.loads(row["metadata"] or "{}")
-            except (TypeError, ValueError):
-                meta = {}
-            props = MarkerProperties()
-            for key, value in meta.items():
-                if hasattr(props, key):
-                    setattr(props, key, value)
-            item = MarkerItem(props)
-            item.setPos(row["position_x"], row["position_y"])
-            item.setRotation(row["rotation"] or 0.0)
-            item.setZValue(60)
-            item.setData(1, row["id"])
-            scene.addItem(item)
-            self._items[row["id"]] = item
+    def _sync_fields(self, item: MarkerItem) -> dict:
+        return dict(
+            item_type="marker", name=item.props.name,
+            position_x=item.pos().x(), position_y=item.pos().y(),
+            rotation=item.rotation(),
+            metadata=json.dumps(dataclasses.asdict(item.props)),
+        )
 
     def _schedule_sync(self):
         self._sync_timer.start(_SYNC_DEBOUNCE_MS)
-
-    def _sync_to_db(self):
-        if not self._uow:
-            return
-        seen_ids: set[str] = set()
-        for item in self._l.canvas.engine.viewport.scene().items():
-            if not isinstance(item, MarkerItem) or not item.isVisible():
-                continue
-            fields = dict(
-                item_type="marker", name=item.props.name,
-                position_x=item.pos().x(), position_y=item.pos().y(),
-                rotation=item.rotation(),
-                metadata=json.dumps(dataclasses.asdict(item.props)),
-            )
-            row_id = item.data(1)
-            if not row_id or not self._uow.canvas_items.update(row_id, **fields):
-                row_id = self._uow.canvas_items.create(map_id=self.MAP_ID, **fields)
-                item.setData(1, row_id)
-            self._items[row_id] = item
-            seen_ids.add(row_id)
-
-        for stale_id in set(self._items) - seen_ids:
-            self._uow.canvas_items.delete(stale_id)
-            del self._items[stale_id]

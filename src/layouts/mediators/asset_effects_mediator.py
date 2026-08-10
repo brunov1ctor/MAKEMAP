@@ -124,7 +124,9 @@ class AssetEffectsMediator:
     def _tick(self):
         if not self._uow:
             return
-        animated_present = False
+        # No extra work needed when nothing has effects — the timer just
+        # keeps running at a fixed cheap interval either way (same
+        # trade-off Marker/Light's own refresh timers already make).
         for item in self._l.canvas.engine.viewport.scene().items():
             data = item.data(0)
             if not isinstance(data, dict) or data.get("item_type") != "asset":
@@ -135,14 +137,8 @@ class AssetEffectsMediator:
                 layers = self._load_layers(asset_id) if asset_id else empty_layers()
                 if has_any_effect(layers):
                     AssetEffectsOverlay(item, layers)
-                    animated_present = True
             else:
                 overlay.update()
-                animated_present = True
-        # No extra work needed when nothing has effects — the timer just
-        # keeps running at a fixed cheap interval either way (same
-        # trade-off Marker/Light's own refresh timers already make).
-        _ = animated_present
 
     def _refresh_instances(self, asset_id: str, layers: dict):
         """After saving new layers for `asset_id`, rebuild every already-

@@ -592,16 +592,6 @@ class AssetRowCard(QFrame):
         self.removed.emit(str(self._path))
         self.deleteLater()
 
-    def get_settings(self) -> dict:
-        return {
-            "path": str(self._path),
-            "brightness": self._brightness.value(),
-            "contrast": self._contrast.value(),
-            "brush_sound": self._brush_sound.get_config(),
-            "ambient_sound": self._ambient_sound.get_config(),
-        }
-
-
 class CategorySection(QWidget):
     """Seção colapsável para uma categoria — header + cards dos assets."""
 
@@ -909,9 +899,6 @@ class CategorySection(QWidget):
         # ajusta índice após remoção
         insert_at = new_idx if new_idx <= cur_idx else new_idx
         self._content_lay.insertWidget(insert_at, self._spacer)
-
-    def _animate_spacer(self, start_h: int, end_h: int):
-        pass  # não usado com linha fina
 
     def _remove_spacer(self):
         if self._spacer is None:

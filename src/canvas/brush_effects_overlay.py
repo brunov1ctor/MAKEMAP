@@ -14,10 +14,12 @@ stays correct across stroke add/remove/erase without extra wiring.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import QRectF
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QGraphicsItem
 
+from src.canvas.z_order import ZOrder
+from src.canvas.item_utils import make_non_interactive
 from src.engines.map.brush_effects import ANIMATED_EFFECTS, effect_color
 from src.engines.map.terrain_layer import TerrainLayer
 
@@ -30,11 +32,8 @@ _MARGIN = 16.0
 class BrushEffectsOverlay(QGraphicsItem):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setZValue(6)  # above terrain/objects (1/5), below stamped objects (10+)
-        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-        self.setAcceptHoverEvents(False)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.setZValue(ZOrder.ANIMATED_EFFECTS)
+        make_non_interactive(self)
         # Per-layer FBM/mask cache, id(layer) -> dict — see
         # brush_effects._fog_textures. Regenerating the noise textures
         # every repaint tick would be wasteful; this only regenerates when

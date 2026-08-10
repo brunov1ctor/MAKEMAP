@@ -786,15 +786,6 @@ class ItemsSkillsPanel(ItemsImportExportMixin, QWidget):
         self._skill_tree.reload()
         return last_key
 
-    @staticmethod
-    def _parse_json_list(text: str) -> list[dict]:
-        """Permissive parse (tolerates a bare object, // comments, trailing
-        commas) → list of dicts. Raises ValueError with a friendly message.
-        Shared with Dungeons e Construções — see
-        dungeons.constants.parse_json_records."""
-        from src.layouts.panels.dungeons.constants import parse_json_records
-        return parse_json_records(text)
-
     # ── helpers ──
 
     @staticmethod

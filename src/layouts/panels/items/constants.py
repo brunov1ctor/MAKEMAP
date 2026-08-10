@@ -4,20 +4,19 @@ The visual language (input style, spin/combo factories, rarity chips) is
 shared with the Mobs edit panel — imported from there rather than
 re-declared, so the two screens can't drift apart. Only the item/skill
 specific option lists live here.
+
+_INPUT_STYLE/_combo/_spin/_dspin/_no_wheel/_field_row/_section_label are
+re-exported (not used directly in this file) — src/layouts/panels/dungeons/
+constants.py imports them from here rather than from mobs.edit_helpers
+directly, so Itens/Dungeons/Mobs all share one field-style source.
 """
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import (
-    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,
-    QDoubleSpinBox, QComboBox, QAbstractSpinBox, QToolButton, QWidget,
-)
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel
 
 from src.styles.tokens import Colors
-from src.layouts.panels.mobs.categories import (
-    ITEM_RARITY_DEFS, item_rarity_label, item_rarity_color,
-)
+from src.layouts.panels.mobs.categories import ITEM_RARITY_DEFS
 
 # Reuse the Mobs edit panel's field style + factories verbatim so both
 # screens share one look. _INPUT_STYLE already covers QLineEdit/QTextEdit/
@@ -107,18 +106,6 @@ def category_display(category: str, subcategory: str) -> str:
     if category and subcategory:
         return f"{category} • {subcategory}"
     return category or subcategory or "—"
-
-
-def rarity_pill(rarity_key: str) -> QLabel:
-    """Colored raridade chip — used in both list columns."""
-    chip = QLabel(item_rarity_label(rarity_key))
-    color = item_rarity_color(rarity_key)
-    chip.setStyleSheet(
-        f"font-size: 9px; font-weight: bold; border-radius: 5px; padding: 1px 6px; "
-        f"background: {color}2E; color: {color}; border: none;"
-    )
-    chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    return chip
 
 
 def rarity_options() -> list[tuple[str, str]]:
