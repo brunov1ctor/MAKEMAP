@@ -149,7 +149,7 @@ class AssetRowCard(QFrame):
     removed = Signal(str)
     settings_changed = Signal(str, int, int)
 
-    def __init__(self, file_path: Path, category: str, parent=None):
+    def __init__(self, file_path: Path, category: str, parent=None, show_sounds: bool = True):
         super().__init__(parent)
         self._path = file_path
         self._category = category
@@ -294,25 +294,26 @@ class AssetRowCard(QFrame):
         col1.addLayout(info, 1)
         row.addLayout(col1, 1)
 
-        # ═══ 1/3: Brush Sound ═══
-        col2 = QHBoxLayout()
-        col2.setContentsMargins(0, 0, 0, 0)
-        col2.setSpacing(0)
-        col2.addStretch()
-        self._brush_sound = SoundColumn(asset_id, prefix="paint")
-        col2.addWidget(self._brush_sound)
-        col2.addStretch()
-        row.addLayout(col2, 1)
+        if show_sounds:
+            # ═══ 1/3: Brush Sound ═══
+            col2 = QHBoxLayout()
+            col2.setContentsMargins(0, 0, 0, 0)
+            col2.setSpacing(0)
+            col2.addStretch()
+            self._brush_sound = SoundColumn(asset_id, prefix="paint")
+            col2.addWidget(self._brush_sound)
+            col2.addStretch()
+            row.addLayout(col2, 1)
 
-        # ═══ 1/3: Ambient Sound ═══
-        col3 = QHBoxLayout()
-        col3.setContentsMargins(0, 0, 0, 0)
-        col3.setSpacing(0)
-        col3.addStretch()
-        self._ambient_sound = SoundColumn(asset_id, prefix="ambient")
-        col3.addWidget(self._ambient_sound)
-        col3.addStretch()
-        row.addLayout(col3, 1)
+            # ═══ 1/3: Ambient Sound ═══
+            col3 = QHBoxLayout()
+            col3.setContentsMargins(0, 0, 0, 0)
+            col3.setSpacing(0)
+            col3.addStretch()
+            self._ambient_sound = SoundColumn(asset_id, prefix="ambient")
+            col3.addWidget(self._ambient_sound)
+            col3.addStretch()
+            row.addLayout(col3, 1)
 
         # ═══ Delete ═══
         del_btn = QToolButton()
@@ -597,13 +598,14 @@ class CategorySection(QWidget):
 
     delete_requested = Signal(object)  # emite self
 
-    def __init__(self, folder: Path, icon: str, label: str, parent=None):
+    def __init__(self, folder: Path, icon: str, label: str, parent=None, show_sounds: bool = True):
         super().__init__(parent)
         self._folder = folder
         self._icon = icon
         self._label = label
         self._expanded = False
         self._renaming = False
+        self._show_sounds = show_sounds
         self.setStyleSheet("background: transparent;")
         self.setContentsMargins(0, 0, 0, 0)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
@@ -822,7 +824,7 @@ class CategorySection(QWidget):
             self._toggle()
 
         target_idx = self._calc_target(local_y, str(dest_path))
-        new_card = AssetRowCard(dest_path, self._label)
+        new_card = AssetRowCard(dest_path, self._label, show_sounds=self._show_sounds)
         new_card.removed.connect(lambda _: self._refresh())
         new_card.settings_changed.connect(self._on_adjustment)
         drop_idx = self._content_lay.count() - 1
@@ -959,7 +961,7 @@ class CategorySection(QWidget):
 
         self._count_lbl.setText(f"({len(ordered_files)})")
         for f in ordered_files:
-            card = AssetRowCard(f, self._label)
+            card = AssetRowCard(f, self._label, show_sounds=self._show_sounds)
             card.removed.connect(lambda _: self._refresh())
             card.settings_changed.connect(self._on_adjustment)
             self._content_lay.addWidget(card)
@@ -1000,7 +1002,7 @@ class CategorySection(QWidget):
     def _on_dropped(self, paths: list):
         idx = self._content_lay.count() - 1
         for p in paths:
-            card = AssetRowCard(p, self._label)
+            card = AssetRowCard(p, self._label, show_sounds=self._show_sounds)
             card.removed.connect(lambda _: self._refresh())
             self._content_lay.insertWidget(idx, card)
             idx += 1
@@ -1017,8 +1019,8 @@ class CategorySection(QWidget):
         self._expanded = not self._expanded
         self._arrow.setText("▼" if self._expanded else "▶")
         self._content.setVisible(self._expanded)
-        self._brush_hdr.setVisible(self._expanded)
-        self._ambient_hdr.setVisible(self._expanded)
+        self._brush_hdr.setVisible(self._expanded and self._show_sounds)
+        self._ambient_hdr.setVisible(self._expanded and self._show_sounds)
         self._del_cat_btn.setVisible(self._expanded)
 
     def _on_delete_category(self):

@@ -39,12 +39,13 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QTextEdit, QToolButton, QColorDialog,
+    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QTextEdit, QToolButton,
 )
 
 from src.styles.tokens import Colors
 from src.layouts.panels.shared.popup_overlay import PopupOverlay, IconPickerPopup
+from src.layouts.panels.terrain.color_picker import HueBar, SatValSquare, ColorSlider
 from src.engines.marker import ICONS
 
 
@@ -132,6 +133,11 @@ class ProgressionNodeDialog(PopupOverlay):
         color_row.addWidget(reset_btn)
         color_row.addStretch()
         outer.addLayout(color_row)
+
+        self._color_picker = self._build_color_picker()
+        self._color_picker.hide()
+        outer.addWidget(self._color_picker)
+
         self._refresh_swatch()
 
         outer.addWidget(QLabel("Notas"))
@@ -180,16 +186,136 @@ class ProgressionNodeDialog(PopupOverlay):
             self._icon = picked
             self._icon_btn.setText(self._icon)
 
+    # ─── Cor (in-panel picker — no native OS QColorDialog, which renders
+    # as a window outside the app; same pattern as RegionEditPanel's
+    # _build_color_picker/terrain's BackgroundSection) ─────────────────
+
+    def _build_color_picker(self) -> QFrame:
+        widget = QFrame()
+        widget.setStyleSheet("background: transparent; border: none;")
+        lay = QVBoxLayout(widget)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(6)
+
+        self._hue_bar = HueBar()
+        self._hue_bar.setFixedHeight(16)
+        self._hue_bar.hue_changed.connect(self._on_hue_changed)
+        lay.addWidget(self._hue_bar)
+
+        self._sv_square = SatValSquare()
+        self._sv_square.setFixedHeight(90)
+        self._sv_square.sv_changed.connect(self._on_sv_changed)
+        lay.addWidget(self._sv_square)
+
+        color = QColor(self._border_color or self._auto_color)
+        self._r_slider = ColorSlider("R", 0, 255, color.red())
+        self._g_slider = ColorSlider("G", 0, 255, color.green())
+        self._b_slider = ColorSlider("B", 0, 255, color.blue())
+        for slider in (self._r_slider, self._g_slider, self._b_slider):
+            slider.value_changed.connect(self._on_rgb_slider_changed)
+        lay.addWidget(self._r_slider)
+        lay.addWidget(self._g_slider)
+        lay.addWidget(self._b_slider)
+
+        hex_row = QHBoxLayout()
+        hex_row.setSpacing(4)
+        hex_label = QLabel("#")
+        hex_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 11px; background: transparent; border: none;")
+        hex_row.addWidget(hex_label)
+        self._hex_input = QLineEdit()
+        self._hex_input.setFixedHeight(22)
+        self._hex_input.setMaxLength(6)
+        self._hex_input.setStyleSheet(f"""
+            QLineEdit {{
+                background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 4px; color: {Colors.TEXT_PRIMARY}; font-size: 10px; padding: 0 4px;
+            }}
+            QLineEdit:focus {{ border-color: {Colors.ACCENT}; }}
+        """)
+        self._hex_input.returnPressed.connect(self._on_hex_entered)
+        hex_row.addWidget(self._hex_input, 1)
+        lay.addLayout(hex_row)
+
+        h, s, v, _a = color.getHsv()
+        self._hsv = [max(0, h), s * 100 // 255, v * 100 // 255]
+        self._hue_bar.set_hue(self._hsv[0])
+        self._sv_square.set_hue(self._hsv[0])
+        self._sv_square.set_sv(self._hsv[1], self._hsv[2])
+        self._sync_hex_input()
+        return widget
+
     def _pick_color(self):
-        initial = QColor(self._border_color or self._auto_color)
-        color = QColorDialog.getColor(initial, self, "Cor da borda")
-        if color.isValid():
-            self._border_color = color.name()
-            self._refresh_swatch()
+        self._color_picker.setVisible(not self._color_picker.isVisible())
+
+    def _on_hue_changed(self, hue: int):
+        self._hsv[0] = hue
+        self._sv_square.set_hue(hue)
+        self._apply_hsv()
+
+    def _on_sv_changed(self, s: int, v: int):
+        self._hsv[1], self._hsv[2] = s, v
+        self._apply_hsv()
+
+    def _apply_hsv(self):
+        h, s, v = self._hsv
+        color = QColor.fromHsv(h, round(s * 255 / 100), round(v * 255 / 100))
+        self._sync_rgb_sliders(color)
+        self._set_border_color(color)
+
+    def _on_rgb_slider_changed(self, _value: int):
+        color = QColor(self._r_slider.value(), self._g_slider.value(), self._b_slider.value())
+        h, s, v, _a = color.getHsv()
+        self._hsv = [max(0, h), s * 100 // 255, v * 100 // 255]
+        self._hue_bar.set_hue(self._hsv[0])
+        self._sv_square.set_hue(self._hsv[0])
+        self._sv_square.set_sv(self._hsv[1], self._hsv[2])
+        self._set_border_color(color)
+
+    def _on_hex_entered(self):
+        text = self._hex_input.text().strip().lstrip("#")
+        if len(text) != 6:
+            return
+        try:
+            r, g, b = int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+        except ValueError:
+            return
+        color = QColor(r, g, b)
+        h, s, v, _a = color.getHsv()
+        self._hsv = [max(0, h), s * 100 // 255, v * 100 // 255]
+        self._hue_bar.set_hue(self._hsv[0])
+        self._sv_square.set_hue(self._hsv[0])
+        self._sv_square.set_sv(self._hsv[1], self._hsv[2])
+        self._sync_rgb_sliders(color)
+        self._set_border_color(color)
+
+    def _sync_rgb_sliders(self, color: QColor):
+        for slider, value in ((self._r_slider, color.red()), (self._g_slider, color.green()),
+                               (self._b_slider, color.blue())):
+            slider.blockSignals(True)
+            slider.set_value(value)
+            slider.blockSignals(False)
+
+    def _sync_hex_input(self):
+        self._hex_input.blockSignals(True)
+        self._hex_input.setText(QColor(self._border_color or self._auto_color).name(QColor.NameFormat.HexRgb).lstrip("#").upper())
+        self._hex_input.blockSignals(False)
+
+    def _set_border_color(self, color: QColor):
+        self._border_color = color.name()
+        self._sync_hex_input()
+        self._refresh_swatch()
 
     def _reset_color(self):
         self._border_color = None
         self._refresh_swatch()
+        color = QColor(self._auto_color)
+        h, s, v, _a = color.getHsv()
+        self._hsv = [max(0, h), s * 100 // 255, v * 100 // 255]
+        self._hue_bar.set_hue(self._hsv[0])
+        self._sv_square.set_hue(self._hsv[0])
+        self._sv_square.set_sv(self._hsv[1], self._hsv[2])
+        self._sync_rgb_sliders(color)
+        self._sync_hex_input()
 
     def exec(self) -> bool:
         self._run()

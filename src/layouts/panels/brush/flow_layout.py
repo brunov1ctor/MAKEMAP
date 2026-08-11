@@ -14,6 +14,7 @@ class FlowLayout(QLayout):
 
     def addItem(self, item):
         self._items.append(item)
+        self.invalidate()
 
     def count(self):
         return len(self._items)
@@ -24,8 +25,14 @@ class FlowLayout(QLayout):
         return None
 
     def takeAt(self, index):
+        # Without invalidate() here, Qt can keep using cached geometry from
+        # before the removal — widgets added right after (e.g. rebuilding a
+        # tag list) may sit at stale/default geometry instead of getting
+        # laid out, since nothing else marks the layout dirty on removal.
         if 0 <= index < len(self._items):
-            return self._items.pop(index)
+            item = self._items.pop(index)
+            self.invalidate()
+            return item
         return None
 
     def hasHeightForWidth(self):

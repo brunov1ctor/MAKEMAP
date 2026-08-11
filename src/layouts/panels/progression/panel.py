@@ -184,8 +184,13 @@ class ProgressionBar(QFrame):
         # subscribe to this canvas's own `changed` signal in time to catch
         # the emission load() fires once the graph is actually populated.
         self.pipeline_created.emit(canvas)
-        canvas.load(seed_segments=seed_segments)
+        # Must be appended before load(): load() emits `changed`, which
+        # ProgressionMediator handles by rebuilding the map overlay from
+        # self._pipelines right then — if this entry weren't in the list
+        # yet, its own pins would be silently skipped from that rebuild
+        # (only reappearing once some later edit re-triggers a rebuild).
         self._pipelines.append({"key": key, "name": name, "theme_idx": theme_idx, "canvas": canvas})
+        canvas.load(seed_segments=seed_segments)
         self._stack.addWidget(canvas)
         self._rebuild_tabs()
         return canvas

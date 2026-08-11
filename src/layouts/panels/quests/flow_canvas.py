@@ -1,30 +1,79 @@
 """FlowCanvas — o canvas de grafo livre do editor de Fluxo da quest.
 
 Arraste-para-conectar, curva bezier com brilho neon, cada conexão pode ter
-um rótulo de texto (o "Sim"/"Não" saindo de um nó Condição), e clicar com o
-botão direito no vazio abre um menu pra criar qualquer um dos 5 tipos de nó
-ali mesmo — não existe um botão fixo de "+ Novo" único como o de Progressão,
-já que o Fluxo tem 5 tipos possíveis.
+um rótulo de texto (o "Sim"/"Não" saindo de um nó Condição). Nós são
+criados pelos botões "+ <tipo>" na FlowTab (ver flow_tab.py), não por menu
+de botão direito — mesmo esquema de botões no painel usado em Progressão do
+Mundo (ProgressionBar._add_block), só que um botão por tipo já que o Fluxo
+tem 5 tipos possíveis em vez de um único.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from PySide6.QtWidgets import QWidget, QMenu, QInputDialog, QLineEdit
+from PySide6.QtWidgets import (
+    QWidget, QDialog, QLineEdit, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
+)
 from PySide6.QtCore import Qt, QPointF, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QFont
 
 from src.styles.tokens import Colors
-from src.layouts.panels.quests.flow_node import FlowNode, NODE_TYPES, NODE_TYPE_ORDER
+from src.layouts.panels.quests.flow_node import FlowNode, NODE_TYPES
 
 _EDGE_HIT_TOLERANCE = 9.0
+
+
+class EdgeLabelDialog(QDialog):
+    """Diálogo mínimo do duplo-clique numa seta: nomear ou remover a
+    conexão — as duas únicas ações que o menu de botão direito oferecia
+    além de "adicionar nó" (que virou os botões "+ <tipo>" da FlowTab)."""
+
+    def __init__(self, current_label: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Conexão")
+        self._result: str | None = None
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Texto exibido na seta (ex.: Sim / Não):"))
+        self._edit = QLineEdit(current_label)
+        lay.addWidget(self._edit)
+
+        btn_row = QHBoxLayout()
+        remove_btn = QPushButton("🗑 Remover conexão")
+        remove_btn.clicked.connect(self._on_remove)
+        btn_row.addWidget(remove_btn)
+        btn_row.addStretch()
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        save_btn = QPushButton("Salvar")
+        save_btn.setDefault(True)
+        save_btn.clicked.connect(self._on_save)
+        btn_row.addWidget(save_btn)
+        lay.addLayout(btn_row)
+
+    def _on_remove(self):
+        self._result = "remove"
+        self.accept()
+
+    def _on_save(self):
+        self._result = "save"
+        self.accept()
+
+    def value(self) -> str:
+        return self._edit.text()
+
+    def exec_result(self) -> str | None:
+        return self._result if self.exec() else None
 
 
 class FlowCanvas(QWidget):
     changed = Signal()
     node_edit_requested = Signal(object)
     node_locate_requested = Signal(object)
+    node_edit_on_map_requested = Signal(object)
+    node_pin_pick_requested = Signal(object)
+    node_pin_locate_requested = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -35,21 +84,25 @@ class FlowCanvas(QWidget):
         self.setMinimumSize(700, 260)
         self.setMouseTracking(True)
         self.setStyleSheet("background: transparent; border: none;")
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self._show_canvas_menu)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # so Escape can cancel a connection in progress
 
     # ── nós ──
 
     def add_node(self, node_type: str, title: str, subtitle: str = "",
                  x: int | None = None, y: int | None = None, node_id: str = "",
-                 ref_type: str = "", ref_id: str = "", notify: bool = True) -> FlowNode:
+                 ref_type: str = "", ref_id: str = "", pin: dict | None = None,
+                 notify: bool = True) -> FlowNode:
         node_id = node_id or str(uuid.uuid4())
-        node = FlowNode(node_id, node_type, title, subtitle, ref_type=ref_type, ref_id=ref_id, parent=self)
+        node = FlowNode(node_id, node_type, title, subtitle, ref_type=ref_type, ref_id=ref_id, pin=pin, parent=self)
         node.moved.connect(self._on_node_moved)
         node.connection_started.connect(self._start_connection)
         node.edit_requested.connect(self.node_edit_requested.emit)
         node.delete_requested.connect(self.remove_node)
         node.locate_requested.connect(self.node_locate_requested.emit)
+        node.edit_on_map_requested.connect(self.node_edit_on_map_requested.emit)
+        node.pin_pick_requested.connect(self.node_pin_pick_requested.emit)
+        node.pin_locate_requested.connect(self.node_pin_locate_requested.emit)
+        node.pin_clear_requested.connect(self._on_pin_clear)
         if x is None:
             x = 20 + (len(self._nodes) % 4) * 40
         if y is None:
@@ -76,6 +129,17 @@ class FlowCanvas(QWidget):
         self.update()
         self.changed.emit()
 
+    def set_node_pin(self, node: FlowNode, x: float, y: float):
+        node.set_pin(x, y)
+        self.changed.emit()
+
+    def clear_node_pin(self, node: FlowNode):
+        node.clear_pin()
+        self.changed.emit()
+
+    def _on_pin_clear(self, node: FlowNode):
+        self.clear_node_pin(node)
+
     def clear(self):
         for node in list(self._nodes):
             node.deleteLater()
@@ -94,8 +158,6 @@ class FlowCanvas(QWidget):
     def add_edge(self, source: FlowNode, target: FlowNode, label: str = "", notify: bool = True):
         if source == target:
             return
-        if any(e["a"] == source and e["b"] == target for e in self._edges):
-            return
         self._edges.append({"a": source, "b": target, "label": label})
         self.update()
         if notify:
@@ -105,6 +167,13 @@ class FlowCanvas(QWidget):
         self._connecting_from = node
         self._connect_end = node.right_point()
         self.setCursor(Qt.CursorShape.CrossCursor)
+        # FlowNode filhos só recebem eventos de mouse enquanto o cursor está
+        # sobre a própria área — sem o grab, assim que o arraste passa por
+        # cima de outro nó (o próprio alvo da conexão), mouseMoveEvent/
+        # mouseReleaseEvent daqui nunca mais disparam e a conexão trava sem
+        # nunca ser concluída.
+        self.grabMouse()
+        self.setFocus()
 
     def mouseMoveEvent(self, event):
         if self._connecting_from:
@@ -113,6 +182,7 @@ class FlowCanvas(QWidget):
 
     def mouseReleaseEvent(self, event):
         if self._connecting_from:
+            self.releaseMouse()
             pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
             target = self._node_at(pos)
             if target and target != self._connecting_from:
@@ -121,6 +191,17 @@ class FlowCanvas(QWidget):
             self._connect_end = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
             self.update()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self._connecting_from:
+            self.releaseMouse()
+            self._connecting_from = None
+            self._connect_end = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.update()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
@@ -148,36 +229,18 @@ class FlowCanvas(QWidget):
         return None
 
     def _prompt_edge_label(self, edge: dict):
-        text, ok = QInputDialog.getText(
-            self, "Rótulo da conexão", "Texto exibido na seta (ex.: Sim / Não):",
-            QLineEdit.EchoMode.Normal, edge.get("label", ""),
-        )
-        if ok:
-            edge["label"] = text.strip()
+        """Duplo-clique numa seta: mesmo diálogo pra nomeá-la ou removê-la —
+        sem menu de botão direito (ver flow_tab.py, que também trocou o
+        antigo botão direito "adicionar nó" por botões "+ <tipo>" no
+        painel)."""
+        dialog = EdgeLabelDialog(edge.get("label", ""), parent=self)
+        result = dialog.exec_result()
+        if result == "remove":
+            self._remove_edge(edge)
+        elif result == "save":
+            edge["label"] = dialog.value().strip()
             self.update()
             self.changed.emit()
-
-    # ── menu de contexto (criar nó) ──
-
-    def _show_canvas_menu(self, pos):
-        if self._node_at(pos):
-            return
-        menu = QMenu(self)
-        menu.setStyleSheet(f"""
-            QMenu {{ background: {Colors.BG_ELEVATED}; border: 1px solid {Colors.BORDER};
-                     color: {Colors.TEXT_PRIMARY}; font-size: 10px; }}
-            QMenu::item:selected {{ background: {Colors.ACCENT_DIM}; }}
-        """)
-        edge = self._edge_at(pos)
-        if edge:
-            menu.addAction("✏ Editar rótulo da conexão", lambda: self._prompt_edge_label(edge))
-            menu.addAction("🗑 Remover conexão", lambda: self._remove_edge(edge))
-            menu.addSeparator()
-        for key in NODE_TYPE_ORDER:
-            meta = NODE_TYPES[key]
-            menu.addAction(f"{meta['icon']} Adicionar {meta['label']}",
-                            lambda k=key: self.add_node(k, meta_label_default(k), x=pos.x(), y=pos.y()))
-        menu.exec(self.mapToGlobal(pos))
 
     def _remove_edge(self, edge: dict):
         if edge in self._edges:
@@ -197,11 +260,33 @@ class FlowCanvas(QWidget):
     # ── pintura ──
 
     def _edge_path(self, edge: dict) -> QPainterPath:
-        start, end = edge["a"].right_point(), edge["b"].left_point()
-        ctrl = max(abs(end.x() - start.x()) * 0.4, 40)
+        return self._bezier_path(edge["a"].right_point(), edge["b"].left_point())
+
+    @staticmethod
+    def _bezier_path(start: QPointF, end: QPointF) -> QPainterPath:
+        dx = end.x() - start.x()
+        ctrl = max(abs(dx) * 0.4, 40)
         path = QPainterPath()
         path.moveTo(start)
-        path.cubicTo(QPointF(start.x() + ctrl, start.y()), QPointF(end.x() - ctrl, end.y()), end)
+        if dx >= ctrl:
+            # Alvo à direita da origem por uma folga confortável — a curva
+            # "S" clássica (pontos de controle puxando em direções opostas)
+            # fica lisa.
+            path.cubicTo(QPointF(start.x() + ctrl, start.y()), QPointF(end.x() - ctrl, end.y()), end)
+        else:
+            # Alvo atrás ou quase alinhado no eixo x (nós empilhados quase
+            # na vertical, comum quando várias setas saem da mesma alça) —
+            # puxar os pontos de controle em direções opostas faria a curva
+            # cruzar de volta por cima da própria origem, virando um laço
+            # feio. Empurrando os dois pro mesmo lado (a favor do sinal de
+            # dy) a seta contorna por fora em vez de voltar sobre si mesma.
+            bulge = max(abs(dx), 60)
+            sign = 1 if end.y() >= start.y() else -1
+            path.cubicTo(
+                QPointF(start.x() + bulge, start.y() + sign * bulge * 0.3),
+                QPointF(end.x() + bulge, end.y() - sign * bulge * 0.3),
+                end,
+            )
         return path
 
     def paintEvent(self, event):
@@ -243,12 +328,7 @@ class FlowCanvas(QWidget):
                 )
 
         if self._connecting_from and self._connect_end:
-            start = self._connecting_from.right_point()
-            end = self._connect_end
-            ctrl = max(abs(end.x() - start.x()) * 0.4, 40)
-            path = QPainterPath()
-            path.moveTo(start)
-            path.cubicTo(QPointF(start.x() + ctrl, start.y()), QPointF(end.x() - ctrl, end.y()), end)
+            path = self._bezier_path(self._connecting_from.right_point(), self._connect_end)
             c = QColor(self._connecting_from.color())
             c.setAlpha(120)
             p.setPen(QPen(c, 2, Qt.PenStyle.DashLine))

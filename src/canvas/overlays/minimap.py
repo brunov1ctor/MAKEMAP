@@ -9,6 +9,13 @@ from PySide6.QtGui import QColor, QPen, QBrush, QPainter, QPolygonF
 
 from src.styles.tokens import Colors, Typography
 
+# A real map's placed content never spans this many scene units — items
+# wider/taller than this are whole-scene overlays (e.g.
+# GlobalLightingOverlay, whose boundingRect() is the scene's own
+# multi-million-unit sceneRect) and get excluded from the minimap's fit
+# calculation so they don't drown out the actual content.
+_MAX_FIT_EXTENT = 100_000
+
 
 class _ResizeGrip(QFrame):
     """Bottom-right corner grip — drag to resize width+height together."""
@@ -60,6 +67,7 @@ class _MiniMapView(QGraphicsView):
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
         self.setStyleSheet(f"background: {Colors.BG_TERTIARY}; border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px;")
         self._view_polygon = QPolygonF()
+        self._bg_source = None  # main Viewport, for background_snapshot()
 
     def set_viewport_polygon(self, polygon: QPolygonF):
         """Store the main viewport's on-scene outline and trigger a repaint
@@ -68,6 +76,24 @@ class _MiniMapView(QGraphicsView):
         not an axis-aligned rect."""
         self._view_polygon = polygon
         self.viewport().update()
+
+    def drawBackground(self, painter: QPainter, rect: QRectF):
+        """The main Viewport paints its terrain/parallax background via its
+        own drawBackground() override, which only applies to that one
+        QGraphicsView — this secondary view on the same scene never gets it
+        and would otherwise render pure black behind the scene's items."""
+        if self._bg_source is None:
+            super().drawBackground(painter, rect)
+            return
+        snap = self._bg_source.background_snapshot()
+        if snap is None:
+            super().drawBackground(painter, rect)
+            return
+        kind, value = snap
+        if kind == "color":
+            painter.fillRect(rect, value)
+        else:
+            painter.drawPixmap(rect, value, QRectF(value.rect()))
 
     def drawForeground(self, painter: QPainter, rect: QRectF):
         """Draw viewport indicator on top without adding items to the shared scene."""
@@ -298,6 +324,7 @@ class MiniMap(QFrame):
     def set_viewport(self, viewport):
         """Bind to the main Viewport to share its scene and track view changes."""
         self._main_viewport = viewport
+        self._mini_view._bg_source = viewport
         self._mini_view.setScene(viewport.scene())
         viewport.view_changed.connect(self._schedule_refresh)
         viewport.scene().changed.connect(self._schedule_refresh)
@@ -332,8 +359,20 @@ class MiniMap(QFrame):
         for item in shown:
             item.hide()
 
-        # Fit to items bounding rect (with margin)
-        items_rect = scene.itemsBoundingRect()
+        # Fit to items bounding rect (with margin). Built by hand rather
+        # than scene.itemsBoundingRect(): some overlays (e.g.
+        # GlobalLightingOverlay) report the scene's own fixed multi-
+        # million-unit sceneRect as their boundingRect() so their paint()
+        # covers the whole map, not just the area around each light — a
+        # real map's placed content is never remotely that big, so those
+        # items would otherwise blow the fit out to the point where actual
+        # content shrinks to sub-pixel and the minimap reads as empty.
+        items_rect = QRectF()
+        for item in scene.items():
+            r = item.sceneBoundingRect()
+            if r.width() > _MAX_FIT_EXTENT or r.height() > _MAX_FIT_EXTENT:
+                continue
+            items_rect = r if items_rect.isNull() else items_rect.united(r)
         if items_rect.isEmpty():
             items_rect = QRectF(-500, -500, 1000, 1000)
         margin = max(items_rect.width(), items_rect.height()) * 0.1

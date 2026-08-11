@@ -71,7 +71,10 @@ class ProgressionMediator:
             {"nodes": pipe["canvas"].nodes(), "edges": pipe["canvas"]._edges}
             for pipe in self._l.progression._pipelines
         ]
-        self._map_overlay.rebuild(pipelines, on_marker_moved=self._on_marker_dragged)
+        self._map_overlay.rebuild(
+            pipelines, on_marker_moved=self._on_marker_dragged,
+            on_marker_remove=self._on_marker_remove_requested,
+        )
         # These items are tagged item_type "marker" (see map_overlay.py) so
         # they ride the same "Marcadores" entry in Camadas Ativas as a real
         # placed MarkerItem — but rebuild() tears down and recreates every
@@ -81,7 +84,7 @@ class ProgressionMediator:
         if layers is not None:
             layers.refresh()
             if "Marcadores" in layers._hidden:
-                for item in self._map_overlay._items:
+                for item in self._map_overlay.items():
                     item.setVisible(False)
 
     def _on_marker_dragged(self, node, scene_pos: QPointF):
@@ -90,6 +93,14 @@ class ProgressionMediator:
         through the card's own canvas so this persists and rebuilds the
         overlay exactly like picking a fresh point would."""
         node._canvas.set_node_pin(node, scene_pos.x(), scene_pos.y())
+
+    def _on_marker_remove_requested(self, node):
+        """The map marker's ✕ badge was clicked (see _MapMarkerItem.
+        remove_requested) — same path as right-clicking the pin button on
+        the card itself (see items.py's pin_clear_requested), so it's
+        handled the same way: canvas._on_pin_clear() clears the pin and
+        persists, which then drops this marker on the next rebuild()."""
+        node.pin_clear_requested.emit(node)
 
     # ─── Marcar no mapa (📍) ───
 

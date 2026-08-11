@@ -288,6 +288,11 @@ class LoreEditorPanel(QFrame):
             chip = _TagChip(tag)
             chip.removed.connect(self._on_remove_tag)
             self._tags_flow.addWidget(chip)
+            # A widget built with no parent (see _TagChip.__init__ default)
+            # stays hidden after addWidget() reparents it — Qt only shows it
+            # asynchronously later, which misses the layout pass that runs
+            # right after and leaves the chip stuck without a real geometry.
+            chip.show()
         self._tags_flow.addWidget(self._tag_input)
 
     # ── API pública ──

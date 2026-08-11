@@ -33,6 +33,14 @@ class _ProgressionView(QGraphicsView):
             self._canvas._finish_connect(self.mapToScene(event.pos()))
         elif self._canvas._redirecting_edge is not None:
             self._canvas._finish_redirect(self.mapToScene(event.pos()))
+        elif self.itemAt(event.pos()) is None:
+            # Clicking empty canvas space doesn't hit any _ProgressionNode's
+            # own mousePressEvent (see items.py), so without this a card
+            # selected earlier (blue ACCENT border, see _ProgressionNode.
+            # paint) stayed marked "_selected" forever — even after editing
+            # its actual color, since that flag is never QGraphicsItem's own
+            # isSelected(), just a bool this canvas tracks by hand.
+            self._canvas._select_node(None)
         self.setFocus()
         super().mousePressEvent(event)
 

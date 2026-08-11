@@ -45,19 +45,10 @@ QUEST_TYPES = ["Principal", "Secundária", "Diária", "Semanal", "Evento", "Cade
 
 PRIORITIES = ["Baixa", "Média", "Alta"]
 
-# As 9 abas de conteúdo do meio — só "Geral" tem edição real por enquanto,
-# as demais mostram um estado vazio ("Em breve...") até ganharem sua própria
-# implementação (ver panel.py._build_placeholder_tab).
+# O conteúdo do meio é só o Fluxo (grafo de nós + preview do mapa) — as
+# demais abas que existiam aqui foram removidas (ver panel.py).
 CONTENT_TABS = [
     ("fluxo", "🧭", "Fluxo"),
-    ("geral", "📄", "Geral"),
-    ("objetivos", "🎯", "Objetivos"),
-    ("recompensas", "🎁", "Recompensas"),
-    ("npcs_dialogos", "💬", "NPCs e Diálogos"),
-    ("condicoes", "🔀", "Condições"),
-    ("eventos", "🚩", "Eventos"),
-    ("scripts", "📜", "Scripts"),
-    ("notas", "📝", "Notas"),
 ]
 
 

@@ -122,6 +122,10 @@ class AssetSoundManager(QWidget):
         # whenever it changes.
         self._rebuild_category_sections()
 
+        main.addWidget(self._build_section_divider("MOLDURAS DE EXPORTAÇÃO"))
+        main.addWidget(self._build_collapsible_group(
+            "🖼", "Molduras", CategorySection(_LIB / "frames", "🖼", "Molduras", show_sounds=False)))
+
         # ─── Everything below is a genuinely separate concept from the
         # style-scoped asset categories above AND from each other — Effects
         # configures the Brush tool's code-generated animated effects

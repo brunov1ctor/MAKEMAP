@@ -98,3 +98,4 @@ class KeyboardPanController(QObject):
 
         if scene_dx != 0.0 or scene_dy != 0.0:
             self.panned.emit(scene_dx, scene_dy)
+            self._viewport.view_changed.emit()

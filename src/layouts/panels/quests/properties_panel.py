@@ -16,8 +16,8 @@ from __future__ import annotations
 import json
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit,
-    QFrame, QScrollArea, QSizePolicy, QCheckBox, QToolButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
+    QTextEdit, QFrame, QScrollArea, QSizePolicy, QCheckBox, QToolButton,
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -247,15 +247,19 @@ class QuestPropertiesPanel(QFrame):
         lay.addLayout(level_row)
 
         lay.addWidget(_section_label("Tags"))
+        # _tag_input vive dentro do _tags_flow (inline com os chips), mesmo
+        # padrão do painel de Lore — não como widget separado no lay.
+        self._tag_input = QLineEdit()
+        self._tag_input.setPlaceholderText("+ Adicionar tag...")
+        self._tag_input.setFixedWidth(150)
+        self._tag_input.returnPressed.connect(self._on_add_tag)
+
         self._tags_holder = QWidget()
         self._tags_holder.setStyleSheet("background: transparent;")
         from src.layouts.panels.brush.flow_layout import FlowLayout
         self._tags_flow = FlowLayout(self._tags_holder, spacing=4)
+        self._tags_flow.addWidget(self._tag_input)
         lay.addWidget(self._tags_holder)
-        self._tag_input = QLineEdit()
-        self._tag_input.setPlaceholderText("+ Nova tag (Enter)")
-        self._tag_input.returnPressed.connect(self._on_add_tag)
-        lay.addWidget(self._tag_input)
 
         lay.addWidget(_section_label("Descrição curta"))
         self._description = QTextEdit()
@@ -277,28 +281,26 @@ class QuestPropertiesPanel(QFrame):
     def _build_settings_card(self) -> QFrame:
         frame, lay, _section = _card("Configurações")
 
-        rep_row, self._repeatable = _toggle_row("Repetível")
-        lay.addLayout(rep_row)
-
-        time_row = QHBoxLayout()
-        time_lbl = QLabel("Tempo limite (min)")
-        time_lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none;")
+        _, self._repeatable = _toggle_row("Repetível")
         self._time_limit = _spin(0, 1440, 0)
         _no_wheel(self._time_limit)
-        time_row.addWidget(time_lbl, 1)
-        time_row.addWidget(self._time_limit)
-        lay.addLayout(time_row)
-
-        fail_row, self._fail_on_abandon = _toggle_row("Falha se abandonar")
-        lay.addLayout(fail_row)
-        auto_row, self._auto_accept = _toggle_row("Auto aceitar")
-        lay.addLayout(auto_row)
-        hide_row, self._hide_on_map = _toggle_row("Ocultar no mapa")
-        lay.addLayout(hide_row)
-
+        _, self._fail_on_abandon = _toggle_row("Falha se abandonar")
+        _, self._auto_accept = _toggle_row("Auto aceitar")
+        _, self._hide_on_map = _toggle_row("Ocultar no mapa")
         self._priority = _combo(PRIORITIES)
         _no_wheel(self._priority)
-        lay.addLayout(self._field("Prioridade", self._priority))
+
+        # Grid 2 colunas em vez de um campo por linha — os 6 campos deste
+        # cartão cabem lado a lado sem apertar, reduzindo a altura pela
+        # metade (mesmo padrão de EditorBase.grid() usado em Dungeons).
+        lay.addLayout(self._grid([
+            ("Repetível", self._repeatable),
+            ("Tempo limite (min)", self._time_limit),
+            ("Falha se abandonar", self._fail_on_abandon),
+            ("Auto aceitar", self._auto_accept),
+            ("Ocultar no mapa", self._hide_on_map),
+            ("Prioridade", self._priority),
+        ], columns=2))
         return frame
 
     # ── cartão 3: Recompensas ──
@@ -356,6 +358,23 @@ class QuestPropertiesPanel(QFrame):
         row.addWidget(lbl)
         row.addWidget(widget, 1)
         return row
+
+    @staticmethod
+    def _grid(pairs: list[tuple[str, QWidget]], columns: int = 2) -> QGridLayout:
+        """Rótulo à esquerda, campo à direita, em `columns` pares por linha
+        — mesmo padrão de EditorBase.grid() (Dungeons)."""
+        layout = QGridLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
+        for i, (label_text, widget) in enumerate(pairs):
+            row, col = divmod(i, columns)
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none;")
+            layout.addWidget(lbl, row, col * 2)
+            layout.addWidget(widget, row, col * 2 + 1)
+            layout.setColumnStretch(col * 2 + 1, 1)
+        return layout
 
     @staticmethod
     def _stat(label_text: str, widget: QWidget) -> QVBoxLayout:
@@ -449,15 +468,27 @@ class QuestPropertiesPanel(QFrame):
         self._on_field_changed()
 
     def _rebuild_tags(self):
+        # self._tag_input is a persistent widget re-added at the end of
+        # every rebuild (not a per-tag chip) — deleteLater()'ing it here
+        # like the chips below destroys the one QLineEdit instance the
+        # class keeps reusing, so the very next rebuild's addWidget() below
+        # (or the one after, once the deferred delete actually runs) hits a
+        # RuntimeError: "already deleted" on it.
         while self._tags_flow.count():
             item = self._tags_flow.takeAt(0)
             widget = item.widget()
-            if widget is not None:
+            if widget is not None and widget is not self._tag_input:
                 widget.deleteLater()
         for tag in self._tags:
             chip = _TagChip(tag)
             chip.removed.connect(self._on_remove_tag)
             self._tags_flow.addWidget(chip)
+            # A widget built with no parent stays hidden after addWidget()
+            # reparents it — Qt only shows it asynchronously later, missing
+            # the layout pass that runs right after and leaving the chip
+            # stuck without a real geometry.
+            chip.show()
+        self._tags_flow.addWidget(self._tag_input)
 
     # ── Imagem ──
 

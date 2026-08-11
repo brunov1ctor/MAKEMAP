@@ -51,7 +51,12 @@ class BrushMediator:
         panel = BrushToolPanel(self._l)
         panel.hide()
         panel.close_requested.connect(self._l._close_brush_panels)
-        panel.content_changed.connect(self._l._reposition)
+        # Same "sizeHint isn't reliable until Qt has actually laid the
+        # widget out once" race as BackgroundPanel (see MainLayout.
+        # _reposition_content_changed's own docstring) — e.g. FramePanel's
+        # in-panel color picker (frame_panel.py) expanding for the first
+        # time.
+        panel.content_changed.connect(self._l._reposition_content_changed)
         self._l.brush_panel = panel
 
         # Asset browser embutido dentro do brush_panel (aba Browser).

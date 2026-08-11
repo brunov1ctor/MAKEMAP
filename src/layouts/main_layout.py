@@ -4,7 +4,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*Failed to disconnect.*", category=RuntimeWarning)
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 from src.styles.tokens import Colors
 from src.layouts.panels.top_bar import TopBar
@@ -13,6 +13,7 @@ from src.layouts.panels.select_panel import SelectToolPanel
 from src.layouts.panels.explorer import ExplorerPanel
 from src.layouts.panels.canvas_area import CanvasArea
 from src.layouts.panels.background_panel import BackgroundPanel
+from src.layouts.panels.export_panel import ExportPanel
 from src.layouts.panels.inspector import InspectorPanel, LayersPanel
 from src.layouts.panels.progression import ProgressionBar
 from src.layouts.panels.status_bar import StatusBar
@@ -24,7 +25,7 @@ from src.engines.integrator import EngineIntegrator
 from src.layouts.mediators import (
     BrushMediator, TerrainMediator, GridMediator, ToolbarMediator, RegionMediator, SpawnMediator,
     TextMediator, MarkerMediator, LightMediator, AssetEffectsMediator, MenuViewMediator,
-    ExplorerSyncMediator, ProgressionMediator,
+    ExplorerSyncMediator, ProgressionMediator, ExportMediator,
 )
 from src.layouts.panel_manager import PanelManager
 from src.layouts.panel_layout_engine import PanelLayoutEngine
@@ -105,6 +106,16 @@ class MainLayout(QWidget):
         self.background_panel.hide()
         self.background_panel.close_requested.connect(self._close_background_panel)
         self.background_panel.background_changed.connect(self._terrain_med.on_background)
+        self.background_panel.content_changed.connect(self._reposition_content_changed)
+
+        # "Exportar" — plain toolbar action (not a toggle) that opens a
+        # panel to configure and run a PNG export, same self-contained shape
+        # as Background above (no canvas-engine state of its own to own,
+        # ExportMediator below just wires export_requested to map_exporter).
+        self.export_panel = ExportPanel(self)
+        self.export_panel.hide()
+        self.export_panel.close_requested.connect(self._close_export_panel)
+        self.export_panel.content_changed.connect(self._reposition)
 
         # ═══ Panel Manager ═══
         self._panel_mgr = PanelManager(self)
@@ -123,6 +134,10 @@ class MainLayout(QWidget):
         )
         self._panel_mgr.register(
             "Background", self.background_panel,
+        )
+        self._panel_mgr.register(
+            "Export", self.export_panel,
+            on_show=lambda: self._export_med.refresh_preview(),
         )
         self._panel_mgr.register(
             "Region", self.region_panel,
@@ -193,6 +208,7 @@ class MainLayout(QWidget):
         self.progression.size_changed.connect(self._reposition)
         self._progression_med = ProgressionMediator(self)
         self.status_bar = StatusBar(self)
+        self._export_med = ExportMediator(self)
 
         # Overlays
         self.compass = Compass(self)
@@ -224,6 +240,7 @@ class MainLayout(QWidget):
         self.floating.register("grid_panel", self.grid_panel)
         self.floating.register("terrain_panel", self.terrain_panel)
         self.floating.register("background_panel", self.background_panel)
+        self.floating.register("export_panel", self.export_panel)
         self.floating.register("region_panel", self.region_panel)
         self.floating.register("select_panel", self.select_panel)
         self.floating.register("text_panel", self.text_panel)
@@ -286,6 +303,17 @@ class MainLayout(QWidget):
 
     def _reposition(self):
         self.resizeEvent(None)
+
+    def _reposition_content_changed(self):
+        """Same 'sizeHint isn't reliable until Qt has actually laid the
+        widget out once' race AssetEffectsMediator.open_editor works around
+        (see its own comment) — newly shown/added rows (e.g. a parallax
+        preset button) read a stale sizeHint on the very first reposition,
+        undersizing the panel and clipping/scrolling content that would
+        otherwise fit. Repeat the reposition once more after the event loop
+        catches up."""
+        self._reposition()
+        QTimer.singleShot(0, self._reposition)
 
     def resizeEvent(self, event):
         if event:
@@ -407,6 +435,7 @@ class MainLayout(QWidget):
             "Região": self._toggle_region_panel,
             "Iluminação": self._toggle_light_panel,
             "Plano de Fundo": self._toggle_background_panel,
+            "Exportar": self._toggle_export_panel,
             "Undo": self.canvas.engine.history.undo,
             "Redo": self.canvas.engine.history.redo,
         }
@@ -459,6 +488,15 @@ class MainLayout(QWidget):
     def _close_background_panel(self):
         self._panel_mgr.hide("Background")
         self.canvas_toolbar.uncheck_action("Plano de Fundo")
+        self._reposition()
+
+    # ─── Export Panel ───
+
+    def _toggle_export_panel(self):
+        self._toggle_panel_exclusive("Export")
+
+    def _close_export_panel(self):
+        self._panel_mgr.hide("Export")
         self._reposition()
 
     # ─── Região Panel ───

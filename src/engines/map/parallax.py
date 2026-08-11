@@ -64,6 +64,7 @@ class ParallaxLayer:
     speed_y: float = 0.0
     opacity: float = 1.0   # 0..1
     order: int = 0         # lower = drawn first (further back)
+    visible: bool = True   # toggled via the eye button — hidden without removing the layer
 
     # How side-by-side tile copies meet at the seam — only matters for
     # motion_mode="scroll" (an "orbit" layer isn't tiled at all).
@@ -144,6 +145,7 @@ class ParallaxLibrary(QObject):
                     speed_y=l.get("speed_y", 0.0),
                     opacity=l.get("opacity", 1.0),
                     order=l.get("order", 0),
+                    visible=l.get("visible", True),
                     tile_mode=l.get("tile_mode", "repeat"),
                     motion_mode=l.get("motion_mode", "scroll"),
                     orbit_radius=l.get("orbit_radius", 20.0),
@@ -187,6 +189,7 @@ class ParallaxLibrary(QObject):
                             "speed_y": l.speed_y,
                             "opacity": l.opacity,
                             "order": l.order,
+                            "visible": l.visible,
                             "tile_mode": l.tile_mode,
                             "motion_mode": l.motion_mode,
                             "orbit_radius": l.orbit_radius,

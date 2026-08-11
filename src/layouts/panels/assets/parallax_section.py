@@ -798,7 +798,7 @@ class ParallaxPresetSection(QFrame):
                 ghost.deleteLater()
                 target = self._row_at_global_pos(event.globalPosition().toPoint())
                 _clear_hover_highlight()
-                row_opacity_effect.setOpacity(1.0)
+                row_opacity_effect.setOpacity(0.4 if visibility_btn.isChecked() else 1.0)
                 if target is not None and target is not row:
                     self._on_reorder_layer(row._layer_index, target._layer_index)
             drag_state["start"] = None
@@ -808,6 +808,37 @@ class ParallaxPresetSection(QFrame):
         handle.mouseMoveEvent = _handle_move
         handle.mouseReleaseEvent = _handle_release
         row_lay.addWidget(handle)
+
+        # ─── Visibility toggle: hides the layer from the canvas without
+        # removing it from the preset, so a look can be tried on/off quickly.
+        visibility_btn = QToolButton()
+        visibility_btn.setCheckable(True)
+        visibility_btn.setChecked(not layer.visible)
+        visibility_btn.setFixedSize(20, 20)
+        visibility_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        def _visibility_style(hidden: bool) -> str:
+            color = Colors.TEXT_MUTED if hidden else Colors.ACCENT
+            return (
+                f"QToolButton {{ border: none; border-radius: 4px; font-size: 11px; "
+                f"color: {color}; background: transparent; }}"
+                f"QToolButton:hover {{ background: rgba(255,255,255,0.08); }}"
+            )
+
+        def _update_visibility_btn(hidden: bool):
+            visibility_btn.setText("🚫" if hidden else "👁")
+            visibility_btn.setStyleSheet(_visibility_style(hidden))
+            visibility_btn.setToolTip("Mostrar camada" if hidden else "Ocultar camada")
+            row_opacity_effect.setOpacity(0.4 if hidden else 1.0)
+
+        _update_visibility_btn(not layer.visible)
+
+        def _on_toggle_visibility(checked, i=index):
+            self._on_param_changed(i, "visible", not checked)
+            _update_visibility_btn(checked)
+
+        visibility_btn.toggled.connect(_on_toggle_visibility)
+        row_lay.addWidget(visibility_btn)
 
         # ─── Thumbnail + transparency badge (mirrors the compact style used
         # for static background images in terrain/background.py) ───

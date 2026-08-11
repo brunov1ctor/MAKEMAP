@@ -178,10 +178,13 @@ class MenuViewMediator:
             panel = QuestsPanel(
                 uow, project_dir=project_dir,
                 scene_provider=lambda: l.canvas.engine.viewport.scene(),
+                viewport_provider=lambda: l.canvas.engine.viewport,
                 parent=container,
             )
             panel.closed.connect(self._hide_menu_view)
             layout.addWidget(panel)
+            from src.layouts.mediators.quest_mediator import QuestMediator
+            QuestMediator(l, panel)
         elif menu_name == "Lore":
             from src.layouts.panels.lore.panel import LorePanel
             window = l.window()

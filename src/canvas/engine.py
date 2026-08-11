@@ -596,6 +596,19 @@ class CanvasEngine(QWidget):
             QGraphicsView.mousePressEvent(self.viewport, event)
             return
 
+        # Some items (e.g. ProgressionMapOverlay's map markers) draw their
+        # own tiny hover-only ✕ badge and expose try_close(scene_pos) for
+        # it — duck-typed instead of an isinstance check so this generic
+        # canvas engine doesn't need to import a panel-specific item class
+        # just to special-case a click on it. try_close() does its own hit
+        # test and firing of whatever signal that item needs, and reports
+        # back whether it handled the click.
+        if event.button() == Qt.MouseButton.LeftButton and item is not None:
+            try_close = getattr(item, "try_close", None)
+            if try_close is not None and try_close(scene_pos):
+                event.accept()
+                return
+
         # The delete/duplicate action buttons drawn by TransformEngine on a
         # selected item are only hit-tested by ItemInteraction, which lives
         # inside SelectTool — so a click on those buttons while some other

@@ -11,9 +11,9 @@ os dois.
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QMenu
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolButton
 from PySide6.QtCore import Qt, QRectF, Signal, QPointF, QPoint
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QLinearGradient
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QLinearGradient, QFont
 
 from src.styles.tokens import Colors
 
@@ -33,11 +33,18 @@ class FlowNode(QFrame):
     delete_requested = Signal(object)
     connection_started = Signal(object)
     locate_requested = Signal(object)
+    edit_on_map_requested = Signal(object)
+    pin_pick_requested = Signal(object)
+    pin_locate_requested = Signal(object)
+    pin_clear_requested = Signal(object)
 
     WIDTH, HEIGHT = 172, 74
+    HANDLE_R = 9
+    HANDLE_HIT_R = 13
+    CONNECT_ICON = "🔗"
 
     def __init__(self, node_id: str, node_type: str, title: str, subtitle: str = "",
-                 ref_type: str = "", ref_id: str = "", parent=None):
+                 ref_type: str = "", ref_id: str = "", pin: dict | None = None, parent=None):
         super().__init__(parent)
         self.node_id = node_id
         self._type = node_type if node_type in NODE_TYPES else "objetivo"
@@ -45,13 +52,14 @@ class FlowNode(QFrame):
         self._subtitle = subtitle
         self._ref_type = ref_type
         self._ref_id = ref_id
+        self.pin = dict(pin) if pin else None
         self._dragging = False
         self._drag_offset = QPoint(0, 0)
+        self._handle_hovering = False
 
         self.setFixedSize(self.WIDTH, self.HEIGHT)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self._show_menu)
+        self.setMouseTracking(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 6, 8, 6)
@@ -74,6 +82,28 @@ class FlowNode(QFrame):
         """)
         self._locate_btn.clicked.connect(lambda: self.locate_requested.emit(self))
         top_row.addWidget(self._locate_btn)
+        self._edit_map_btn = QToolButton()
+        self._edit_map_btn.setText("🖊")
+        self._edit_map_btn.setFixedSize(14, 14)
+        self._edit_map_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._edit_map_btn.setToolTip("Colocar/editar no mapa")
+        self._edit_map_btn.setStyleSheet("""
+            QToolButton { border: none; background: transparent; font-size: 9px; }
+            QToolButton:hover { background: rgba(255,255,255,0.15); border-radius: 7px; }
+        """)
+        self._edit_map_btn.clicked.connect(lambda: self.edit_on_map_requested.emit(self))
+        top_row.addWidget(self._edit_map_btn)
+        self._pin_btn = QToolButton()
+        self._pin_btn.setFixedSize(14, 14)
+        self._pin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pin_btn.setStyleSheet("""
+            QToolButton { border: none; background: transparent; font-size: 9px; }
+            QToolButton:hover { background: rgba(255,255,255,0.15); border-radius: 7px; }
+        """)
+        self._pin_btn.clicked.connect(self._on_pin_button_clicked)
+        self._pin_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._pin_btn.customContextMenuRequested.connect(self._on_pin_button_right_click)
+        top_row.addWidget(self._pin_btn)
         del_btn = QToolButton()
         del_btn.setText("✕")
         del_btn.setFixedSize(14, 14)
@@ -110,6 +140,13 @@ class FlowNode(QFrame):
     def title(self) -> str:
         return self._title
 
+    @property
+    def name(self) -> str:
+        """Alias for title() — lets this node be fed directly into
+        progression/map_overlay.py's _MapMarkerItem, which is written
+        against _ProgressionNode's `.name` attribute (see its tooltip)."""
+        return self._title
+
     def subtitle(self) -> str:
         return self._subtitle
 
@@ -131,8 +168,38 @@ class FlowNode(QFrame):
         self._refresh_labels()
         self.update()
 
+    # ── pino decorativo (independente do ref_type/ref_id) ──
+
+    def set_pin(self, x: float, y: float):
+        self.pin = {"x": x, "y": y}
+        self._refresh_pin_button()
+
+    def clear_pin(self):
+        self.pin = None
+        self._refresh_pin_button()
+
+    def _on_pin_button_clicked(self):
+        if self.pin:
+            self.pin_locate_requested.emit(self)
+        else:
+            self.pin_pick_requested.emit(self)
+
+    def _on_pin_button_right_click(self, _pos):
+        if self.pin:
+            self.pin_clear_requested.emit(self)
+
+    def _refresh_pin_button(self):
+        if self.pin:
+            self._pin_btn.setText("🎯")
+            self._pin_btn.setToolTip("Ver marcador no mapa • clique direito remove")
+        else:
+            self._pin_btn.setText("📌")
+            self._pin_btn.setToolTip("Colocar marcador no mapa (mini-mapa acima)")
+
     def _refresh_labels(self):
         self._locate_btn.setVisible(bool(self._ref_id))
+        self._edit_map_btn.setVisible(bool(self._ref_id))
+        self._refresh_pin_button()
         meta = NODE_TYPES[self._type]
         self._type_lbl.setText(f"{meta['icon']} {meta['label'].upper()}")
         self._type_lbl.setStyleSheet(
@@ -175,18 +242,44 @@ class FlowNode(QFrame):
         p.setPen(QPen(pen_color, 1.5))
         p.drawPath(path)
 
-        # Pontos de conexão — esquerda recebe, direita inicia arraste.
+        # Ponto de entrada (esquerda)
         p.setPen(Qt.PenStyle.NoPen)
         dot_color = QColor(color)
         dot_color.setAlpha(150)
         p.setBrush(dot_color)
-        p.drawEllipse(QPointF(w - 5, h / 2), 3, 3)
         p.drawEllipse(QPointF(5, h / 2), 3, 3)
+
+        # Alça 🔗 de conexão (canto inferior direito)
+        hc = self._handle_center_local()
+        hr = self.HANDLE_R
+        handle_rect = QRectF(hc.x() - hr, hc.y() - hr, 2 * hr, 2 * hr)
+        if self._handle_hovering:
+            glow_rect = QRectF(hc.x() - hr - 4, hc.y() - hr - 4, 2 * (hr + 4), 2 * (hr + 4))
+            glow_color = QColor(color)
+            glow_color.setAlpha(90)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(glow_color)
+            p.drawEllipse(glow_rect)
+            handle_rect = QRectF(hc.x() - hr - 1.5, hc.y() - hr - 1.5, 2 * (hr + 1.5), 2 * (hr + 1.5))
+        p.setPen(QPen(QColor(color), 1.5))
+        p.setBrush(QBrush(QColor(20, 26, 40, 230)))
+        p.drawEllipse(handle_rect)
+        p.setFont(QFont("Segoe UI Emoji", 7))
+        p.setPen(QColor(color))
+        p.drawText(handle_rect, Qt.AlignmentFlag.AlignCenter, self.CONNECT_ICON)
         p.end()
+
+    def _handle_center_local(self) -> QPointF:
+        return QPointF(self.WIDTH - self.HANDLE_R - 2, self.HEIGHT - self.HANDLE_R - 2)
+
+    def _is_over_handle(self, pos: QPoint) -> bool:
+        hc = self._handle_center_local()
+        dx, dy = pos.x() - hc.x(), pos.y() - hc.y()
+        return dx * dx + dy * dy <= self.HANDLE_HIT_R * self.HANDLE_HIT_R
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            if event.pos().x() > self.width() - 16:
+            if self._is_over_handle(event.pos()):
                 self.connection_started.emit(self)
                 return
             self._dragging = True
@@ -195,6 +288,11 @@ class FlowNode(QFrame):
             self.raise_()
 
     def mouseMoveEvent(self, event):
+        over = self._is_over_handle(event.pos())
+        if over != self._handle_hovering:
+            self._handle_hovering = over
+            self.update()
+        self.setCursor(Qt.CursorShape.CrossCursor if over else (Qt.CursorShape.ClosedHandCursor if self._dragging else Qt.CursorShape.OpenHandCursor))
         if self._dragging:
             new_pos = self.mapToParent(event.pos() - self._drag_offset)
             parent = self.parentWidget()
@@ -206,6 +304,13 @@ class FlowNode(QFrame):
                 self.move(new_pos)
             self.moved.emit()
 
+    def leaveEvent(self, event):
+        if self._handle_hovering:
+            self._handle_hovering = False
+            self.update()
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().leaveEvent(event)
+
     def mouseReleaseEvent(self, event):
         self._dragging = False
         self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -214,18 +319,9 @@ class FlowNode(QFrame):
         self.edit_requested.emit(self)
 
     def right_point(self) -> QPointF:
-        return QPointF(self.x() + self.width(), self.y() + self.height() / 2)
+        """Ponto de saída da seta — centro da alça 🔗 em coordenadas do canvas."""
+        hc = self._handle_center_local()
+        return QPointF(self.x() + hc.x(), self.y() + hc.y())
 
     def left_point(self) -> QPointF:
         return QPointF(self.x(), self.y() + self.height() / 2)
-
-    def _show_menu(self, pos):
-        menu = QMenu(self)
-        menu.setStyleSheet(f"""
-            QMenu {{ background: {Colors.BG_ELEVATED}; border: 1px solid {Colors.BORDER};
-                     color: {Colors.TEXT_PRIMARY}; font-size: 10px; }}
-            QMenu::item:selected {{ background: {Colors.ACCENT_DIM}; }}
-        """)
-        menu.addAction("✏ Editar", lambda: self.edit_requested.emit(self))
-        menu.addAction("🗑 Remover", lambda: self.delete_requested.emit(self))
-        menu.exec(self.mapToGlobal(pos))

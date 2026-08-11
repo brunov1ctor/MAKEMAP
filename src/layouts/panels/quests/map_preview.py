@@ -19,31 +19,55 @@ igual ao que SpawnMediator._sync_to_db já faz.
 from __future__ import annotations
 
 from PySide6.QtWidgets import QGraphicsView, QGraphicsEllipseItem, QFrame
-from PySide6.QtCore import Qt, QRectF, QTimer
+from PySide6.QtCore import Qt, QRectF, QTimer, QPoint
 from PySide6.QtGui import QPainter, QColor, QPen
 
 from src.canvas.z_order import ZOrder
+from src.layouts.panels.quests.map_lookup import find_ref_item
 
 _PING_MS = 1800
 _FRAME_PADDING = 90
 
 
 class QuestMapPreview(QGraphicsView):
-    def __init__(self, scene_provider=None, parent=None):
+    def __init__(self, scene_provider=None, viewport_provider=None, parent=None):
         super().__init__(parent)
         self._scene_provider = scene_provider or (lambda: None)
+        self._viewport_provider = viewport_provider or (lambda: None)
+        self._bg_source = None  # main Viewport, for background_snapshot()
         self._attached_scene = None
         self._ping_item: QGraphicsEllipseItem | None = None
+        self._panning = False
+        self._pan_last_pos = QPoint()
+        # fit_all()/frame_all() can be asked to frame content before this
+        # widget has ever been laid out (e.g. FlowTab.load() runs the
+        # instant a quest is selected, which can be before Qt hands this
+        # view a real viewport size) — fitInView() against a 0x0 viewport
+        # computes a degenerate transform, and since showEvent() below only
+        # re-fits when the attached scene itself changes (not on every
+        # re-show), that bad transform used to stick forever, reading as a
+        # permanently blank preview. Retry once real geometry shows up.
+        self._pending_fit = None
+        # Armed by begin_pick() (see FlowTab's 📌 wiring) — the next left
+        # click reports its scene position to the callback instead of
+        # starting a pan, so a Quest node's decorative pin can be placed by
+        # clicking straight in this mini-map instead of jumping to the main
+        # canvas.
+        self._pick_callback = None
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setBackgroundBrush(QColor(10, 18, 32))
         # Lê a cena sem participar dela — nenhum clique aqui seleciona,
-        # move ou edita um item do mapa real; arrastar ainda pan-eia a
-        # view (ScrollHandDrag não depende de setInteractive).
+        # move ou edita um item do mapa real. setInteractive(False) também
+        # desativa o ScrollHandDrag nativo do Qt (ele só funciona com a
+        # view interativa), então o pan é implementado à mão em
+        # mousePressEvent/mouseMoveEvent/mouseReleaseEvent abaixo.
         self.setInteractive(False)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # so Escape can cancel a pending pick
         # Sem altura mínima própria — mora dentro de um LiveSplitter
         # colapsável (ver flow_tab.py) e precisa poder ir a zero quando o
         # usuário arrasta o divisor até esconder de vez a seção do mapa.
@@ -63,6 +87,18 @@ class QuestMapPreview(QGraphicsView):
         # and blow that framing back out to the whole world every time.
         if self._attach_scene(only_if_changed=True):
             self.fit_all()
+        elif self._pending_fit is not None and self._has_real_geometry():
+            pending, self._pending_fit = self._pending_fit, None
+            pending()
+
+    def _has_real_geometry(self) -> bool:
+        return self.viewport().width() > 1 and self.viewport().height() > 1
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._pending_fit is not None and self._has_real_geometry():
+            pending, self._pending_fit = self._pending_fit, None
+            pending()
 
     def _attach_scene(self, only_if_changed: bool = False) -> bool:
         scene = self._scene_provider()
@@ -70,25 +106,32 @@ class QuestMapPreview(QGraphicsView):
         if changed:
             self.setScene(scene)
             self._attached_scene = scene
+            self._bg_source = self._viewport_provider()
         if only_if_changed:
             return changed and scene is not None
         return scene is not None
 
-    @staticmethod
-    def _matches(item, ref_type: str, ref_id: str) -> bool:
-        data = item.data(0)
-        if not isinstance(data, dict):
-            return False
-        return data.get("item_type") == f"{ref_type}_spawn" and data.get("mob_id") == ref_id
+    def drawBackground(self, painter, rect: QRectF):
+        """The main Viewport paints its terrain/parallax background via its
+        own drawBackground() override, which only applies to that one
+        QGraphicsView — this secondary view on the same scene never gets it
+        and would otherwise render pure black behind the scene's items (see
+        MiniMapView.drawBackground, same fix)."""
+        if self._bg_source is None:
+            super().drawBackground(painter, rect)
+            return
+        snap = self._bg_source.background_snapshot()
+        if snap is None:
+            super().drawBackground(painter, rect)
+            return
+        kind, value = snap
+        if kind == "color":
+            painter.fillRect(rect, value)
+        else:
+            painter.drawPixmap(rect, value, QRectF(value.rect()))
 
     def _find_item(self, ref_type: str, ref_id: str):
-        scene = self.scene()
-        if scene is None or not ref_id or ref_type not in ("npc", "mob"):
-            return None
-        for item in scene.items():
-            if self._matches(item, ref_type, ref_id):
-                return item
-        return None
+        return find_ref_item(self.scene(), ref_type, ref_id)
 
     # ── API pública ──
 
@@ -106,6 +149,16 @@ class QuestMapPreview(QGraphicsView):
         self._show_ping(center, color)
         return True
 
+    def locate_point(self, scene_pos, color: QColor) -> bool:
+        """Same as locate(), but for a bare scene point — used for a Flow
+        node's own decorative pin (see FlowNode.pin), which isn't a real
+        placed NPC/Mob item find_ref_item() could look up."""
+        if not self._attach_scene():
+            return False
+        self.centerOn(scene_pos)
+        self._show_ping(scene_pos, color)
+        return True
+
     def fit_all(self) -> bool:
         """Enquadra TODO o conteúdo do mapa (não só os nós vinculados a esta
         quest) — o ponto de partida esperado ao abrir/trocar de quest, igual
@@ -117,6 +170,9 @@ class QuestMapPreview(QGraphicsView):
         rect = self.scene().itemsBoundingRect()
         if rect.isEmpty():
             return False
+        if not self._has_real_geometry():
+            self._pending_fit = self.fit_all
+            return True
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
         return True
 
@@ -140,6 +196,9 @@ class QuestMapPreview(QGraphicsView):
             (max(xs) - min(xs)) + _FRAME_PADDING * 2,
             (max(ys) - min(ys)) + _FRAME_PADDING * 2,
         )
+        if not self._has_real_geometry():
+            self._pending_fit = lambda: self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            return len(points)
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
         return len(points)
 
@@ -175,12 +234,79 @@ class QuestMapPreview(QGraphicsView):
             pass
         self._ping_item = None
 
+    # ── colocar um pino clicando direto no preview ──
+
+    def begin_pick(self, callback) -> bool:
+        """Arms pick mode: the next left click reports its scene position
+        to `callback(QPointF)` instead of panning. Cancelled by Escape or
+        by arming a new pick before the previous one resolves. Returns
+        False (nothing armed) if there's no project/map to click on."""
+        if not self._attach_scene():
+            return False
+        self._pick_callback = callback
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        return True
+
+    def cancel_pick(self):
+        if self._pick_callback is None:
+            return
+        self._pick_callback = None
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self._pick_callback is not None:
+            self.cancel_pick()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     # ── zoom livre com a roda do mouse (sem afetar o mapa principal) ──
 
     def wheelEvent(self, event):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         self.scale(factor, factor)
+        event.accept()
+
+    # ── pan livre arrastando com o botão esquerdo (setInteractive(False)
+    # desliga o ScrollHandDrag nativo do QGraphicsView, então isso substitui
+    # ele diretamente pelas barras de rolagem) ──
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._pick_callback is not None:
+            callback, self._pick_callback = self._pick_callback, None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            callback(self.mapToScene(event.pos()))
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self.scene() is not None:
+            self._panning = True
+            self._pan_last_pos = event.pos()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._panning:
+            delta = event.pos() - self._pan_last_pos
+            self._pan_last_pos = event.pos()
+            h_bar = self.horizontalScrollBar()
+            v_bar = self.verticalScrollBar()
+            h_bar.setValue(h_bar.value() - delta.x())
+            v_bar.setValue(v_bar.value() - delta.y())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._panning:
+            self._panning = False
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def hideEvent(self, event):
         self._clear_ping()
+        self.cancel_pick()
         super().hideEvent(event)

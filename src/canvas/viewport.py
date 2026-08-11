@@ -261,7 +261,7 @@ class Viewport(QGraphicsView):
         self._bg_color = None
         self._bg_pixmap = None
         self.setBackgroundBrush(Qt.BrushStyle.NoBrush)
-        ordered = sorted(layers, key=lambda l: l.order)
+        ordered = sorted((l for l in layers if l.visible), key=lambda l: l.order)
         self._parallax_pixmaps = [
             _ParallaxRenderLayer(layer, QPixmap(layer.image_path)) for layer in ordered
         ]
@@ -269,7 +269,7 @@ class Viewport(QGraphicsView):
         needs_clock = any(
             l.motion_mode == "orbit" or l.opacity_pulse or l.scale_pulse or l.rotation_pulse
             or any(e.enabled and e.kind == "wave" for e in l.effects)
-            for l in layers
+            for l in ordered
         )
         if needs_clock:
             if self._parallax_timer is None:
@@ -287,6 +287,22 @@ class Viewport(QGraphicsView):
         if self._parallax_timer is not None:
             self._parallax_timer.stop()
         self.viewport().update()
+
+    def background_snapshot(self):
+        """A cheap, non-animated stand-in for whatever drawBackground()
+        would paint — used by secondary views of this same scene (e.g. the
+        MiniMap) that don't get drawBackground()'s per-instance override
+        and would otherwise render the background as plain black. Picks the
+        bottom-most parallax layer (the one closest to a regular static
+        backdrop) rather than compositing the whole stack, since a minimap
+        thumbnail doesn't need per-layer motion/blend accuracy."""
+        if self._parallax_pixmaps:
+            return "pixmap", self._parallax_pixmaps[0].pixmap
+        if self._bg_pixmap:
+            return "pixmap", self._bg_pixmap
+        if self._bg_color:
+            return "color", self._bg_color
+        return None
 
     def _parallax_time(self) -> float:
         return self._parallax_clock.elapsed() / 1000.0 if self._parallax_clock.isValid() else 0.0
@@ -380,6 +396,25 @@ class Viewport(QGraphicsView):
         if elapsed > 0:
             self.fps_updated.emit(1000.0 / elapsed)
         super().paintEvent(event)
+
+    def paint_export_background(self, painter: QPainter, rect: QRectF):
+        """Paints this viewport's live background (parallax/pixmap/color)
+        across `rect`, used by map_exporter — drawBackground() below ties its
+        tiling to the current on-screen viewport rect by design (so panning
+        and partial repaints don't desync the pattern), which isn't right for
+        an export whose target rect may be a different size/position than
+        what's currently on screen."""
+        if self._parallax_pixmaps:
+            tile_w, tile_h = rect.width(), rect.height()
+            if tile_w > 0 and tile_h > 0:
+                t = self._parallax_time()
+                for render_layer in self._parallax_pixmaps:
+                    self._draw_parallax_layer(painter, rect, tile_w, tile_h, render_layer, t)
+                painter.setOpacity(1.0)
+        elif self._bg_pixmap:
+            painter.drawPixmap(rect.toRect(), self._bg_pixmap)
+        else:
+            painter.fillRect(rect, self.backgroundBrush())
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
         if self._parallax_pixmaps:

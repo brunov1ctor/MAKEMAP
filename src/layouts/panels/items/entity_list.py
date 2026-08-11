@@ -168,7 +168,7 @@ class EntityListColumn(QFrame):
             QTableWidget {{ background: transparent; border: none; color: {Colors.TEXT_PRIMARY};
                 font-size: 10px; gridline-color: transparent; }}
             QTableWidget::item {{ padding: 2px 6px; border-bottom: 1px solid {Colors.BORDER_SUBTLE}; }}
-            QTableWidget::item:selected {{ background: {Colors.ACCENT_DIM}; color: {Colors.TEXT_PRIMARY}; }}
+            QTableWidget::item:selected {{ background: {Colors.ACCENT_DIM}; color: {Colors.ACCENT}; }}
             QHeaderView::section {{ background: transparent; color: {Colors.TEXT_MUTED};
                 border: none; border-bottom: 1px solid {Colors.BORDER}; padding: 4px 6px;
                 font-size: 9px; font-weight: bold; }}

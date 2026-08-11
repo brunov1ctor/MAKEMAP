@@ -1,20 +1,17 @@
 """QuestsPanel — o módulo em tela cheia "Quests".
 
-Três colunas lado a lado dentro de um splitter horizontal, igual ao layout
-de referência:
+Três colunas lado a lado dentro de um splitter horizontal:
 
-    ┌─ lista ─┬──────── conteúdo (abas) ────────┬─ propriedades ─┐
-    │ quests  │ Fluxo/Geral/Objetivos/.../Notas  │ da quest       │
-    └─────────┴──────────────────────────────────┴────────────────┘
+    ┌─ lista ─┬──── conteúdo (Fluxo) ────┬─ propriedades ─┐
+    │ quests  │ grafo de nós + preview   │ da quest       │
+    │         │ do mapa real             │                │
+    └─────────┴───────────────────────────┴────────────────┘
 
-8 das 9 abas têm edição de verdade: Fluxo (grafo de nós — ver flow_tab.py/
-flow_canvas.py/flow_node.py), Geral (cadeia de missão), Objetivos e
-Condições/Eventos (EditableRowList sobre suas colunas JSON), NPCs e
-Diálogos (quest_npcs + texto livre), Scripts e Notas (texto livre).
-"Recompensas" continua placeholder como aba de conteúdo — a edição de
-recompensas de verdade mora no painel de propriedades à direita (ver
-properties_panel.py), que é 3 cartões separados (Propriedades da Quest /
-Configurações / Recompensas), sempre visíveis independente da aba ativa.
+O conteúdo do meio é só a aba Fluxo (grafo de nós — ver flow_tab.py/
+flow_canvas.py/flow_node.py — com o preview do mapa real acima dele). A
+edição de propriedades/recompensas mora no painel à direita (ver
+properties_panel.py), 3 cartões separados (Propriedades da Quest /
+Configurações / Recompensas), sempre visível.
 """
 
 from __future__ import annotations
@@ -25,8 +22,11 @@ import uuid
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QSizePolicy, QStackedWidget, QComboBox, QToolButton, QMenu,
+    QGraphicsDropShadowEffect,
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import (
+    Qt, Signal, QTimer, QPropertyAnimation, QEasingCurve, QSequentialAnimationGroup,
+)
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 
 from src.styles.tokens import Colors, combo_qss
@@ -34,17 +34,10 @@ from src.components.live_splitter import LiveSplitter
 from src.services.project_assets import import_asset, resolve_asset_path
 from src.layouts.panels.quests.record_list import RecordListColumn
 from src.layouts.panels.quests.constants import (
-    panel_frame_style, sub_header, _no_wheel, STATUS_LABELS, QUEST_TYPES, CONTENT_TABS,
+    panel_frame_style, sub_header, _no_wheel, STATUS_LABELS, QUEST_TYPES,
     hrule, json_obj,
 )
-from src.layouts.panels.quests.tab_bar import ContentTabBar
 from src.layouts.panels.quests.flow_tab import FlowTab
-from src.layouts.panels.quests.general_tab import GeneralTab
-from src.layouts.panels.quests.objectives_tab import ObjectivesTab
-from src.layouts.panels.quests.npcs_dialogs_tab import NpcsDialogsTab
-from src.layouts.panels.quests.conditions_tab import ConditionsTab
-from src.layouts.panels.quests.events_tab import EventsTab
-from src.layouts.panels.quests.text_field_tab import TextFieldTab
 from src.layouts.panels.quests.properties_panel import QuestPropertiesPanel
 from src.layouts.panels.quests.panel_import_export_mixin import QuestsImportExportMixin
 
@@ -60,11 +53,12 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
     """Módulo em tela cheia de Quests."""
 
     closed = Signal()
+    edit_on_map_requested = Signal(str, str, object)  # ref_type, ref_id, color
 
     _COL_RATIOS = (0.22, 0.53, 0.25)
     _NUDGE = 6
 
-    def __init__(self, uow, project_dir=None, scene_provider=None, parent=None):
+    def __init__(self, uow, project_dir=None, scene_provider=None, viewport_provider=None, parent=None):
         super().__init__(parent)
         self._uow = uow
         self._project_dir = project_dir
@@ -75,8 +69,10 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         # MenuViewMediator already uses for zones_provider/zone_thumbnail_
         # provider on MobsPanel/NPCsPanel.
         self._scene_provider = scene_provider or (lambda: None)
+        # Same idiom, for the mini-map's terrain background (see
+        # QuestMapPreview.drawBackground / Viewport.background_snapshot).
+        self._viewport_provider = viewport_provider or (lambda: None)
         self._quests: list[dict] = []
-        self._chains: list[dict] = []
         self._regions: list[dict] = []
         self._current_quest_id = ""
         self._user_dragged: set[int] = set()
@@ -99,7 +95,6 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         self._reload_items_menu()
         self._reload_npcs_menu()
         self._reload_mobs_menu()
-        self._reload_chains()
         self._reload_quests()
         self._apply_responsive_layout()
 
@@ -218,6 +213,8 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         """)
         new_btn.clicked.connect(self._on_new_quest)
         column.addWidget(new_btn)
+        self._new_quest_btn = new_btn
+        self._new_quest_glow = self._make_neon_glow(new_btn)
 
         region_names = [r.get("name", "") for r in (self._uow.regions.get_all() if self._uow else [])]
         self._quest_list = RecordListColumn(
@@ -231,6 +228,44 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         column.addWidget(self._quest_list, 1)
         column.addWidget(self._build_summary_card())
         return frame
+
+    @staticmethod
+    def _make_neon_glow(widget) -> QSequentialAnimationGroup:
+        """Pulso neon discreto (raio do brilho subindo e descendo, tipo o
+        botão de sugestão do Copilot) — chama atenção pro "+ Nova Quest"
+        só enquanto não existe nenhuma quest ainda; ligado/desligado por
+        _set_new_quest_glow() a partir de _reload_quests()."""
+        effect = QGraphicsDropShadowEffect(widget)
+        effect.setColor(QColor(Colors.ACCENT))
+        effect.setOffset(0, 0)
+        effect.setBlurRadius(6)
+        widget.setGraphicsEffect(effect)
+
+        grow = QPropertyAnimation(effect, b"blurRadius", widget)
+        grow.setStartValue(6)
+        grow.setEndValue(22)
+        grow.setDuration(1000)
+        grow.setEasingCurve(QEasingCurve.Type.InOutSine)
+
+        shrink = QPropertyAnimation(effect, b"blurRadius", widget)
+        shrink.setStartValue(22)
+        shrink.setEndValue(6)
+        shrink.setDuration(1000)
+        shrink.setEasingCurve(QEasingCurve.Type.InOutSine)
+
+        group = QSequentialAnimationGroup(widget)
+        group.addAnimation(grow)
+        group.addAnimation(shrink)
+        group.setLoopCount(-1)
+        return group
+
+    def _set_new_quest_glow(self, active: bool):
+        if active:
+            if self._new_quest_glow.state() != QPropertyAnimation.State.Running:
+                self._new_quest_glow.start()
+        else:
+            self._new_quest_glow.stop()
+            self._new_quest_btn.graphicsEffect().setBlurRadius(6)
 
     def _build_summary_card(self) -> QFrame:
         frame = QFrame()
@@ -344,77 +379,10 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         title_row.addWidget(self._code_lbl)
         column.addLayout(title_row)
 
-        self._tabs = ContentTabBar(CONTENT_TABS)
-        self._tabs.selected.connect(self._on_tab_selected)
-        column.addWidget(self._tabs)
-
-        self._stack = QStackedWidget()
-        self._tab_index: dict[str, int] = {}
-        for key, icon, label in CONTENT_TABS:
-            if key == "fluxo":
-                self._flow_tab = FlowTab(scene_provider=self._scene_provider)
-                self._flow_tab.changed.connect(self._save_timer.start)
-                page = self._flow_tab
-            elif key == "geral":
-                self._general_tab = GeneralTab()
-                self._general_tab.changed.connect(self._save_timer.start)
-                self._general_tab.chain_create_requested.connect(self._on_chain_create)
-                page = self._general_tab
-            elif key == "objetivos":
-                self._objectives_tab = ObjectivesTab()
-                self._objectives_tab.changed.connect(self._save_timer.start)
-                page = self._objectives_tab
-            elif key == "npcs_dialogos":
-                self._npcs_tab = NpcsDialogsTab()
-                self._npcs_tab.changed.connect(self._save_timer.start)
-                page = self._npcs_tab
-            elif key == "condicoes":
-                self._conditions_tab = ConditionsTab()
-                self._conditions_tab.changed.connect(self._save_timer.start)
-                page = self._conditions_tab
-            elif key == "eventos":
-                self._events_tab = EventsTab()
-                self._events_tab.changed.connect(self._save_timer.start)
-                page = self._events_tab
-            elif key == "scripts":
-                self._scripts_tab = TextFieldTab(
-                    "Scripts", "Hooks de script (ex.: Lua) que rodam nos eventos desta quest.",
-                    "scripts", placeholder="-- cole aqui o script...", monospace=True,
-                )
-                self._scripts_tab.changed.connect(self._save_timer.start)
-                page = self._scripts_tab
-            elif key == "notas":
-                self._notes_tab = TextFieldTab(
-                    "Notas", "Anotações livres do designer — não aparece pro jogador.",
-                    "notes", placeholder="Anotações...",
-                )
-                self._notes_tab.changed.connect(self._save_timer.start)
-                page = self._notes_tab
-            else:
-                page = self._build_placeholder_tab(icon, label)
-            self._tab_index[key] = self._stack.addWidget(page)
-        column.addWidget(self._stack, 1)
-        return frame
-
-    def _build_placeholder_tab(self, icon: str, label: str) -> QFrame:
-        frame = QFrame()
-        frame.setObjectName("subpanel")
-        frame.setStyleSheet(panel_frame_style())
-        lay = QVBoxLayout(frame)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.setSpacing(8)
-        icon_lbl = QLabel(icon)
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_lbl.setStyleSheet("font-size: 34px; background: transparent; border: none;")
-        lay.addWidget(icon_lbl)
-        msg = QLabel(f"{label}")
-        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        msg.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11pt; background: transparent; border: none;")
-        lay.addWidget(msg)
-        hint = QLabel("Em breve...")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9pt; font-style: italic; background: transparent; border: none;")
-        lay.addWidget(hint)
+        self._flow_tab = FlowTab(scene_provider=self._scene_provider, viewport_provider=self._viewport_provider)
+        self._flow_tab.changed.connect(self._save_timer.start)
+        self._flow_tab.edit_on_map_requested.connect(self.edit_on_map_requested.emit)
+        column.addWidget(self._flow_tab, 1)
         return frame
 
     def _build_properties_column(self) -> QuestPropertiesPanel:
@@ -451,11 +419,6 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
             positions[i] = cumulative
         self._auto_positions = positions
 
-    # ── Abas de conteúdo ──
-
-    def _on_tab_selected(self, key: str):
-        self._stack.setCurrentIndex(self._tab_index.get(key, 0))
-
     # ── Regiões / catálogo de itens (para o painel de propriedades) ──
 
     def _reload_regions(self):
@@ -472,7 +435,6 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
     def _reload_npcs_menu(self):
         self._npcs_catalog = sorted(
             self._uow.npcs.get_all() if self._uow else [], key=lambda n: n.get("name", ""))
-        self._npcs_tab.set_npcs(self._npcs_catalog)
         self._refresh_flow_catalog()
 
     def _reload_mobs_menu(self):
@@ -487,31 +449,6 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         momentos diferentes do __init__."""
         self._flow_tab.set_catalog(
             getattr(self, "_npcs_catalog", []), getattr(self, "_mobs_catalog", []))
-
-    # ── Cadeias de Quest ──
-
-    def _reload_chains(self):
-        self._chains = self._uow.quest_chains.get_all() if self._uow else []
-        self._chains.sort(key=lambda c: c.get("name", ""))
-        self._general_tab.set_chains(self._chains)
-
-    def _chain_by_name(self, name: str) -> dict | None:
-        return next((c for c in self._chains if c.get("name") == name), None)
-
-    def _on_chain_create(self, name: str):
-        if not self._uow or not name:
-            return
-        self._uow.quest_chains.create(name=name)
-        self._reload_chains()
-
-    def _refresh_chain_quests_preview(self):
-        record = self._quest_by_id(self._current_quest_id)
-        chain_id = record.get("chain_id") if record else ""
-        if not chain_id:
-            self._general_tab.set_chain_quests([])
-            return
-        quests = self._uow.quests.get_by_chain(chain_id) if self._uow else []
-        self._general_tab.set_chain_quests(quests, current_id=self._current_quest_id)
 
     # ── Quests ──
 
@@ -547,11 +484,14 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         self._quests.sort(key=lambda q: (q.get("name") or ""))
         self._refresh_quest_list_view()
         self._refresh_summary()
+        self._set_new_quest_glow(not self._quests)
 
         if select_id:
             self._on_quest_selected(select_id)
         elif self._current_quest_id and self._quest_by_id(self._current_quest_id):
             self._quest_list.select(self._current_quest_id)
+        elif self._quests:
+            self._on_quest_selected(self._quests[0]["id"])
         else:
             self._current_quest_id = ""
             self._set_empty()
@@ -565,14 +505,7 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         self._status_combo.blockSignals(True)
         self._status_combo.setCurrentIndex(0)
         self._status_combo.blockSignals(False)
-        self._general_tab.setEnabled(False)
         self._flow_tab.set_empty()
-        self._objectives_tab.set_empty()
-        self._npcs_tab.set_empty()
-        self._conditions_tab.set_empty()
-        self._events_tab.set_empty()
-        self._scripts_tab.set_empty()
-        self._notes_tab.set_empty()
         self._properties.set_empty()
 
     def _load_quest_into_editors(self, record: dict):
@@ -584,20 +517,7 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         self._status_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._status_combo.blockSignals(False)
 
-        self._general_tab.setEnabled(True)
-        chain = next((c for c in self._chains if c.get("id") == record.get("chain_id")), None)
-        self._general_tab.load(record, chain_name=chain.get("name", "") if chain else "")
-        self._refresh_chain_quests_preview()
-
         self._flow_tab.load(record)
-        self._objectives_tab.load(record)
-        self._conditions_tab.load(record)
-        self._events_tab.load(record)
-        self._scripts_tab.load(record)
-        self._notes_tab.load(record)
-
-        npc_roles = {r["role"]: r["npc_id"] for r in self._uow.quest_npcs.get_by_quest(record["id"])} if self._uow else {}
-        self._npcs_tab.load(record, giver_id=npc_roles.get("giver", ""), turn_in_id=npc_roles.get("turn_in", ""))
 
         display = dict(record)
         display["_region_name"] = self._region_name(record.get("region_id") or "")
@@ -649,32 +569,7 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         else:
             values.pop("image", None)
 
-        general_values = self._general_tab.collect()
-        chain_name = general_values.pop("_chain_name", "")
-        if chain_name:
-            chain = self._chain_by_name(chain_name)
-            if not chain:
-                chain_id = self._uow.quest_chains.create(name=chain_name)
-                self._reload_chains()
-            else:
-                chain_id = chain["id"]
-            general_values["chain_id"] = chain_id
-        else:
-            general_values["chain_id"] = None
-        values.update(general_values)
         values.update(self._flow_tab.collect())
-        values.update(self._objectives_tab.collect())
-        values.update(self._conditions_tab.collect())
-        values.update(self._events_tab.collect())
-        values.update(self._scripts_tab.collect())
-        values.update(self._notes_tab.collect())
-
-        npc_values = self._npcs_tab.collect()
-        giver_id = npc_values.pop("_giver_id", "")
-        turn_in_id = npc_values.pop("_turn_in_id", "")
-        values.update(npc_values)
-        self._uow.quest_npcs.set_role(self._current_quest_id, giver_id or None, "giver")
-        self._uow.quest_npcs.set_role(self._current_quest_id, turn_in_id or None, "turn_in")
 
         self._uow.quests.update(self._current_quest_id, **values)
         record = self._quest_by_id(self._current_quest_id)
@@ -683,7 +578,6 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         self._refresh_quest_list_view()
         self._refresh_summary()
         self._quest_list.select(self._current_quest_id)
-        self._refresh_chain_quests_preview()
 
     def _flush_save(self):
         if self._save_timer.isActive():

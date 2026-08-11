@@ -111,12 +111,23 @@ class ItemInteraction:
         if self.try_begin_handle(scene_pos):
             return True
 
+        in_selection_bounds = not add and self.pos_in_selection_bounds(scene_pos)
+
         item = self.hit_selectable(scene_pos, item_filter)
         if item is not None:
+            if in_selection_bounds and item not in self.viewport.scene().selectedItems():
+                # scene_pos lands inside the current selection's own bounds
+                # (e.g. a light's cone gizmo) but itemAt()/the probe hit
+                # found something else parked underneath (e.g. bare terrain,
+                # since a light's shape() is a tiny hotspot, not its whole
+                # visible cone) — keep dragging the selection instead of
+                # hijacking the click into selecting whatever's beneath it.
+                self.begin_selection_drag(scene_pos)
+                return True
             self.select_and_begin_drag(item, scene_pos, add)
             return True
 
-        if not add and self.pos_in_selection_bounds(scene_pos):
+        if in_selection_bounds:
             self.begin_selection_drag(scene_pos)
             return True
 
@@ -392,21 +403,51 @@ class ItemInteraction:
         from src.canvas.light_item import LightItem
         return (TextItem, MarkerItem, LightItem)
 
+    # Rivers/roads have no `props` dataclass — their geometry lives in a
+    # point/bezier-handle list (see path_item.py's export_points/
+    # load_points) instead of a constructor argument, so they need their
+    # own clone path rather than the generic props-copy one above.
+    @staticmethod
+    def _cloneable_path_classes():
+        from src.canvas.path_item import RiverPathItem, RoadPathItem
+        return (RiverPathItem, RoadPathItem)
+
+    @staticmethod
+    def _clone_path_item(item, offset: QPointF):
+        clone = type(item)(width=item.width, texture=item._texture)
+        data = item.data(0)
+        clone.setData(0, dict(data) if data else {})
+        points, controls_out, controls_in = item.export_points()
+        clone.load_points(
+            [p + offset for p in points],
+            [c + offset if c else None for c in controls_out],
+            [c + offset if c else None for c in controls_in],
+        )
+        clone.setZValue(item.zValue())
+        return clone
+
     def _duplicate_selected(self, items: list):
-        """Clone each selected item (deep-copying its props dataclass,
-        including any painted color patterns on a TextItem) a few pixels
-        off from the original — parented to the same boundary group as the
-        original, if any, so it lands in the right place instead of being
-        reinterpreted at the scene root."""
+        """Clone each selected item a few pixels off from the original —
+        props-dataclass items (TextItem/MarkerItem/LightItem) deep-copy
+        their props and get parented to the same boundary group as the
+        original, if any, so they land in the right place instead of being
+        reinterpreted at the scene root; path items (river/road) clone via
+        their own point-list copy instead (see _clone_path_item)."""
         import copy
         from src.engines.core.history import CreateItemCommand, PlaceObjectCommand, CompositeCommand
 
         cloneable = self._cloneable_classes()
+        path_cloneable = self._cloneable_path_classes()
         OFFSET = 20.0
 
         clones = []
         cmds = []
         for item in items:
+            if isinstance(item, path_cloneable):
+                clone = self._clone_path_item(item, QPointF(OFFSET, OFFSET))
+                cmds.append(CreateItemCommand(self.viewport.scene(), clone))
+                clones.append(clone)
+                continue
             if not isinstance(item, cloneable):
                 continue
             clone = type(item)(copy.deepcopy(item.props))

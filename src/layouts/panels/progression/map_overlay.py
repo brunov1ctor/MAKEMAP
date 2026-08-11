@@ -29,6 +29,8 @@ _FLOW_TICK_MS = 40
 _FLOW_STEP = 0.01
 _FLOW_SPAN = 0.06
 _HOVER_SCALE = 1.15  # same feel as MarkerItem's own hover (see marker_item.py)
+_CLOSE_R = 6
+_CLOSE_CENTER = QPointF(_MARKER_R * 0.72, -_MARKER_R * 0.72)
 
 
 def _arrow_head_polygon(tip: QPointF, angle: float, size: float, spread: float) -> QPolygonF:
@@ -56,6 +58,7 @@ class _MapMarkerItem(QGraphicsObject):
     item.py) is made draggable — same flag, no mouse-event overrides."""
 
     moved = Signal(object, QPointF)  # (the _ProgressionNode this pin belongs to, new scene pos)
+    remove_requested = Signal(object)  # the _ProgressionNode whose pin should be cleared
 
     # How long the position must sit still before _on_settled fires and
     # persists it — ItemPositionHasChanged fires on every intermediate
@@ -74,7 +77,7 @@ class _MapMarkerItem(QGraphicsObject):
         self.setFlag(QGraphicsObject.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsObject.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsObject.GraphicsItemFlag.ItemSendsGeometryChanges, True)
-        self.setToolTip(f"Arraste para reposicionar o marcador de \"{node.name}\"")
+        self.setToolTip(f"Arraste para reposicionar o marcador de \"{node.name}\" • ✕ remove do mapa")
         # Tagged as a regular "marker" — rides the same "Marcadores" entry
         # in Camadas Ativas / the Selecionar tool's layer filter as a real
         # placed MarkerItem, instead of needing its own separate category.
@@ -108,11 +111,56 @@ class _MapMarkerItem(QGraphicsObject):
         else:
             self.setScale(1.0)
             self.setGraphicsEffect(None)
+            # Otherwise a cursor left ArrowCursor by hoverMoveEvent (below)
+            # while leaving over the ✕ badge would stick after the mouse is
+            # already off the item entirely, instead of falling back to
+            # whatever cursor the active tool/viewport normally shows.
+            self.unsetCursor()
         self.update()
+
+    def hoverMoveEvent(self, event):
+        # The ✕ badge is a click target, not a drag handle — without this
+        # it inherited whatever drag-hint cursor (e.g. Pan's OpenHandCursor)
+        # the rest of this draggable marker shows, which read as "you can
+        # drag from here" over a spot that actually deletes on click.
+        if self._over_close_badge(event.pos()):
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        else:
+            self.unsetCursor()
+        super().hoverMoveEvent(event)
+
+    def _over_close_badge(self, local_pos: QPointF) -> bool:
+        return self._hovered and math.hypot(
+            local_pos.x() - _CLOSE_CENTER.x(), local_pos.y() - _CLOSE_CENTER.y()
+        ) <= _CLOSE_R
 
     def boundingRect(self) -> QRectF:
         r = _MARKER_R + 6
         return QRectF(-r, -r, 2 * r, 2 * r)
+
+    def try_close(self, scene_pos: QPointF) -> bool:
+        """If `scene_pos` lands on the ✕ badge — only live while hovered,
+        matching the badge only being drawn then (see paint()) — emit
+        remove_requested and report the click as handled. Duck-typed by
+        CanvasEngine._on_mouse_press so it can special-case a click here
+        without the generic canvas engine importing this progression-
+        specific item class."""
+        if not self._over_close_badge(self.mapFromScene(scene_pos)):
+            return False
+        self.remove_requested.emit(self._node)
+        return True
+
+    def set_appearance(self, color: str, icon: str):
+        """Update in place instead of the caller throwing this item away
+        and making a new one — see ProgressionMapOverlay.rebuild()'s
+        docstring for why a rebuild must never swap a live marker's
+        identity out from under it."""
+        new_color = QColor(color)
+        changed = new_color != self._color or icon != self._icon
+        self._color = new_color
+        self._icon = icon
+        if changed:
+            self.update()
 
     def paint(self, p: QPainter, option, widget=None):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -128,6 +176,19 @@ class _MapMarkerItem(QGraphicsObject):
         p.setPen(QColor("#FFFFFF"))
         p.drawText(QRectF(-_MARKER_R, -_MARKER_R, 2 * _MARKER_R, 2 * _MARKER_R),
                    Qt.AlignmentFlag.AlignCenter, self._icon)
+        if self._hovered:
+            self._paint_close_badge(p)
+
+    def _paint_close_badge(self, p: QPainter):
+        danger = QColor(Colors.ERROR)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(danger))
+        p.drawEllipse(_CLOSE_CENTER, _CLOSE_R, _CLOSE_R)
+        p.setPen(QPen(QColor("#FFFFFF"), 1.4))
+        d = _CLOSE_R * 0.45
+        cx, cy = _CLOSE_CENTER.x(), _CLOSE_CENTER.y()
+        p.drawLine(QPointF(cx - d, cy - d), QPointF(cx + d, cy + d))
+        p.drawLine(QPointF(cx - d, cy + d), QPointF(cx + d, cy - d))
 
 
 class _MapFlowEdgeItem(QGraphicsPathItem):
@@ -243,59 +304,112 @@ class _MapFlowEdgeItem(QGraphicsPathItem):
 
 
 class ProgressionMapOverlay:
-    """Owns every marker/flow-edge item mirrored onto the real map scene —
-    torn down and rebuilt wholesale on every rebuild() call (cheap: this is
-    only ever a handful of small decorative items, and pin/connection
-    changes aren't a hot path)."""
+    """Owns every marker/flow-edge item mirrored onto the real map scene.
+    Edges are cheap and torn down/rebuilt wholesale on every rebuild() call;
+    markers are matched by node_id and updated in place instead (see
+    rebuild()'s docstring — a marker is a real selectable/movable item, so
+    swapping its identity out from under an active Selecionar-tool
+    interaction is not safe)."""
 
     def __init__(self, scene_provider):
         self._scene_provider = scene_provider
-        self._items: list = []
+        self._markers: dict[str, _MapMarkerItem] = {}  # node_id -> item
+        self._edges: list[_MapFlowEdgeItem] = []
         self.flow_phase = 0.0
         self._timer = QTimer()
         self._timer.timeout.connect(self._advance)
         self._timer.start(_FLOW_TICK_MS)
 
+    def items(self) -> list:
+        """Every marker + edge item currently on the map — for callers that
+        only need to enumerate them (e.g. re-applying a hidden-layer
+        toggle), not touch identity."""
+        return list(self._markers.values()) + self._edges
+
     def _advance(self):
-        if not self._items:
+        if not self._edges:
             return
         self.flow_phase = (self.flow_phase + _FLOW_STEP) % 1.0
-        for item in self._items:
-            if isinstance(item, _MapFlowEdgeItem):
-                item.update()
+        for item in self._edges:
+            item.update()
 
     def clear(self):
-        for item in self._items:
+        for item in self.items():
             scene = item.scene()
             if scene is not None:
                 scene.removeItem(item)
-        self._items = []
+        self._markers = {}
+        self._edges = []
 
-    def rebuild(self, pipelines: list[dict], on_marker_moved=None):
+    def rebuild(self, pipelines: list[dict], on_marker_moved=None, on_marker_remove=None):
         """`pipelines`: list of {"nodes": iterable[_ProgressionNode],
         "edges": iterable[_ProgressionEdge]}. Each marker/edge uses its own
         card's color (node.color — the border color set on the rectangle,
         see items.py), not a fixed per-pipeline color, so the map mirrors
         whatever color each card was actually given. `on_marker_moved(node,
         QPointF)`, when given, is connected to every marker's drag-release
-        — see ProgressionMediator._on_marker_dragged."""
-        self.clear()
+        — see ProgressionMediator._on_marker_dragged. `on_marker_remove(node)`,
+        when given, is connected to every marker's ✕ badge — see
+        ProgressionMediator._on_marker_remove_requested.
+
+        Markers are matched to their node by node_id and updated in place
+        (position/color/icon) rather than torn down and recreated — unlike
+        the purely decorative edges, a marker is a real selectable/movable
+        item the generic Selecionar tool can pick up (drag, rotate handle,
+        the delete/duplicate action bar — see canvas/tools/interaction.py).
+        Recreating it out from under an in-progress or just-finished
+        interaction left the Selecionar tool's drag/selection/undo state
+        holding a reference to an item that had just been silently thrown
+        away, which is how a drag settling mid-gesture used to leave a
+        stale, orphaned connector line on the map alongside the freshly
+        rebuilt one — two arrows into the same pin."""
         scene = self._scene_provider()
         if scene is None:
+            self.clear()
             return
+
+        seen_ids = set()
         for pipe in pipelines:
             for node in pipe["nodes"]:
                 if not node.pin:
                     continue
-                marker = _MapMarkerItem(node, QPointF(node.pin["x"], node.pin["y"]), node.color, node.icon)
-                if on_marker_moved is not None:
-                    marker.moved.connect(on_marker_moved)
-                scene.addItem(marker)
-                self._items.append(marker)
+                seen_ids.add(node.node_id)
+                pos = QPointF(node.pin["x"], node.pin["y"])
+                marker = self._markers.get(node.node_id)
+                if marker is None:
+                    marker = _MapMarkerItem(node, pos, node.color, node.icon)
+                    if on_marker_moved is not None:
+                        marker.moved.connect(on_marker_moved)
+                    if on_marker_remove is not None:
+                        marker.remove_requested.connect(on_marker_remove)
+                    scene.addItem(marker)
+                    self._markers[node.node_id] = marker
+                else:
+                    if marker.pos() != pos:
+                        marker.setPos(pos)
+                    marker.set_appearance(node.color, node.icon)
+
+        for node_id in list(self._markers):
+            if node_id not in seen_ids:
+                item = self._markers.pop(node_id)
+                stale_scene = item.scene()
+                if stale_scene is not None:
+                    stale_scene.removeItem(item)
+
+        # Edges are never selectable (setAcceptedMouseButtons(NoButton) —
+        # see _MapFlowEdgeItem) and their whole geometry is just derived
+        # from the markers above, so a full teardown/redraw every time is
+        # simplest and carries none of the identity-swap risk markers have.
+        for item in self._edges:
+            stale_scene = item.scene()
+            if stale_scene is not None:
+                stale_scene.removeItem(item)
+        self._edges = []
+        for pipe in pipelines:
             for edge in pipe["edges"]:
                 if edge.src.pin and edge.dst.pin:
                     a = QPointF(edge.src.pin["x"], edge.src.pin["y"])
                     b = QPointF(edge.dst.pin["x"], edge.dst.pin["y"])
                     line = _MapFlowEdgeItem(a, b, edge.src.color, self)
                     scene.addItem(line)
-                    self._items.append(line)
+                    self._edges.append(line)
