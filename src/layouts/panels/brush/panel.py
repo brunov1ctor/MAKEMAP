@@ -21,6 +21,7 @@ from PySide6.QtGui import QPainter, QBrush, QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panels.brush.slider import BrushSlider
+from src.layouts.panels.brush.asset_browser import AssetBrowserPanel
 from src.layouts.panel_manager import paint_glass_panel
 
 
@@ -151,7 +152,6 @@ class BrushToolPanel(QFrame):
 
     mode_changed = Signal(str)
     close_requested = Signal()
-    assets_requested = Signal()
     content_changed = Signal()
     path_direction_changed = Signal(float)  # +1.0 or -1.0
 
@@ -216,7 +216,6 @@ class BrushToolPanel(QFrame):
         self._build_sliders_grid()
         self._layout.addStretch()
 
-        # ── Seção "Assets" (preview do material atual + modo + transform) ──
         self._section_stack = QStackedWidget()
         self._section_stack.addWidget(self._top_scroll)
         self._section_stack.addWidget(self._build_assets_page())
@@ -467,41 +466,44 @@ class BrushToolPanel(QFrame):
         target_layout.addLayout(section)
 
     def _build_assets_page(self) -> QWidget:
-        """Material name + texture preview (click to open the adjacent
-        asset grid subpanel) + mode + transform."""
+        """Preview do material + modo + transform + grade de assets embutida.
+        A parte superior (preview/modo/transform) é de altura fixa; o browser
+        ocupa o restante com seu próprio scroll interno."""
         page = QWidget()
         page.setStyleSheet("background: transparent;")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(10, 6, 10, 0)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # ── Parte superior: nome + preview + separador + modo + transform ──
+        top = QWidget()
+        top.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(top)
+        layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(4)
 
-        # Elided — a long asset name shouldn't push the panel wider than
-        # PANEL_WIDTH (the panel's horizontal scrollbar is off, so
-        # overflow would be silently invisible, not scrollable).
         self._material_label = QLabel("")
         self._material_label.setStyleSheet(f"""
             color: {_TEXT}; font-size: 11px; font-weight: bold;
             background: transparent; border: none;
-            QToolTip {{
-                background-color: {Colors.BG_ELEVATED};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 11px;
-            }}
         """)
         self._material_label.setMinimumWidth(0)
         layout.addWidget(self._material_label)
 
         self.texture_preview = TexturePreviewWidget()
-        self.texture_preview.clicked.connect(self.assets_requested.emit)
+        self.texture_preview.clicked.connect(lambda: self.show_section("assets"))
         layout.addWidget(self.texture_preview)
         layout.addWidget(_separator())
 
         self._build_mode_section(layout)
         self._build_transform_section(layout)
-        layout.addStretch()
+        layout.addWidget(_separator())
+
+        outer.addWidget(top)
+
+        # ── Browser: ocupa o restante com stretch ──
+        self.asset_browser = AssetBrowserPanel(embedded=True)
+        outer.addWidget(self.asset_browser, 1)
 
         self._assets_page = page
         return page
@@ -576,7 +578,7 @@ class BrushToolPanel(QFrame):
 
         # Preview da textura (mesma que o modo Assets)
         self._path_texture_preview = TexturePreviewWidget()
-        self._path_texture_preview.clicked.connect(self.assets_requested.emit)
+        self._path_texture_preview.clicked.connect(lambda: self.show_section("assets"))
         lay.addWidget(self._path_texture_preview)
         lay.addWidget(_separator())
 
@@ -668,8 +670,9 @@ class BrushToolPanel(QFrame):
         self._top_container.adjustSize()
         header_h = self._top_container.sizeHint().height()
         if self._current_section == "assets":
-            self._assets_page.adjustSize()
-            body_h = self._assets_page.sizeHint().height()
+            top = self._assets_page.layout().itemAt(0).widget()
+            top.adjustSize()
+            body_h = top.sizeHint().height() + self.asset_browser.content_height()
         else:
             body_widget = self._top_scroll.widget()
             body_widget.adjustSize()

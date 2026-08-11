@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, Signal
 
-from src.styles.tokens import Colors, Typography
+from src.styles.tokens import Colors, Typography, combo_qss
 from src.layouts.panel_manager import paint_glass_panel
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.terrain.color_picker import HueBar, SatValSquare, ColorSlider
@@ -341,17 +341,7 @@ class LightEditPanel(QFrame):
         type_row.addWidget(_field_label("Tipo"))
         self.type_combo = QComboBox()
         self.type_combo.setFixedHeight(26)
-        self.type_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: rgba(10, 16, 30, 0.7); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 4px; padding: 3px 8px; color: {Colors.TEXT_PRIMARY};
-                font-size: {Typography.SIZE_XS}px;
-            }}
-            QComboBox QAbstractItemView {{
-                background: {Colors.BG_ELEVATED}; border: 1px solid {Colors.BORDER};
-                color: {Colors.TEXT_PRIMARY};
-            }}
-        """)
+        self.type_combo.setStyleSheet(combo_qss(radius=4, padding="3px 8px", font_size=Typography.SIZE_XS))
         # "sky" isn't a placeable object (see GLOBAL_TYPES) — an already
         # placed light can't be switched into being the map's single global
         # day/night setting, so it's left out of this per-item dropdown.

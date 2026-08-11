@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panels.mobs.categories import (
     TIPO_OPTIONS, category_icon, category_label, category_badge_color, category_tag_text_color,
 )
@@ -104,21 +104,23 @@ class OverviewSectionMixin:
         thumb_col.addWidget(thumb_hint)
         top_row.addLayout(thumb_col)
 
-        # QComboBox/QSpinBox/QLineEdit here are overridden borderless/
-        # bold/larger — the reference shows plain typography, not boxed
-        # form inputs, even though these stay fully editable. Scoped to
-        # #infoCard (not a bare "QFrame" selector) so it doesn't also
-        # repaint the _hr() dividers nested inside, which are QFrame too.
+        # QSpinBox/QLineEdit here stay overridden borderless/bold/larger —
+        # the reference shows plain typography, not boxed form inputs, even
+        # though they stay fully editable. Scoped to #infoCard (not a bare
+        # "QFrame" selector) so it doesn't also repaint the _hr() dividers
+        # nested inside, which are QFrame too. QComboBox uses combo_qss()'s
+        # normal bordered/arrow face (not transparent — that broke the
+        # popup's background on Windows) so it still reads as a dropdown.
         info_card = QFrame()
         info_card.setObjectName("infoCard")
         info_card.setStyleSheet(f"""
             QFrame#infoCard {{ background: rgba(255,255,255,0.03); border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px; }}
-            QFrame#infoCard QComboBox, QFrame#infoCard QSpinBox, QFrame#infoCard QLineEdit {{
+            QFrame#infoCard QSpinBox, QFrame#infoCard QLineEdit {{
                 border: none; background: transparent; padding: 0;
                 font-size: 14px; font-weight: bold; color: {Colors.TEXT_PRIMARY};
             }}
-            QFrame#infoCard QComboBox::drop-down {{ width: 0; border: none; }}
-            QFrame#infoCard QComboBox::down-arrow {{ image: none; width: 0; height: 0; }}
+            {combo_qss(radius=4, padding="2px 6px", font_size=14)}
+            QFrame#infoCard QComboBox {{ font-weight: bold; }}
         """)
         info_lay = QVBoxLayout(info_card)
         info_lay.setContentsMargins(14, 12, 14, 12)

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.services.project_assets import import_asset, resolve_asset_path
 from src.layouts.panels.brush.flow_layout import FlowLayout
 from src.layouts.panels.mobs.categories import ELEMENT_OPTIONS
@@ -32,11 +32,7 @@ class GridFilterMixin:
         """A small "ICON CAPTION" label stacked above a combo box — matches
         the Tier/Região/Elemento/Tipo/Nível filter columns in the mock."""
         combo = QComboBox()
-        combo.setStyleSheet(f"""
-            QComboBox {{ background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 6px; padding: 4px 6px; color: {Colors.TEXT_PRIMARY}; font-size: 10px; min-width: 84px; }}
-            {combo_popup_qss()}
-        """)
+        combo.setStyleSheet(combo_qss(radius=6, padding="4px 6px") + "QComboBox { min-width: 84px; }")
         combo.currentIndexChanged.connect(lambda _i: self._apply_filters())
         combo._caption_widget = QLabel(f"{icon} {caption}")
         combo._caption_widget.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 8px; background: transparent; border: none;")
@@ -102,11 +98,7 @@ class GridFilterMixin:
         sort_caption = QLabel("Ordenar por")
         sort_caption.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 8px; background: transparent; border: none;")
         self._sort_combo = QComboBox()
-        self._sort_combo.setStyleSheet(f"""
-            QComboBox {{ background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 6px; padding: 4px 10px; color: {Colors.TEXT_PRIMARY}; font-size: 10px; min-width: 130px; }}
-            {combo_popup_qss()}
-        """)
+        self._sort_combo.setStyleSheet(combo_qss(radius=6, padding="4px 10px") + "QComboBox { min-width: 130px; }")
         for key, label in _SORT_OPTIONS:
             self._sort_combo.addItem(label, key)
         self._sort_combo.currentIndexChanged.connect(lambda _i: self._apply_filters())

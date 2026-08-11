@@ -177,7 +177,7 @@ class ProgressionBar(QFrame):
         self._switch_pipeline(0)
 
     def _create_pipeline(self, key: str, name: str, theme_idx: int, seed_segments: list = None) -> ProgressionCanvas:
-        canvas = ProgressionCanvas(key, repo=self._repo)
+        canvas = ProgressionCanvas(key, pipeline_name=name, repo=self._repo)
         canvas.pin_pick_requested.connect(lambda node, c=canvas: self.pin_pick_requested.emit((c, node)))
         canvas.pin_locate_requested.connect(lambda node, c=canvas: self.pin_locate_requested.emit((c, node)))
         # Emitted before load() so a listener (ProgressionMediator) can

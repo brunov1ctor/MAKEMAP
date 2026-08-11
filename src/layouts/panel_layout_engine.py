@@ -103,17 +103,6 @@ class PanelLayoutEngine:
         if l.brush_panel.isVisible():
             self._size_to_content(l.brush_panel, avail)
 
-        # Asset browser rides next to Brush the same way RegionEditPanel
-        # rides next to Região's CRUD list — sized to fill the full
-        # available work area (not capped to brush_panel's own height,
-        # which is now short since its sliders moved to a 2-column grid;
-        # capping to it left the material grid showing only a couple
-        # rows with tons of unused space below).
-        if l.brush_panel.isVisible() and l.asset_browser_panel.isVisible():
-            bp_rect = l.brush_panel.geometry()
-            ab_h = min(l.asset_browser_panel.content_height(), max(0, avail.bottom() - bp_rect.y()))
-            self._dock_beside(bp_rect, l.asset_browser_panel, avail, ab_h)
-
         # Região's CRUD list has a pinned header + "Nova Região" button
         # living OUTSIDE its card-list scroll area, so PanelManager's
         # generic _content_height() (which only measures the first
@@ -248,5 +237,9 @@ class PanelLayoutEngine:
 
         menu_container = l._menu_med._menu_container
         if menu_container:
-            menu_container.setGeometry(0, top_h, w, body_h)
+            # status_bar is hidden while a fullscreen menu view is open (see
+            # MenuViewMediator._canvas_widgets), so the container gets the
+            # full height below the top bar instead of body_h, which still
+            # reserves status_h for a bar that isn't there to fill.
+            menu_container.setGeometry(0, top_h, w, h - top_h)
             menu_container.raise_()

@@ -65,6 +65,7 @@ class DungeonsPanel(DungeonsImportExportMixin, QWidget):
     _BASE_RATIOS = (0.24, 0.38, 0.38)
     _DUNGEON_RATIOS = (0.34, 0.66)
     _NUDGE = 6
+    _BP_STACK_HALVES = 900  # abaixo disso empilha as metades verticalmente
 
     def __init__(self, uow, project_dir=None, parent=None):
         super().__init__(parent)
@@ -117,10 +118,6 @@ class DungeonsPanel(DungeonsImportExportMixin, QWidget):
         outer.addWidget(sep)
 
         self._halves = LiveSplitter(Qt.Orientation.Horizontal)
-        # Collapsible=True aqui (diferente dos splitters internos de cada
-        # metade) — arrastar o divisor até a esquerda ou a direita esconde
-        # Gerenciamento da Base ou de Dungeons por completo, em vez de
-        # parar na largura mínima de cada metade.
         self._halves.setChildrenCollapsible(True)
         self._halves.setHandleWidth(8)
         self._halves.addWidget(self._build_base_half())
@@ -363,6 +360,12 @@ class DungeonsPanel(DungeonsImportExportMixin, QWidget):
         super().resizeEvent(event)
         self._apply_responsive_layout()
 
+    def showEvent(self, event):
+        # __init__'s self.width() reads before the panel is actually laid
+        # out by its parent — redo it here once real geometry is known.
+        super().showEvent(event)
+        self._apply_responsive_layout()
+
     def _on_splitter_moved(self, splitter: QSplitter, pos: int, index: int):
         expected = self._auto_positions.get(id(splitter), {}).get(index)
         if expected is not None and abs(pos - expected) < self._NUDGE:
@@ -372,21 +375,44 @@ class DungeonsPanel(DungeonsImportExportMixin, QWidget):
     def _apply_responsive_layout(self):
         if not hasattr(self, "_halves"):
             return
-        self._apply_splitter_ratio(self._halves, self._HALF_RATIOS)
-        # _base_splitter/_dungeon_splitter estão ANINHADOS dentro de
-        # _halves — a linha acima só agenda a nova geometria de _halves
-        # (QSplitter aplica via um evento postado, não na hora), então
-        # ler .width() dos splitters internos agora ainda devolveria o
-        # valor de ANTES do resize. Isso é invisível num redimensionamento
-        # manual gradual (cada pequeno resize já corrige o anterior antes
-        # do próximo chegar), mas fica evidente num salto grande — como
-        # arrastar a janela para um monitor bem menor: os dois splitters
-        # internos calculam larguras a partir do tamanho antigo e ficam
-        # temporariamente maiores que o espaço real, sobrepondo as três
-        # colunas. Adiar para o próximo laço de eventos garante que
-        # `_halves` já tenha aplicado sua própria geometria antes de os
-        # splitters internos lerem a largura deles.
-        QTimer.singleShot(0, self._apply_nested_splitters)
+        w = self.width()
+        # _apply_nested_splitters() reads the inner splitters' real width(),
+        # which only settles a tick after _apply_breakpoints() below — the
+        # updatesEnabled toggle just hides that one mismatched in-between
+        # frame (scoped to the inner splitters only, not `self`, since that
+        # broke the top-level window's own resize handling).
+        self._apply_breakpoints(w)
+        for splitter in (self._base_splitter, self._dungeon_splitter):
+            splitter.setUpdatesEnabled(False)
+        QTimer.singleShot(0, self._finish_responsive_layout)
+
+    def _finish_responsive_layout(self):
+        self._apply_nested_splitters()
+        for splitter in (self._base_splitter, self._dungeon_splitter):
+            splitter.setUpdatesEnabled(True)
+
+    def _stack_threshold(self) -> int:
+        """_BP_STACK_HALVES is a floor — the real minimum is however wide
+        both halves' own columns need (~1380px today), recomputed here so
+        windows in between don't render side-by-side and clip."""
+        base_min = self._halves.widget(0).minimumSizeHint().width()
+        dungeon_min = self._halves.widget(1).minimumSizeHint().width()
+        return max(self._BP_STACK_HALVES, base_min + dungeon_min + self._halves.handleWidth())
+
+    def _apply_breakpoints(self, w: int):
+        """Em monitores estreitos, empilha as duas metades verticalmente
+        (uma acima da outra, ambas sempre visíveis) em vez de lado a lado —
+        mesmo splitter, só muda a orientação, sem nenhum botão de toggle."""
+        self._tree.show()
+        stack_mode = w < self._stack_threshold()
+        self._halves.setOrientation(
+            Qt.Orientation.Vertical if stack_mode else Qt.Orientation.Horizontal)
+        total = self._halves.height() if stack_mode else self._halves.width()
+        if total > 0:
+            self._halves.setSizes([
+                round(total * self._HALF_RATIOS[0]),
+                round(total * self._HALF_RATIOS[1]),
+            ])
 
     def _apply_nested_splitters(self):
         self._apply_splitter_ratio(self._base_splitter, self._BASE_RATIOS)
@@ -395,11 +421,35 @@ class DungeonsPanel(DungeonsImportExportMixin, QWidget):
     def _apply_splitter_ratio(self, splitter: QSplitter, ratios: tuple[float, ...]):
         if id(splitter) in self._user_dragged:
             return
-        width = splitter.width()
-        if width <= 0:
+        total = splitter.width()
+        if total <= 0:
             return
-        sizes = [round(width * r) for r in ratios]
-        sizes[-1] = width - sum(sizes[:-1])
+        # Coleta mínimos reais de cada widget
+        mins = [splitter.widget(i).minimumWidth() for i in range(splitter.count())]
+        # Só considera widgets visíveis
+        visible = [i for i in range(splitter.count()) if not splitter.widget(i).isHidden()]
+        if not visible:
+            return
+        # Espaço mínimo necessário para os visíveis
+        min_total = sum(mins[i] for i in visible)
+        if total < min_total:
+            # Não há espaço suficiente — distribui proporcional aos mínimos
+            sizes = [0] * splitter.count()
+            for i in visible:
+                sizes[i] = mins[i]
+            splitter.setSizes(sizes)
+            self._record_auto_positions(splitter)
+            return
+        # Distribui o espaço disponível pelos visíveis segundo os ratios
+        vis_ratios = [ratios[i] if i < len(ratios) else 0.0 for i in visible]
+        ratio_sum = sum(vis_ratios) or 1.0
+        norm = [r / ratio_sum for r in vis_ratios]
+        sizes = [0] * splitter.count()
+        alloc = [max(mins[visible[j]], round(total * norm[j])) for j in range(len(visible))]
+        # Ajusta o último para fechar exatamente o total
+        alloc[-1] = max(mins[visible[-1]], total - sum(alloc[:-1]))
+        for j, i in enumerate(visible):
+            sizes[i] = alloc[j]
         splitter.setSizes(sizes)
         self._record_auto_positions(splitter)
 

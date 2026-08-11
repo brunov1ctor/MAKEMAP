@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.stepper import NumberStepper
 from src.layouts.panels.terrain.color_picker import HueBar, SatValSquare, ColorSlider
@@ -283,15 +283,9 @@ class GridSettingsPanel(QFrame):
         self.shape_combo.setFixedWidth(110)
         self.shape_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.shape_combo.wheelEvent = lambda e: e.ignore()
-        self.shape_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: rgba(255,255,255,0.04); color: {Colors.TEXT_SECONDARY};
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;
-                padding: 3px 8px; font-size: 10px;
-            }}
-            QComboBox::drop-down {{ border: none; width: 14px; }}
-            {combo_popup_qss()}
-        """)
+        self.shape_combo.setStyleSheet(
+            combo_qss(bg="rgba(255,255,255,0.04)", color=Colors.TEXT_SECONDARY, radius=4, padding="3px 8px")
+        )
         self.shape_combo.currentTextChanged.connect(self.shape_changed.emit)
         row.addWidget(self.shape_combo)
         row.addStretch()

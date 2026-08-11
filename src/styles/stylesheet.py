@@ -213,6 +213,7 @@ def build_stylesheet() -> str:
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 8px;
         padding: 4px 10px;
+        combobox-popup: 0;
     }}
 
     QComboBox:hover {{

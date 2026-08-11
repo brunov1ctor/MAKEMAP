@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QSize, QPoint, QTimer
 from PySide6.QtGui import QPixmap, QImage
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panels.stepper import NumberStepper
 from src.engines.map.parallax import get_parallax_library, LayerEffect, EFFECT_KINDS, EFFECT_DEFAULTS
 
@@ -1097,15 +1097,10 @@ class ParallaxPresetSection(QFrame):
         self._refresh_layers()
 
     def _combo_style(self) -> str:
-        return f"""
-            QComboBox {{
-                background: rgba(255,255,255,0.04); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 3px; padding: 1px 6px; color: {Colors.TEXT_PRIMARY}; font-size: 8pt;
-            }}
-            QComboBox:hover {{ border-color: {Colors.ACCENT}; }}
-            QComboBox::drop-down {{ border: none; width: 14px; }}
-            {combo_popup_qss(Colors.BORDER_SUBTLE)}
-        """
+        return combo_qss(
+            bg="rgba(255,255,255,0.04)", radius=3, padding="1px 6px", font_size="8pt",
+            popup_border=Colors.BORDER_SUBTLE,
+        )
 
     def _build_minmax_pulse_row(
         self, index: int, title: str, enabled: bool, min_display: float, max_display: float,

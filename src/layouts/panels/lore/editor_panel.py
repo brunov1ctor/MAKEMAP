@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from src.styles.tokens import Colors
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panels.brush.flow_layout import FlowLayout
 from src.layouts.panels.shared.rich_text_editor import RichTextEditor
 from src.layouts.panels.lore.constants import (
@@ -30,6 +30,7 @@ _INPUT_STYLE = f"""
         border-radius: 5px; padding: 5px 8px; color: {Colors.TEXT_PRIMARY}; font-size: 11px;
     }}
     QLineEdit:focus, QTextEdit:focus {{ border-color: {Colors.ACCENT}; }}
+    {combo_qss(padding="5px 8px", font_size=11)}
 """
 
 

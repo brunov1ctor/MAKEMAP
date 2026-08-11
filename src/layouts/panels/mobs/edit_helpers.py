@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panels.mobs.categories import item_rarity_label, item_rarity_color
 
 _INPUT_STYLE = f"""
@@ -23,20 +23,7 @@ _INPUT_STYLE = f"""
     QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
         border-color: {Colors.ACCENT};
     }}
-    /* QComboBox gets its own rule (not lumped in with the line above) —
-    it used to share the same 1px/4px padding as a QLineEdit and never
-    got a :hover state, which every other panel's dropdown (RegionEditPanel,
-    grid_panel, text_panel, brush/panel, ...) already has via its own
-    near-identical _combo_style()/local override — that's what read as
-    "out of style" next to the rest of the app. Padding/drop-down width
-    now match that same shared pattern. */
-    QComboBox {{
-        background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-        border-radius: 5px; padding: 2px 8px; color: {Colors.TEXT_PRIMARY}; font-size: 10px;
-    }}
-    QComboBox:hover, QComboBox:focus {{ border-color: {Colors.ACCENT}; }}
-    QComboBox::drop-down {{ width: 14px; border: none; }}
-    {combo_popup_qss()}
+    {combo_qss()}
     QLabel {{ color: {Colors.TEXT_SECONDARY}; font-size: 10px; background: transparent; border: none; }}
 """
 

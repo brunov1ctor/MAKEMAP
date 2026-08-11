@@ -174,7 +174,6 @@ class LorePanel(QWidget):
 
         self._entry_list = RecordListColumn(
             "Entradas de Lore", "Buscar no lore...",
-            filters=[("Todas as categorias", CATEGORY_LABELS, "category")],
         )
         self._entry_list.selected.connect(self._on_entry_selected)
         self._entry_list.delete_requested.connect(self._on_entry_delete)
@@ -191,6 +190,7 @@ class LorePanel(QWidget):
             "icon": "📖",
             "category": e.get("category") or "",
             "code": e.get("code") or "",
+            "updated_at": e.get("updated_at") or "",
         }
 
     def _refresh_entry_list_view(self):

@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QLinearGradient, QPen, QBrush, QPixmap
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panels.brush.slider import BrushSlider
 from src.layouts.panels.region.star_rating import StarRating
 from src.layouts.panels.collapsible_section import CollapsibleSection
@@ -296,15 +296,7 @@ class RegionEditPanel(QFrame):
         """
 
     def _combo_style(self) -> str:
-        return f"""
-            QComboBox {{
-                background: rgba(255,255,255,0.04); color: {Colors.TEXT_SECONDARY};
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;
-                padding: 3px 8px; font-size: 10px;
-            }}
-            QComboBox::drop-down {{ border: none; width: 14px; }}
-            {combo_popup_qss()}
-        """
+        return combo_qss(bg="rgba(255,255,255,0.04)", color=Colors.TEXT_SECONDARY, radius=4, padding="3px 8px")
 
     def _set_thumb_placeholder_style(self):
         self._thumb.setStyleSheet(f"""

@@ -94,12 +94,60 @@ def combo_popup_qss(border: str = Colors.BORDER) -> str:
     must stay fully opaque (Colors.BG_ELEVATED, no alpha) — a translucent
     rgba() here renders as a garbled wrong color on Windows, since the popup
     window isn't marked translucent. Reuse this in every local
-    _combo_style()/inline QComboBox stylesheet instead of retyping it."""
-    return (
-        f"QComboBox QAbstractItemView {{ background: {Colors.BG_ELEVATED}; "
-        f"color: {Colors.TEXT_PRIMARY}; border: 1px solid {border}; "
-        f"selection-background-color: {Colors.ACCENT_DIM}; }}"
-    )
+    _combo_style()/inline QComboBox stylesheet instead of retyping it.
+
+    `background-color` (not the `background` shorthand) is set on both the
+    view *and* each `::item` — on Windows' native style, a shorthand
+    `background` on QAbstractItemView alone can leave the row delegate
+    painting through to the (unstyled, effectively see-through) popup
+    container behind it, which reads as a half-transparent dropdown even
+    though the view itself has an opaque color.
+
+    `combobox-popup: 0` forces Qt's non-native list-style popup — the native
+    one draws its own unstyled frame/shadow on Windows (shows as a white
+    rectangle) that this stylesheet can't reach otherwise."""
+    return f"""
+        QComboBox {{ combobox-popup: 0; }}
+        QComboBox QAbstractItemView {{
+            background-color: {Colors.BG_ELEVATED};
+            color: {Colors.TEXT_PRIMARY};
+            border: 1px solid {border};
+            outline: 0;
+        }}
+        QComboBox QAbstractItemView::item {{
+            background-color: {Colors.BG_ELEVATED};
+            padding: 4px 8px;
+            min-height: 20px;
+        }}
+        QComboBox QAbstractItemView::item:selected {{
+            background-color: {Colors.ACCENT_DIM};
+        }}
+    """
+
+
+def combo_qss(
+    bg: str = "rgba(255,255,255,0.06)",
+    border: str = Colors.BORDER_SUBTLE,
+    radius: int = 5,
+    padding: str = "2px 8px",
+    font_size: int | str = 10,
+    color: str | None = None,
+    popup_border: str = Colors.BORDER,
+) -> str:
+    """Canonical transparent-glass QComboBox face (background/border/radius/
+    padding/hover/drop-down), with combo_popup_qss() folded in. Parameters
+    cover the small legitimate variations between panels."""
+    size = font_size if isinstance(font_size, str) else f"{font_size}px"
+    return f"""
+        QComboBox {{
+            background: {bg}; border: 1px solid {border};
+            border-radius: {radius}px; padding: {padding};
+            color: {color or Colors.TEXT_PRIMARY}; font-size: {size};
+        }}
+        QComboBox:hover, QComboBox:focus {{ border-color: {Colors.ACCENT}; }}
+        QComboBox::drop-down {{ width: 14px; border: none; }}
+        {combo_popup_qss(popup_border)}
+    """
 
 
 def menu_qss() -> str:

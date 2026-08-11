@@ -119,9 +119,10 @@ class ProgressionCanvas(QWidget):
     pin_pick_requested = Signal(object)   # _ProgressionNode
     pin_locate_requested = Signal(object)  # _ProgressionNode
 
-    def __init__(self, pipeline_key: str, repo=None, parent=None):
+    def __init__(self, pipeline_key: str, pipeline_name: str = "", repo=None, parent=None):
         super().__init__(parent)
         self.pipeline_key = pipeline_key
+        self.pipeline_name = pipeline_name
         self._repo = repo
         self._nodes: dict[str, _ProgressionNode] = {}
         self._edges: list[_ProgressionEdge] = []
@@ -450,7 +451,8 @@ class ProgressionCanvas(QWidget):
             "edges": [[e.src.node_id, e.dst.node_id] for e in self._edges],
         }
         if self._repo is not None:
-            self._repo.upsert(self.pipeline_key, data=json.dumps(data, ensure_ascii=False))
+            extra = {"name": self.pipeline_name} if self.pipeline_name else {}
+            self._repo.upsert(self.pipeline_key, data=json.dumps(data, ensure_ascii=False), **extra)
         self.changed.emit()
 
     @staticmethod

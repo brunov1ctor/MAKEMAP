@@ -2,7 +2,7 @@
 
 Cópia de quests/record_list.py (que por sua vez documenta ser cópia de
 dungeons/record_list.py) com a mesma única diferença de sempre: a fonte do
-badge colorido é `category_dot` de lore.constants em vez de `status_dot`.
+badge colorido é `category_chip` de lore.constants em vez de `status_dot`.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from PySide6.QtGui import QPixmap
 
 from src.styles.tokens import Colors
 from src.layouts.panels.lore.constants import (
-    _INPUT_STYLE, _no_wheel, panel_frame_style, sub_header, category_dot,
+    _INPUT_STYLE, _no_wheel, panel_frame_style, sub_header, category_chip, relative_date,
 )
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
@@ -50,40 +50,42 @@ class _RecordCard(QFrame):
         self.setAcceptDrops(True)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(8, 6, 10, 6)
+        row.setContentsMargins(8, 3, 10, 3)
         row.setSpacing(8)
 
         self._thumb = QLabel()
-        self._thumb.setFixedSize(38, 38)
+        self._thumb.setFixedSize(24, 24)
         self._thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._fallback_icon = record.get("icon") or "📖"
         self._set_thumb_image(record.get("image") or "")
         row.addWidget(self._thumb)
 
-        col = QVBoxLayout()
-        col.setSpacing(1)
         name = QLabel(record.get("name") or "—")
         name.setStyleSheet(
             f"color: {Colors.TEXT_PRIMARY}; font-size: 11px; font-weight: bold; "
             f"background: transparent; border: none;"
         )
-        subtitle = QLabel(record.get("subtitle") or "")
-        subtitle.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
-        # Sem isso, um nome/subtítulo comprido teria minimumSizeHint igual
-        # ao texto inteiro (QLabel sem word-wrap não elide) — numa coluna
-        # estreita isso empurra os itens de tamanho fixo à direita (bolinha
-        # de categoria, botão ✕) para fora da área visível do card em vez de
-        # ceder espaço. QSizePolicy.Ignored faz o rótulo abrir mão do
+        # Sem isso, um nome comprido teria minimumSizeHint igual ao texto
+        # inteiro (QLabel sem word-wrap não elide) — numa coluna estreita
+        # isso empurra os itens de tamanho fixo à direita (badge de
+        # categoria, data, botão ✕) para fora da área visível do card em
+        # vez de ceder espaço. QSizePolicy.Ignored faz o rótulo abrir mão do
         # próprio texto na hora de disputar espaço; ele só corta visualmente
-        # (sem "…"), mas os botões fixos nunca mais somem.
-        for lbl in (name, subtitle):
-            lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        col.addWidget(name)
-        col.addWidget(subtitle)
-        row.addLayout(col, 1)
+        # (sem "…"), mas os itens fixos nunca mais somem.
+        name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        row.addWidget(name, 1)
 
+        # Categoria (badge colorido) + data da última edição, na mesma linha
+        # do título — igual às colunas Categoria/Última edição da imagem de
+        # referência, sem quebrar o card em duas linhas.
         if record.get("category"):
-            row.addWidget(category_dot(record["category"]))
+            row.addWidget(category_chip(record["category"]))
+
+        date_text = relative_date(record.get("updated_at") or "")
+        if date_text:
+            date_lbl = QLabel(date_text)
+            date_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9px; background: transparent; border: none;")
+            row.addWidget(date_lbl)
 
         self._delete_btn = QToolButton()
         self._delete_btn.setText("✕")
@@ -154,14 +156,14 @@ class _RecordCard(QFrame):
             self._thumb.setText(self._fallback_icon)
             self._thumb.setStyleSheet(
                 f"background: rgba(255,255,255,0.05); border: 1px solid {Colors.BORDER_SUBTLE}; "
-                f"border-radius: 8px; font-size: 18px;"
+                f"border-radius: 6px; font-size: 12px;"
             )
         else:
             self._thumb.setText("")
             self._thumb.setPixmap(pixmap.scaled(
-                38, 38, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                24, 24, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                 Qt.TransformationMode.SmoothTransformation))
-            self._thumb.setStyleSheet(f"border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 8px;")
+            self._thumb.setStyleSheet(f"border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px;")
 
     def record_id(self) -> str:
         return self._id

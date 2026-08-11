@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QTextEdit, QToolButton, QVBoxLayout, QWidget,
 )
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panel_manager import paint_glass_panel
 
 _MENTION_PREFIX = "mention://"
@@ -38,15 +38,7 @@ _TOOLBAR_BTN_STYLE = f"""
     QToolButton:checked {{ background: {Colors.ACCENT_DIM}; color: {Colors.ACCENT}; }}
 """
 
-_COMBO_STYLE = f"""
-    QComboBox {{
-        background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-        border-radius: 5px; padding: 3px 8px; color: {Colors.TEXT_PRIMARY}; font-size: 10px;
-    }}
-    QComboBox:hover, QComboBox:focus {{ border-color: {Colors.ACCENT}; }}
-    QComboBox::drop-down {{ width: 14px; border: none; }}
-    {combo_popup_qss()}
-"""
+_COMBO_STYLE = combo_qss(padding="3px 8px")
 
 
 def _sep() -> QWidget:

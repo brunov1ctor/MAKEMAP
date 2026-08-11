@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panels.quests.flow_node import NODE_TYPES, NODE_TYPE_ORDER
 from src.layouts.panels.quests.constants import _no_wheel
 
@@ -29,10 +29,7 @@ class FlowNodeDialog(QDialog):
             QLineEdit {{ background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
                 border-radius: 5px; padding: 5px 8px; color: {Colors.TEXT_PRIMARY}; font-size: 10px; }}
             QLineEdit:focus {{ border-color: {Colors.ACCENT}; }}
-            QComboBox {{ background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 5px; padding: 5px 8px; color: {Colors.TEXT_PRIMARY}; font-size: 10px; }}
-            QComboBox:hover, QComboBox:focus {{ border-color: {Colors.ACCENT}; }}
-            {combo_popup_qss()}
+            {combo_qss(padding="5px 8px")}
         """)
 
         outer = QVBoxLayout(self)

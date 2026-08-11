@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panel_manager import paint_glass_panel
 from src.layouts.panels.terrain_combo import TerrainCombo
 from src.layouts.panels.collapsible_section import CollapsibleSection
@@ -656,15 +656,10 @@ class TextToolPanel(QFrame):
 
     @staticmethod
     def _combo_style() -> str:
-        return f"""
-            QComboBox {{
-                background: rgba(255,255,255,0.04); color: {Colors.TEXT_SECONDARY};
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;
-                padding: 3px 6px; font-size: 9pt;
-            }}
-            QComboBox::drop-down {{ border: none; width: 14px; }}
-            {combo_popup_qss()}
-        """
+        return combo_qss(
+            bg="rgba(255,255,255,0.04)", color=Colors.TEXT_SECONDARY,
+            radius=4, padding="3px 6px", font_size="9pt",
+        )
 
     @staticmethod
     def _spin_style() -> str:

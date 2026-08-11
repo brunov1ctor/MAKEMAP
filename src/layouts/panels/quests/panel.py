@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.components.live_splitter import LiveSplitter
 from src.services.project_assets import import_asset, resolve_asset_path
 from src.layouts.panels.quests.record_list import RecordListColumn
@@ -335,12 +335,7 @@ class QuestsPanel(QuestsImportExportMixin, QWidget):
         self._status_combo = QComboBox()
         self._status_combo.addItems(STATUS_LABELS)
         _no_wheel(self._status_combo)
-        self._status_combo.setStyleSheet(f"""
-            QComboBox {{ background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 5px; padding: 3px 8px; color: {Colors.TEXT_PRIMARY}; font-size: 10px; }}
-            QComboBox:hover, QComboBox:focus {{ border-color: {Colors.ACCENT}; }}
-            {combo_popup_qss()}
-        """)
+        self._status_combo.setStyleSheet(combo_qss(padding="3px 8px"))
         self._status_combo.currentTextChanged.connect(self._on_status_changed)
         title_row.addWidget(self._status_combo)
 

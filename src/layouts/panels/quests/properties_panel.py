@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panels.collapsible_section import CollapsibleSection
 from src.layouts.panels.items.editor_base import IconButton
 from src.layouts.panels.mobs.edit_widgets import _CatalogPickerDialog
@@ -343,13 +343,7 @@ class QuestPropertiesPanel(QFrame):
                 border-radius: 5px; padding: 3px 6px; color: {Colors.TEXT_PRIMARY}; font-size: 10px;
             }}
             QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{ border-color: {Colors.ACCENT}; }}
-            QComboBox {{
-                background: rgba(255,255,255,0.06); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 5px; padding: 3px 8px; color: {Colors.TEXT_PRIMARY}; font-size: 10px;
-            }}
-            QComboBox:hover, QComboBox:focus {{ border-color: {Colors.ACCENT}; }}
-            QComboBox::drop-down {{ width: 14px; border: none; }}
-            {combo_popup_qss()}
+            {combo_qss(padding="3px 8px")}
         """
 
     @staticmethod

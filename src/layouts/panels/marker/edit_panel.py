@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtCore import Qt, Signal
 
-from src.styles.tokens import Colors, Typography, menu_qss
+from src.styles.tokens import Colors, Typography, menu_qss, combo_qss
 from src.layouts.panel_manager import paint_glass_panel
 from src.layouts.panels.items.editor_base import EditorTabBar, SquareCheck
 from src.layouts.panels.marker.icon_picker import IconPicker
@@ -321,18 +321,7 @@ class MarkerEditPanel(QFrame):
         self.category_combo = QComboBox()
         _no_wheel(self.category_combo)
         self.category_combo.setFixedHeight(26)
-        self.category_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: rgba(10, 16, 30, 0.7); border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 4px; padding: 3px 8px; color: {Colors.TEXT_PRIMARY};
-                font-size: {Typography.SIZE_XS}px;
-            }}
-            QComboBox:hover {{ border-color: {Colors.BORDER_HOVER}; }}
-            QComboBox QAbstractItemView {{
-                background: {Colors.BG_ELEVATED}; border: 1px solid {Colors.BORDER};
-                color: {Colors.TEXT_PRIMARY};
-            }}
-        """)
+        self.category_combo.setStyleSheet(combo_qss(radius=4, padding="3px 8px", font_size=Typography.SIZE_XS))
         for key, icon, label in CATEGORIES:
             self.category_combo.addItem(f"{icon} {label}", key)
         self.category_combo.currentIndexChanged.connect(self._on_category_changed)

@@ -305,21 +305,7 @@ class MainLayout(QWidget):
     # ─── Tool Selection ───
 
     def _on_brush_panel_hidden(self):
-        """Fires whenever the Brush panel is hidden for ANY reason — explicit
-        toggle, switching to another tool, or PanelManager's exclusivity
-        closing it to open Grid/Terrain. The adjacent asset browser has
-        nothing to ride next to once that happens, same reasoning as
-        _on_region_panel_hidden below."""
         self.brush_panel.show_section("params")
-        self.asset_browser_panel.hide()
-        self._reposition()
-
-    def _toggle_asset_browser(self):
-        if self.asset_browser_panel.isVisible():
-            self.asset_browser_panel.hide()
-        else:
-            self.asset_browser_panel.show()
-            self.asset_browser_panel.raise_()
         self._reposition()
 
     def _on_terrain_panel_hidden(self):
@@ -373,7 +359,6 @@ class MainLayout(QWidget):
             self._brush_med.reset_panel_mode()
         else:
             self._panel_mgr.hide("Brush")
-            self.asset_browser_panel.hide()
         if tool_name == "Selecionar":
             self._panel_mgr.show("Select")
         else:

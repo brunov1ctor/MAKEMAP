@@ -51,19 +51,13 @@ class BrushMediator:
         panel = BrushToolPanel(self._l)
         panel.hide()
         panel.close_requested.connect(self._l._close_brush_panels)
-        panel.assets_requested.connect(self._l._toggle_asset_browser)
         panel.content_changed.connect(self._l._reposition)
         self._l.brush_panel = panel
 
-        # Asset browser (category tabs + search + grid) rides next to
-        # brush_panel — opened by clicking the texture preview rectangle
-        # (see BrushToolPanel.assets_requested / MainLayout._toggle_asset_browser),
-        # same adjacent-panel pattern as RegionEditPanel beside Região's
-        # CRUD list.
-        browser = AssetBrowserPanel(self._l)
-        browser.hide()
-        browser.close_requested.connect(self._l._toggle_asset_browser)
-        self._l.asset_browser_panel = browser
+        # Asset browser embutido dentro do brush_panel (aba Browser).
+        # O painel externo asset_browser_panel é mantido como alias para
+        # compatibilidade com o restante do código que o referencia.
+        self._l.asset_browser_panel = panel.asset_browser
 
         self._sync_timer = QTimer()
         self._sync_timer.setSingleShot(True)
@@ -547,7 +541,7 @@ class BrushMediator:
         if asset_id.startswith(BrushTool.EFFECT_ASSET_PREFIX):
             self._l.brush_panel.set_material_name(asset_id[len(BrushTool.EFFECT_ASSET_PREFIX):])
             self._l.brush_panel.set_texture_preview(None)
-            self._l.asset_browser_panel.hide()
+            self._l.brush_panel.show_section("assets")
             self._l._reposition()
             return
 
@@ -600,7 +594,7 @@ class BrushMediator:
         window = self._l.window()
         if window and hasattr(window, "uow") and window.uow:
             window.uow.ui_state.set(self._LAST_ASSET_KEY, asset_id)
-        self._l.asset_browser_panel.hide()
+        self._l.brush_panel.show_section("assets")
         self._l._reposition()
 
     def reset_panel_mode(self):
@@ -688,7 +682,7 @@ class BrushMediator:
             self.populate_assets(self._l.asset_browser_panel.current_category())
 
     def on_library_changed(self, _name: str):
-        if self._l.asset_browser_panel.isVisible():
+        if self._l.brush_panel.isVisible():
             self.populate_assets(self._l.asset_browser_panel.current_category())
 
     def on_texture_scale_changed(self, value):

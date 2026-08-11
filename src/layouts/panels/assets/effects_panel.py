@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QImage, QPixmap, QCursor
 
-from src.styles.tokens import Colors, combo_popup_qss
+from src.styles.tokens import Colors, combo_qss
 from src.layouts.panel_manager import paint_glass_panel
 from src.layouts.panels.items.editor_base import SquareCheck
 from src.layouts.panels.terrain.color_picker import HueBar, SatValSquare
@@ -426,9 +426,7 @@ class _EffectConfigBlock(QFrame):
         for blend_key, blend_label in BLEND_MODES:
             self._blend_combo.addItem(blend_label, blend_key)
         self._blend_combo.setStyleSheet(f"""
-            QComboBox {{ background: rgba(255,255,255,0.05); color: {Colors.TEXT_SECONDARY};
-                border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px; padding: 2px 6px; font-size: 9px; }}
-            {combo_popup_qss()}
+            {combo_qss(bg="rgba(255,255,255,0.05)", color=Colors.TEXT_SECONDARY, radius=4, padding="2px 6px", font_size=9)}
             QToolTip {{
                 background-color: {Colors.BG_ELEVATED};
                 color: {Colors.TEXT_PRIMARY};
